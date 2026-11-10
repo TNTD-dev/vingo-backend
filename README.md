@@ -129,7 +129,7 @@ vingo-backend/
 ├── Dockerfile
 ├── pom.xml
 └── src/
-    ├── main/java/vn/vingo/
+    ├── main/java/vingo/
     │   ├── VingoApplication.java
     │   ├── shared/                   # security, xử lý lỗi, logging, config
     │   ├── auth/  catalog/  payment/
@@ -141,7 +141,7 @@ vingo-backend/
     │   ├── application-api.yml
     │   ├── application-worker.yml
     │   └── db/migration/
-    └── test/java/vn/vingo/
+    └── test/java/vingo/
         ├── ModularityTest.java
         ├── support/IntegrationTest.java
         └── <module>/...
@@ -210,7 +210,7 @@ Một bước lỗi thì cả transaction rollback, không có chuyện đã tr�
 ### Thêm hoặc sửa endpoint
 
 1. Sửa `contracts/vingo-openapi.yaml`, viết `description` rõ ràng (AI agent đọc mô tả này).
-2. Chạy `./mvnw generate-sources`, interface mới xuất hiện trong `vn.vingo.api`.
+2. Chạy `./mvnw generate-sources`, interface mới xuất hiện trong `vingo.api`.
 3. Viết controller `implements` interface đó. Viết sai chữ ký thì không biên dịch được.
 4. Mở PR, Đức duyệt phần thay đổi contract.
 5. Sau khi merge, gắn tag để repo agent và web cập nhật:
@@ -256,7 +256,7 @@ docker compose -f deploy/compose.dev.yaml exec postgres psql -U vingo -d vingo
 ```bash
 ./mvnw verify                                   # toàn bộ: unit + integration + ModularityTest
 ./mvnw test -Dtest=ModularityTest               # chỉ kiểm tra ranh giới module
-./mvnw test -Dtest='vn.vingo.booking.**'        # test của một module
+./mvnw test -Dtest='vingo.booking.**'        # test của một module
 ```
 
 - Test integration chạy trên **PostgreSQL 18 thật** qua Testcontainers (cần Docker đang chạy). Không dùng H2.
@@ -362,7 +362,7 @@ curl https://<domain>/actuator/health
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 |---|---|---|
 | Test báo không kết nối được Docker | Docker chưa chạy | Bật Docker Desktop rồi chạy lại |
-| Không thấy class trong `vn.vingo.api` | Chưa sinh code từ yaml | `./mvnw generate-sources`, rồi reload project trong IDE |
+| Không thấy class trong `vingo.api` | Chưa sinh code từ yaml | `./mvnw generate-sources`, rồi reload project trong IDE |
 | `ModularityTest` fail | Gọi vào `web/` hoặc `internal/` của module khác | Gọi qua `XxxService` ở gốc package |
 | Flyway báo checksum mismatch | Sửa migration đã chạy | Trả file cũ về nguyên trạng, tạo migration mới |
 | IPN luôn trả `97` | Sai `VNPAY_HASH_SECRET` hoặc proxy sửa tham số | Kiểm tra secret, không encode lại tham số trước khi ký |

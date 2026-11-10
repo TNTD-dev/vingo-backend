@@ -29,13 +29,13 @@ Luôn chạy `./mvnw verify` trước khi báo xong việc. Không báo xong khi
 
 - `contracts/vingo-openapi.yaml` là nguồn sự thật của API.
 - Muốn thêm/sửa endpoint: **sửa yaml trước**, chạy `generate-sources`, rồi mới viết code.
-- Controller **phải** `implements` interface sinh ra trong `vn.vingo.api`. Không tự viết `@RequestMapping` cho endpoint public.
+- Controller **phải** `implements` interface sinh ra trong `vingo.api`. Không tự viết `@RequestMapping` cho endpoint public.
 - Không sửa file trong `target/generated-sources`. Không commit code sinh.
 - Mỗi operation trong yaml phải có `description` rõ ràng và ví dụ lỗi: AI agent đọc mô tả này để quyết định gọi tool.
 
 ## 4. Cấu trúc module
 
-Mỗi package con trực tiếp của `vn.vingo` là một module (Spring Modulith).
+Mỗi package con trực tiếp của `vingo` là một module (Spring Modulith).
 
 ```
 <module>/

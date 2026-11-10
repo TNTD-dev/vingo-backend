@@ -7,7 +7,7 @@ logging:
     format:
       console: ""
   level:
-    vn.vingo: DEBUG
+    vingo: DEBUG
 vingo:
   jwt:
     secret: ${JWT_SECRET:local-dev-secret-change-me-at-least-32-bytes}

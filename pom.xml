@@ -11,7 +11,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>vn.vingo</groupId>
+    <groupId>vingo</groupId>
     <artifactId>vingo-backend</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>vingo-backend</name>
@@ -185,8 +185,8 @@
                         <configuration>
                             <inputSpec>${project.basedir}/contracts/vingo-openapi.yaml</inputSpec>
                             <generatorName>spring</generatorName>
-                            <apiPackage>vn.vingo.api</apiPackage>
-                            <modelPackage>vn.vingo.api.model</modelPackage>
+                            <apiPackage>vingo.api</apiPackage>
+                            <modelPackage>vingo.api.model</modelPackage>
                             <generateSupportingFiles>true</generateSupportingFiles>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <generateApiTests>false</generateApiTests>
