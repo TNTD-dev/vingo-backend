@@ -19,7 +19,6 @@ reviews:
       - main
   path_filters:
     - "!target/**"
-    - "!docs/**/*.html"
     - "!mvnw"
     - "!mvnw.cmd"
     - "!.mvn/**"
