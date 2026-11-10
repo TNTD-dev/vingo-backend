@@ -1,0 +1,76 @@
+# Cấu hình chung cho mọi profile. Secret chỉ đọc từ biến môi trường.
+spring:
+  application:
+    name: vingo-backend
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/vingo}
+    username: ${DB_USER:vingo}
+    password: ${DB_PASSWORD:vingo}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+  mvc:
+    problemdetails:
+      enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  shutdown: graceful
+
+vingo:
+  jwt:
+    secret: ${JWT_SECRET:}
+    issuer: vingo
+    access-token-ttl: PT15M
+  hold:
+    ttl: PT10M
+  vnpay:
+    tmn-code: ${VNPAY_TMN_CODE:}
+    hash-secret: ${VNPAY_HASH_SECRET:}
+    pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+    api-url: ${VNPAY_API_URL:https://sandbox.vnpayment.vn/merchant_webapi/api/transaction}
+    return-url: ${VNPAY_RETURN_URL:http://localhost:5173/payment/result}
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+  mail:
+    api-key: ${MAIL_API_KEY:}
+    from: ${MAIL_FROM:no-reply@vingo.local}
+
+logging:
+  structured:
+    format:
+      console: logstash
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    redis:
+      # Redis sập hệ thống vẫn bán vé: không để health đỏ vì Redis.
+      enabled: false
+
+sentry:
+  dsn: ${SENTRY_DSN:}
+  send-default-pii: false
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

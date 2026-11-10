@@ -1,0 +1,13 @@
+# Profile local: máy dev. Đọc .env.local, log dạng dễ đọc.
+spring:
+  config:
+    import: optional:file:.env.local[.properties]
+logging:
+  structured:
+    format:
+      console: ""
+  level:
+    vn.vingo: DEBUG
+vingo:
+  jwt:
+    secret: ${JWT_SECRET:local-dev-secret-change-me-at-least-32-bytes}

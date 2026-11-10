@@ -1,0 +1,57 @@
+# Staging / production trên 1 VM. PostgreSQL dùng dịch vụ managed (DB_URL trong .env).
+# Deploy: docker compose pull && docker compose up -d
+name: vingo-backend
+
+x-backend: &backend
+  image: ghcr.io/tntd-dev/vingo-backend:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    - redis
+
+services:
+  api:
+    <<: *backend
+    environment:
+      SPRING_PROFILES_ACTIVE: api
+    deploy:
+      replicas: 2
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      retries: 6
+
+  worker:
+    <<: *backend
+    environment:
+      SPRING_PROFILES_ACTIVE: worker
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  # Bật khi repo vingo-agent và vingo-web có image trên GHCR.
+  # agent:
+  #   image: ghcr.io/tntd-dev/vingo-agent:${AGENT_TAG:-latest}
+  #   restart: unless-stopped
+  #   env_file: .env.agent
+  # web:
+  #   image: ghcr.io/tntd-dev/vingo-web:${WEB_TAG:-latest}
+  #   restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:

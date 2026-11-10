@@ -1,0 +1,6 @@
+# Profile api: phục vụ HTTP (REST + SSE), không chạy job nền.
+spring:
+  main:
+    web-application-type: servlet
+server:
+  port: ${PORT:8080}

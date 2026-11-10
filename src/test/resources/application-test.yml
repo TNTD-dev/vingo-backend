@@ -1,0 +1,3 @@
+vingo:
+  jwt:
+    secret: test-secret-for-integration-tests-only-32b

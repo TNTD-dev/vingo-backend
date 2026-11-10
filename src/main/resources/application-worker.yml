@@ -1,0 +1,14 @@
+# Profile worker: không mở cổng HTTP, chạy job nền (@Scheduled + ShedLock, xem WorkerConfig).
+spring:
+  main:
+    web-application-type: none
+  flyway:
+    # Migration do api chạy trước khi nhận request; worker chỉ kiểm tra.
+    enabled: false
+
+vingo:
+  jobs:
+    expire-holds: PT5S
+    reconcile-payments: PT1M
+    outbox-sender: PT2S
+    realtime-gc: PT1M

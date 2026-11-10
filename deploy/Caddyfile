@@ -1,0 +1,38 @@
+# TLS tự động. SSE: tắt buffer (flush_interval -1) để sự kiện tới client ngay.
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/v1/me/stream {
+		reverse_proxy api:8080 {
+			flush_interval -1
+			lb_policy round_robin
+			transport http {
+				read_timeout 0
+			}
+		}
+	}
+
+	handle /api/* {
+		reverse_proxy api:8080 {
+			lb_policy round_robin
+			health_uri /actuator/health/readiness
+		}
+	}
+
+	handle /swagger-ui* {
+		reverse_proxy api:8080
+	}
+
+	handle /v3/api-docs* {
+		reverse_proxy api:8080
+	}
+
+	handle /actuator/health* {
+		reverse_proxy api:8080
+	}
+
+	# Web (vingo-web) phục vụ phần còn lại khi bật service web.
+	handle {
+		respond "Vingo API" 200
+	}
+}

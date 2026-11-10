@@ -1,0 +1,1790 @@
+openapi: 3.1.0
+info:
+  title: Vingo Booking API
+  version: 1.0.0
+  description: |
+    API của hệ thống đặt vé sự kiện qua chat Vingo.
+
+    Quy ước chung
+    - Base URL: /api/v1. JSON UTF-8.
+    - Auth: `Authorization: Bearer <access_token>` (JWT 15 phút). Refresh token xoay vòng qua /auth/refresh.
+    - Vai trò: BUYER, ADMIN. Endpoint /admin/* chỉ cho ADMIN.
+    - Tiền là số nguyên VND. Thời gian ISO 8601 UTC.
+    - Lỗi trả `application/problem+json` (RFC 9457) kèm trường `code`.
+    - `Idempotency-Key` (UUID) bắt buộc với các thao tác giữ ghế, tạo thanh toán, xử lý đơn lỗi (resolve-review).
+      Cùng key + cùng body → trả lại kết quả cũ. Cùng key + khác body → 409 IDEMPOTENCY_CONFLICT.
+    - Phân trang bằng cursor: `?cursor=&limit=` → `{ data, next_cursor }`.
+    - Agent tool gọi chính các endpoint này bằng token của người dùng; không có API riêng cho agent.
+servers:
+  - url: https://api.vingo.example/api/v1
+tags:
+  - name: Auth
+  - name: Me
+  - name: Realtime
+  - name: Search
+  - name: Booking
+  - name: Payment
+  - name: Tickets
+  - name: Check-in
+  - name: Chat
+  - name: Admin Catalog
+  - name: Admin Operations
+  - name: Admin Reports
+security:
+  - bearerAuth: []
+
+paths:
+  # ------------------------------------------------------------------ Auth
+  /auth/register:
+    post:
+      operationId: register
+      tags: [Auth]
+      summary: Đăng ký, tạo user UNVERIFIED và gửi OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Đã gửi OTP
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OtpSession' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: Email hoặc SĐT đã tồn tại (code EMAIL_TAKEN, PHONE_TAKEN)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /auth/otp/verify:
+    post:
+      operationId: verifyOtp
+      tags: [Auth]
+      summary: Xác thực OTP, kích hoạt tài khoản và cấp token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp_session_id, otp]
+              properties:
+                otp_session_id: { type: string, format: uuid }
+                otp: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '400':
+          description: OTP sai hoặc hết hạn (OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /auth/otp/resend:
+    post:
+      operationId: resendOtp
+      tags: [Auth]
+      summary: Gửi lại OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp_session_id]
+              properties:
+                otp_session_id: { type: string, format: uuid }
+      responses:
+        '202': { description: Đã gửi lại }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Đăng nhập bằng email/SĐT và mật khẩu
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string, description: Email hoặc số điện thoại }
+                password: { type: string, format: password }
+                device: { type: string, description: Tên thiết bị để quản lý phiên }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401':
+          description: Sai thông tin (INVALID_CREDENTIALS)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '423':
+          description: Tài khoản bị khoá tạm vì sai nhiều lần (ACCOUNT_LOCKED)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /auth/google:
+    post:
+      operationId: loginWithGoogle
+      tags: [Auth]
+      summary: Đăng nhập bằng Google id_token (tạo user ACTIVE nếu chưa có)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [Auth]
+      summary: Đổi refresh token lấy cặp token mới (token cũ bị thu hồi)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Đăng xuất phiên hiện tại hoặc tất cả thiết bị
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                all_devices: { type: boolean, default: false }
+      responses:
+        '204': { description: Đã thu hồi phiên }
+  /auth/password/forgot:
+    post:
+      operationId: forgotPassword
+      tags: [Auth]
+      summary: Yêu cầu OTP đặt lại mật khẩu (luôn trả 202 để không lộ email tồn tại)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202':
+          description: Nếu email tồn tại, OTP đã được gửi
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OtpSession' }
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      tags: [Auth]
+      summary: Đặt mật khẩu mới bằng OTP, thu hồi mọi phiên
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp_session_id, otp, new_password]
+              properties:
+                otp_session_id: { type: string, format: uuid }
+                otp: { type: string, pattern: '^[0-9]{6}$' }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        '204': { description: Đã đổi mật khẩu }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  # ------------------------------------------------------------------ Me
+  /me:
+    get:
+      operationId: getMe
+      tags: [Me]
+      summary: Thông tin tài khoản hiện tại
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    patch:
+      operationId: updateMe
+      tags: [Me]
+      summary: Sửa tên, số điện thoại hoặc đổi mật khẩu
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                phone: { type: string }
+                current_password: { type: string }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      operationId: deleteMe
+      tags: [Me]
+      summary: Xoá tài khoản (soft-delete) và thu hồi mọi phiên
+      responses:
+        '204': { description: Đã xoá }
+  /me/profile:
+    get:
+      operationId: getBuyerProfile
+      tags: [Me]
+      summary: Hồ sơ người mua dùng để điền sẵn khi thanh toán
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BuyerProfile' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: putBuyerProfile
+      tags: [Me]
+      summary: Tạo hoặc cập nhật hồ sơ người mua
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BuyerProfile' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BuyerProfile' }
+  /me/stream:
+    get:
+      operationId: streamMyEvents
+      tags: [Realtime]
+      summary: Server-Sent Events cho người dùng hiện tại
+      description: |
+        Sự kiện: order.held, order.paid, order.expired, order.needs_review, payment.failed,
+        ticket.issued, chat.delta, chat.block, chat.done. Client reconnect kèm header Last-Event-ID.
+      responses:
+        '200':
+          description: Luồng SSE
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/StreamEvent' }
+
+  # ------------------------------------------------------------------ Search
+  /events:
+    get:
+      operationId: searchEvents
+      tags: [Search]
+      summary: Tìm kiếm sự kiện đã PUBLISHED
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
+        - { name: city, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: price_min, in: query, schema: { type: integer } }
+        - { name: price_max, in: query, schema: { type: integer } }
+        - { name: sort, in: query, schema: { type: string, enum: [starts_at, price, popularity], default: starts_at } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/EventSummary' }
+  /events/{event_id}:
+    get:
+      operationId: getEvent
+      tags: [Search]
+      summary: Chi tiết sự kiện, địa điểm và bảng giá
+      security: []
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/showtimes:
+    get:
+      operationId: listEventShowtimes
+      tags: [Search]
+      summary: Danh sách suất của sự kiện
+      security: []
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Showtime' }
+  /showtimes/{showtime_id}/seatmap:
+    get:
+      operationId: getSeatmap
+      tags: [Search]
+      summary: Sơ đồ ghế theo suất kèm hạng, giá và trạng thái
+      description: Ghế HELD đã quá held_until được trả về là AVAILABLE. Có thể cache vài giây.
+      security: []
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatMap' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /showtimes/{showtime_id}/availability:
+    get:
+      operationId: getAvailability
+      tags: [Search]
+      summary: Số chỗ còn theo khu và hạng vé
+      security: []
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  showtime_id: { type: string, format: uuid }
+                  status: { $ref: '#/components/schemas/ShowtimeStatus' }
+                  sold_out: { type: boolean }
+                  zones:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        zone_id: { type: string, format: uuid }
+                        name: { type: string }
+                        tier: { $ref: '#/components/schemas/PriceTier' }
+                        seats_left: { type: integer }
+
+  # ------------------------------------------------------------------ Booking
+  /showtimes/{showtime_id}/holds:
+    post:
+      operationId: holdSeats
+      tags: [Booking]
+      summary: Giữ ghế 10 phút và tạo đơn PENDING (tất cả hoặc không)
+      description: |
+        Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
+        Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HoldRequest' }
+      responses:
+        '201':
+          description: Đã giữ chỗ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, IDEMPOTENCY_CONFLICT
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                seatTaken:
+                  value:
+                    type: https://vingo.example/errors/seat-taken
+                    title: Ghế vừa có người giữ
+                    status: 409
+                    code: SEAT_TAKEN
+                    taken_seat_ids: ['5b0d...']
+                    suggested_seat_ids: ['9a1c...', '9a1d...']
+        '422':
+          description: MAX_TICKETS_EXCEEDED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /orders:
+    get:
+      operationId: listMyOrders
+      tags: [Booking]
+      summary: Danh sách đơn của tôi
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Order' }
+  /orders/{order_id}:
+    get:
+      operationId: getOrder
+      tags: [Booking]
+      summary: Chi tiết đơn (chỉ chủ đơn)
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /orders/{order_id}/cancel:
+    post:
+      operationId: cancelOrder
+      tags: [Booking]
+      summary: Huỷ đơn PENDING và nhả ghế (đổi ghế = huỷ + giữ lại)
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200':
+          description: Đơn đã chuyển CANCELLED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '409':
+          description: ORDER_STATE_INVALID (đơn đã PAID hoặc EXPIRED)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ------------------------------------------------------------------ Payment
+  /orders/{order_id}/payments:
+    post:
+      operationId: createPayment
+      tags: [Payment]
+      summary: Tạo hoặc tái dùng payment_intent OPEN và trả link VNPay
+      description: |
+        Điều kiện: order PENDING, expires_at > now, đã có buyer_profile.
+        payment_url ký HMAC-SHA512, vnp_Amount = amount × 100, hết hạn cùng order.expires_at.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, enum: [VNPAYQR, ATM, INTCARD], description: 'Gợi ý phương thức, có thể bỏ trống' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentIntent' }
+        '409':
+          description: HOLD_EXPIRED, ORDER_STATE_INVALID, IDEMPOTENCY_CONFLICT
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: PROFILE_REQUIRED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /orders/{order_id}/payment:
+    get:
+      operationId: getPayment
+      tags: [Payment]
+      summary: Trạng thái lần thanh toán gần nhất của đơn
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentIntent' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments/vnpay/ipn:
+    get:
+      operationId: handleVnpayIpn
+      tags: [Payment]
+      summary: Webhook IPN của VNPay (nguồn sự thật duy nhất để chốt bán)
+      description: |
+        Kiểm vnp_SecureHash trước mọi xử lý. Lưu payment_transaction (append-only, raw).
+        Xử lý idempotent theo payment_intent. Luôn trả HTTP 200 với RspCode:
+        00 thành công · 01 không tìm thấy giao dịch · 02 đã xử lý · 04 sai số tiền · 97 sai chữ ký · 99 lỗi hệ thống (VNPay gọi lại).
+      security: []
+      parameters:
+        - { name: vnp_TxnRef, in: query, required: true, schema: { type: string } }
+        - { name: vnp_Amount, in: query, required: true, schema: { type: integer } }
+        - { name: vnp_ResponseCode, in: query, required: true, schema: { type: string } }
+        - { name: vnp_TransactionStatus, in: query, required: true, schema: { type: string } }
+        - { name: vnp_TransactionNo, in: query, schema: { type: string } }
+        - { name: vnp_SecureHash, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Phản hồi cho VNPay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [RspCode, Message]
+                properties:
+                  RspCode: { type: string, enum: ['00', '01', '02', '04', '97', '99'] }
+                  Message: { type: string }
+  /payments/vnpay/return:
+    get:
+      operationId: handleVnpayReturn
+      tags: [Payment]
+      summary: Trang VNPay chuyển khách về; chỉ để hiển thị, không chốt bán
+      description: Nếu chưa có IPN thì backend gọi querydr ngay, rồi chuyển hướng về cuộc chat.
+      security: []
+      responses:
+        '302': { description: Chuyển về Chat Web App }
+
+  # ------------------------------------------------------------------ Tickets
+  /tickets:
+    get:
+      operationId: listMyTickets
+      tags: [Tickets]
+      summary: Vé của tôi
+      parameters:
+        - { name: when, in: query, schema: { type: string, enum: [upcoming, past], default: upcoming } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/TicketStatus' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{ticket_id}:
+    get:
+      operationId: getTicket
+      tags: [Tickets]
+      summary: Chi tiết vé; qr_token chỉ có khi status = ISSUED
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticket_id}/qr.png:
+    get:
+      operationId: getTicketQr
+      tags: [Tickets]
+      summary: Ảnh mã QR vào cổng
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      responses:
+        '200':
+          description: PNG
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        '409':
+          description: Vé không còn hiệu lực (TICKET_NOT_VALID)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /tickets/{ticket_id}/resend:
+    post:
+      operationId: resendMyTicket
+      tags: [Tickets]
+      summary: Gửi lại vé tới email trên đơn (rate limit 3 lần / giờ)
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      responses:
+        '202': { description: Đã đưa vào hàng đợi gửi }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ------------------------------------------------------------------ Check-in
+  /checkins:
+    post:
+      operationId: checkIn
+      tags: [Check-in]
+      summary: Quét QR tại cổng
+      description: Chỉ ADMIN. Khoá vé theo qr_token, ISSUED và đúng suất → USED. Mọi lần quét đều được ghi checkin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [qr_token, showtime_id]
+              properties:
+                qr_token: { type: string }
+                showtime_id: { type: string, format: uuid }
+                gate: { type: string }
+      responses:
+        '200':
+          description: Hợp lệ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckinResult' }
+        '409':
+          description: ALREADY_USED, TICKET_VOID, WRONG_SHOWTIME
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckinResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/showtimes/{showtime_id}/checkins:
+    get:
+      operationId: listShowtimeCheckins
+      tags: [Check-in]
+      summary: Lịch sử quét theo suất
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/CheckinResult' }
+
+  # ------------------------------------------------------------------ Chat
+  /chat/conversations:
+    post:
+      operationId: createConversation
+      tags: [Chat]
+      summary: Tạo cuộc hội thoại mới với agent theo vai trò
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+  /chat/conversations/{conversation_id}/messages:
+    get:
+      operationId: listMessages
+      tags: [Chat]
+      summary: Lịch sử tin nhắn và block
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChatMessage' }
+                  next_cursor: { type: [string, 'null'] }
+    post:
+      operationId: sendMessage
+      tags: [Chat]
+      summary: Gửi tin nhắn; câu trả lời stream qua /me/stream
+      parameters: [ { $ref: '#/components/parameters/ConversationId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string, maxLength: 4000 }
+                block_event:
+                  description: Thao tác trên block (ví dụ chọn ghế trên SeatMap) gửi kèm thay cho text
+                  type: object
+                  properties:
+                    block_id: { type: string }
+                    type: { type: string, example: seatmap.select }
+                    payload: { type: object }
+      responses:
+        '202':
+          description: Đã nhận, agent đang xử lý
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message_id: { type: string, format: uuid }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /chat/actions/{action_id}/confirm:
+    post:
+      operationId: confirmAction
+      tags: [Chat]
+      summary: Duyệt một ConfirmAction do agent đề xuất
+      parameters: [ { $ref: '#/components/parameters/ActionId' } ]
+      responses:
+        '200': { description: 'Hành động đã thực thi, kết quả gửi qua SSE' }
+        '409':
+          description: Action đã hết hạn hoặc đã xử lý (ACTION_STATE_INVALID)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /chat/actions/{action_id}/reject:
+    post:
+      operationId: rejectAction
+      tags: [Chat]
+      summary: Từ chối ConfirmAction
+      parameters: [ { $ref: '#/components/parameters/ActionId' } ]
+      responses:
+        '204': { description: Đã từ chối }
+
+  # ------------------------------------------------------------------ Admin Catalog
+  /admin/venues:
+    get:
+      operationId: listVenues
+      tags: [Admin Catalog]
+      summary: Tìm / lọc sân
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: city, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Venue' }
+    post:
+      operationId: createVenue
+      tags: [Admin Catalog]
+      summary: Tạo sân
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VenueInput' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Venue' }
+  /admin/venues/{venue_id}:
+    parameters: [ { $ref: '#/components/parameters/VenueId' } ]
+    patch:
+      operationId: updateVenue
+      tags: [Admin Catalog]
+      summary: Sửa sân
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VenueInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Venue' }
+    delete:
+      operationId: deleteVenue
+      tags: [Admin Catalog]
+      summary: Ngừng sử dụng sân (soft-delete)
+      responses:
+        '204': { description: Đã ẩn }
+        '409':
+          description: Sân còn suất chưa kết thúc (VENUE_IN_USE)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/venues/{venue_id}/halls:
+    post:
+      operationId: createHall
+      tags: [Admin Catalog]
+      summary: Thêm khu vực (hall) cho sân
+      parameters: [ { $ref: '#/components/parameters/VenueId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hall' }
+  /admin/halls/{hall_id}/seat-layouts:
+    post:
+      operationId: createSeatLayout
+      tags: [Admin Catalog]
+      summary: Tải sơ đồ ghế (DRAFT)
+      parameters:
+        - { name: hall_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeatLayoutInput' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayout' }
+  /admin/seat-layouts/{layout_id}/publish:
+    post:
+      operationId: publishSeatLayout
+      tags: [Admin Catalog]
+      summary: Khoá sơ đồ ghế (PUBLISHED, không sửa được nữa)
+      parameters:
+        - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayout' }
+  /admin/events:
+    post:
+      operationId: createEvent
+      tags: [Admin Catalog]
+      summary: Tạo sự kiện (DRAFT)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventInput' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+  /admin/events/{event_id}:
+    patch:
+      operationId: updateEvent
+      tags: [Admin Catalog]
+      summary: Sửa thông tin chung (không đổi sơ đồ, khu, giá khi đã có suất ON_SALE)
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+  /admin/events/{event_id}/price-tiers:
+    put:
+      operationId: putPriceTiers
+      tags: [Admin Catalog]
+      summary: Đặt toàn bộ hạng vé và giá của sự kiện
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/PriceTier' }
+      responses:
+        '200': { description: OK }
+        '409':
+          description: Đã có suất ON_SALE (EVENT_LOCKED)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/events/{event_id}/zone-prices:
+    put:
+      operationId: putZonePrices
+      tags: [Admin Catalog]
+      summary: Gán hạng vé cho từng khu (mỗi khu một hạng)
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [zone_id, price_tier_id]
+                properties:
+                  zone_id: { type: string, format: uuid }
+                  price_tier_id: { type: string, format: uuid }
+      responses:
+        '200': { description: OK }
+  /admin/events/{event_id}/publish:
+    post:
+      operationId: publishEvent
+      tags: [Admin Catalog]
+      summary: DRAFT → PUBLISHED; các suất chuyển SCHEDULED
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '422':
+          description: Thiếu suất, thiếu giá hoặc khu chưa có hạng (EVENT_INCOMPLETE)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/events/{event_id}/cancel:
+    post:
+      operationId: cancelEvent
+      tags: [Admin Catalog]
+      summary: Huỷ sự kiện (chỉ khi chưa suất nào ON_SALE)
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        '200': { description: OK }
+        '409':
+          description: EVENT_LOCKED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/events/{event_id}/showtimes:
+    post:
+      operationId: createShowtime
+      tags: [Admin Catalog]
+      summary: Tạo suất
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShowtimeInput' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Showtime' }
+  /admin/showtimes/{showtime_id}:
+    patch:
+      operationId: updateShowtime
+      tags: [Admin Catalog]
+      summary: Sửa suất (chỉ trước sale_opens_at)
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShowtimeInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Showtime' }
+        '409':
+          description: SHOWTIME_LOCKED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/showtimes/{showtime_id}/cancel:
+    post:
+      operationId: cancelShowtime
+      tags: [Admin Catalog]
+      summary: Huỷ suất chưa mở bán
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        '200': { description: OK }
+        '409':
+          description: SHOWTIME_LOCKED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/showtimes/{showtime_id}/seats/block:
+    post:
+      operationId: blockSeats
+      tags: [Admin Catalog]
+      summary: Khoá ghế (AVAILABLE → BLOCKED)
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seat_ids, reason]
+              properties:
+                seat_ids: { type: array, items: { type: string, format: uuid } }
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+        '409':
+          description: Có ghế đang HELD hoặc SOLD (SEAT_TAKEN)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/showtimes/{showtime_id}/seats/unblock:
+    post:
+      operationId: unblockSeats
+      tags: [Admin Catalog]
+      summary: Mở khoá ghế (BLOCKED → AVAILABLE)
+      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seat_ids]
+              properties:
+                seat_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK }
+
+  # ------------------------------------------------------------------ Admin Operations
+  /admin/orders:
+    get:
+      operationId: adminListOrders
+      tags: [Admin Operations]
+      summary: Tra cứu đơn
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+        - { name: event_id, in: query, schema: { type: string, format: uuid } }
+        - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, description: 'Mã đơn, email hoặc SĐT', schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Order' }
+  /admin/orders/{order_id}:
+    get:
+      operationId: adminGetOrder
+      tags: [Admin Operations]
+      summary: Chi tiết đơn, lịch sử trạng thái và các giao dịch
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Order'
+                  - type: object
+                    properties:
+                      payments:
+                        type: array
+                        items: { $ref: '#/components/schemas/PaymentIntent' }
+                      history:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            status: { $ref: '#/components/schemas/OrderStatus' }
+                            at: { type: string, format: date-time }
+                            actor: { type: string }
+  /admin/orders/{order_id}/resolve-review:
+    post:
+      operationId: resolveReview
+      tags: [Admin Operations]
+      summary: Xử lý đơn NEEDS_REVIEW
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, reason]
+              properties:
+                action: { type: string, enum: [ISSUE_TICKETS, REFUND], description: 'REFUND chỉ đánh dấu đơn REFUNDED sau khi admin đã hoàn tiền thủ công trên cổng VNPay. Hệ thống không gọi API hoàn tiền.' }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Đơn chuyển PAID (đã phát vé) hoặc REFUNDED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '409':
+          description: Ghế không còn trống để xuất vé (SEAT_TAKEN)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /admin/orders/{order_id}/reconcile:
+    post:
+      operationId: reconcileOrder
+      tags: [Admin Operations]
+      summary: Gọi querydr ngay để đối soát với VNPay
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200':
+          description: Kết quả sau đối soát
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentIntent' }
+  /admin/tickets:
+    get:
+      operationId: adminListTickets
+      tags: [Admin Operations]
+      summary: Tra cứu vé
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: order_id, in: query, schema: { type: string, format: uuid } }
+        - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/TicketStatus' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Ticket' }
+  /admin/tickets/{ticket_id}/void:
+    post:
+      operationId: voidTicket
+      tags: [Admin Operations]
+      summary: Vô hiệu vé (bắt buộc lý do)
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /admin/tickets/{ticket_id}/reissue-qr:
+    post:
+      operationId: reissueTicketQr
+      tags: [Admin Operations]
+      summary: Sinh qr_token mới, QR cũ mất hiệu lực
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /admin/tickets/{ticket_id}/resend:
+    post:
+      operationId: adminResendTicket
+      tags: [Admin Operations]
+      summary: Gửi lại vé tới email trên đơn
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      responses:
+        '202': { description: Đã đưa vào hàng đợi }
+  /admin/audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [Admin Operations]
+      summary: Nhật ký thao tác của admin
+      parameters:
+        - { name: entity, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AuditLog' }
+
+  # ------------------------------------------------------------------ Admin Reports
+  /admin/reports/metrics:
+    get:
+      operationId: queryMetric
+      tags: [Admin Reports]
+      summary: Số liệu bán vé và check-in (dùng cho Admin Copilot)
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          schema: { type: string, enum: [tickets_sold, revenue, fill_rate, sales_velocity, checkins] }
+        - { name: event_id, in: query, schema: { type: string, format: uuid } }
+        - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
+        - { name: price_tier_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: group_by, in: query, schema: { type: string, enum: [none, day, hour, tier, zone], default: none } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetricResult' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    EventId: { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ShowtimeId: { name: showtime_id, in: path, required: true, schema: { type: string, format: uuid } }
+    OrderId: { name: order_id, in: path, required: true, schema: { type: string, format: uuid } }
+    TicketId: { name: ticket_id, in: path, required: true, schema: { type: string, format: uuid } }
+    VenueId: { name: venue_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ConversationId: { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ActionId: { name: action_id, in: path, required: true, schema: { type: string, format: uuid } }
+    Cursor: { name: cursor, in: query, schema: { type: string } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID do client sinh; lưu 24 giờ
+      schema: { type: string, format: uuid }
+
+  requestBodies:
+    Reason:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties:
+              reason: { type: string, minLength: 3 }
+
+  responses:
+    ValidationError:
+      description: VALIDATION_ERROR
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: UNAUTHORIZED
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: FORBIDDEN
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: NOT_FOUND
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RateLimited:
+      description: RATE_LIMITED (kèm header Retry-After)
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      required: [title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
+                 EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
+                 SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
+                 PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
+                 VENUE_IN_USE, EVENT_LOCKED, EVENT_INCOMPLETE, SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
+        errors:
+          type: array
+          description: Lỗi theo field (VALIDATION_ERROR)
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+      additionalProperties: true
+    Page:
+      type: object
+      properties:
+        next_cursor: { type: [string, 'null'] }
+
+    RegisterRequest:
+      type: object
+      required: [full_name, email, phone, password]
+      properties:
+        full_name: { type: string, maxLength: 120 }
+        email: { type: string, format: email }
+        phone: { type: string, pattern: '^\+?[0-9]{9,15}$' }
+        password: { type: string, minLength: 8 }
+    OtpSession:
+      type: object
+      properties:
+        otp_session_id: { type: string, format: uuid }
+        expires_at: { type: string, format: date-time }
+        channel: { type: string, enum: [EMAIL, SMS] }
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, expires_in, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: Giây }
+        user: { $ref: '#/components/schemas/User' }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        phone: { type: string }
+        full_name: { type: string }
+        role: { type: string, enum: [BUYER, ADMIN] }
+        status: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED] }
+    BuyerProfile:
+      type: object
+      required: [full_name, phone, email]
+      properties:
+        full_name: { type: string }
+        phone: { type: string }
+        email: { type: string, format: email, description: Email nhận vé }
+
+    EventCategory: { type: string, enum: [FOOTBALL, CONCERT, THEATER, OTHER] }
+    EventStatus: { type: string, enum: [DRAFT, PUBLISHED, ENDED, CANCELLED] }
+    ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
+    SeatStatus: { type: string, enum: [AVAILABLE, HELD, SOLD, BLOCKED] }
+    OrderStatus: { type: string, enum: [PENDING, PAID, EXPIRED, CANCELLED, NEEDS_REVIEW, REFUNDED] }
+    PaymentStatus: { type: string, enum: [OPEN, SUCCEEDED, FAILED, EXPIRED] }
+    TicketStatus: { type: string, enum: [ISSUED, USED, VOID] }
+
+    Venue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
+        address: { type: string }
+        city: { type: string }
+        district: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+        info:
+          type: object
+          properties:
+            opening_hours: { type: string }
+            rules: { type: string }
+            parking: { type: string }
+        halls:
+          type: array
+          items: { $ref: '#/components/schemas/Hall' }
+    VenueInput:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
+        address: { type: string }
+        city: { type: string }
+        district: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+        info: { type: object }
+    Hall:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        venue_id: { type: string, format: uuid }
+        name: { type: string }
+    SeatLayoutInput:
+      type: object
+      required: [zones]
+      properties:
+        zones:
+          type: array
+          items:
+            type: object
+            required: [name, kind]
+            properties:
+              name: { type: string }
+              kind: { type: string, enum: [SEATED, STANDING] }
+              capacity: { type: integer, description: Bắt buộc với STANDING }
+              rows:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    row: { type: string }
+                    seats:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          number: { type: integer }
+                          seat_type: { type: string, enum: [STANDARD, COUPLE, WHEELCHAIR] }
+                          x: { type: number }
+                          y: { type: number }
+                    aisle_after: { type: array, items: { type: integer } }
+        seat_pairs:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: string, description: 'Mã ghế, ví dụ "A-F9"' }
+    SeatLayout:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        hall_id: { type: string, format: uuid }
+        status: { type: string, enum: [DRAFT, PUBLISHED] }
+        zone_count: { type: integer }
+        seat_count: { type: integer }
+
+    EventInput:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        category: { $ref: '#/components/schemas/EventCategory' }
+        attributes:
+          type: object
+          description: 'Thuộc tính theo loại, ví dụ FOOTBALL: home_team, away_team, league, round'
+        poster_mobile_url: { type: string, format: uri }
+        poster_desktop_url: { type: string, format: uri }
+        age_limit: { type: integer }
+        max_tickets_per_order: { type: integer, minimum: 1, maximum: 20, default: 10 }
+    EventSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        category: { $ref: '#/components/schemas/EventCategory' }
+        poster_url: { type: string, format: uri }
+        venue_name: { type: string }
+        city: { type: string }
+        first_starts_at: { type: string, format: date-time }
+        price_from: { type: integer }
+        on_sale: { type: boolean }
+    EventDetail:
+      allOf:
+        - $ref: '#/components/schemas/EventInput'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/EventStatus' }
+            venue: { $ref: '#/components/schemas/Venue' }
+            price_tiers:
+              type: array
+              items: { $ref: '#/components/schemas/PriceTier' }
+            showtimes:
+              type: array
+              items: { $ref: '#/components/schemas/Showtime' }
+    PriceTier:
+      type: object
+      required: [name, price]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        price: { type: integer, minimum: 0 }
+        color: { type: string, example: '#C8A2C8' }
+    ShowtimeInput:
+      type: object
+      properties:
+        hall_id: { type: string, format: uuid }
+        seat_layout_id: { type: string, format: uuid }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        sale_opens_at: { type: string, format: date-time }
+        sale_closes_at: { type: string, format: date-time }
+    Showtime:
+      allOf:
+        - $ref: '#/components/schemas/ShowtimeInput'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            event_id: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/ShowtimeStatus' }
+            sold_out: { type: boolean }
+    SeatMap:
+      type: object
+      properties:
+        showtime_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ShowtimeStatus' }
+        zones:
+          type: array
+          items:
+            type: object
+            properties:
+              zone_id: { type: string, format: uuid }
+              name: { type: string }
+              kind: { type: string, enum: [SEATED, STANDING] }
+              tier: { $ref: '#/components/schemas/PriceTier' }
+              seats_left: { type: integer, description: Chỉ với STANDING }
+              seats:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    seat_id: { type: string, format: uuid }
+                    row: { type: string }
+                    number: { type: integer }
+                    seat_type: { type: string, enum: [STANDARD, COUPLE, WHEELCHAIR] }
+                    pair_seat_id: { type: [string, 'null'], format: uuid }
+                    status: { $ref: '#/components/schemas/SeatStatus' }
+                    x: { type: number }
+                    y: { type: number }
+
+    HoldRequest:
+      oneOf:
+        - type: object
+          title: SeatedHold
+          required: [seat_ids]
+          properties:
+            seat_ids:
+              type: array
+              minItems: 1
+              maxItems: 20
+              items: { type: string, format: uuid }
+        - type: object
+          title: StandingHold
+          required: [zone_id, quantity]
+          properties:
+            zone_id: { type: string, format: uuid }
+            quantity: { type: integer, minimum: 1, maximum: 20 }
+    OrderItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        zone: { type: string }
+        row: { type: [string, 'null'] }
+        number: { type: [integer, 'null'] }
+        seat_id: { type: [string, 'null'], format: uuid }
+        tier: { type: string }
+        unit_price: { type: integer }
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, example: 8F3K2Q }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        event: { $ref: '#/components/schemas/EventSummary' }
+        showtime: { $ref: '#/components/schemas/Showtime' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+        total_amount: { type: integer }
+        currency: { type: string, const: VND }
+        expires_at: { type: string, format: date-time, description: Hạn giữ ghế khi PENDING }
+        paid_at: { type: [string, 'null'], format: date-time }
+        buyer: { $ref: '#/components/schemas/BuyerProfile' }
+        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, null] }
+        created_at: { type: string, format: date-time }
+    PaymentIntent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        txn_ref: { type: string, example: 8F3K2Q-1 }
+        amount: { type: integer }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        payment_url: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
+        last_response_code: { type: [string, 'null'] }
+
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, description: 'Mã ngắn để tra cứu, không dùng vào cổng' }
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        qr_token: { type: [string, 'null'], description: Chỉ trả khi ISSUED và người gọi là chủ vé }
+        order_code: { type: string }
+        event: { $ref: '#/components/schemas/EventSummary' }
+        showtime: { $ref: '#/components/schemas/Showtime' }
+        venue: { $ref: '#/components/schemas/Venue' }
+        zone: { type: string }
+        row: { type: [string, 'null'] }
+        number: { type: [integer, 'null'] }
+        tier: { type: string }
+        used_at: { type: [string, 'null'], format: date-time }
+    CheckinResult:
+      type: object
+      properties:
+        result: { type: string, enum: [OK, ALREADY_USED, TICKET_VOID, WRONG_SHOWTIME] }
+        ticket_code: { type: string }
+        zone: { type: string }
+        row: { type: [string, 'null'] }
+        number: { type: [integer, 'null'] }
+        scanned_at: { type: string, format: date-time }
+        first_used_at: { type: [string, 'null'], format: date-time, description: Khi ALREADY_USED }
+
+    Conversation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        agent: { type: string, enum: [BUYER_AGENT, ADMIN_COPILOT] }
+        created_at: { type: string, format: date-time }
+    ChatBlock:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [SeatMap, OrderSummary, PaymentQR, Ticket, ConfirmAction, StatCards, Chart, EventList] }
+        payload: { type: object }
+    ChatMessage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [user, assistant] }
+        text: { type: string }
+        blocks:
+          type: array
+          items: { $ref: '#/components/schemas/ChatBlock' }
+        created_at: { type: string, format: date-time }
+    StreamEvent:
+      type: object
+      description: Một sự kiện SSE (dòng event + data JSON)
+      properties:
+        event:
+          type: string
+          enum: [order.held, order.paid, order.expired, order.needs_review, payment.failed, ticket.issued, chat.delta, chat.block, chat.done]
+        id: { type: string }
+        data: { type: object }
+
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        actor_id: { type: string, format: uuid }
+        action: { type: string, enum: [VOID_TICKET, REISSUE_QR, RESEND_TICKET, RESOLVE_REVIEW, BLOCK_SEATS, CANCEL_EVENT, CANCEL_SHOWTIME] }
+        entity: { type: string }
+        entity_id: { type: string, format: uuid }
+        reason: { type: string }
+        via_agent: { type: boolean, description: Thao tác do Admin Copilot thực hiện sau khi được duyệt }
+        at: { type: string, format: date-time }
+    MetricResult:
+      type: object
+      properties:
+        metric: { type: string }
+        unit: { type: string, enum: [tickets, VND, percent, tickets_per_day, checkins] }
+        filters: { type: object, description: 'Bộ lọc đã áp dụng, để hiển thị cho admin' }
+        computed_at: { type: string, format: date-time }
+        value: { type: number, description: Khi group_by = none }
+        series:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              value: { type: number }
+        definition: { type: string, description: 'Cách tính, ví dụ fill_rate = sold / capacity' }

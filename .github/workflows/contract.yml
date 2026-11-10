@@ -1,0 +1,29 @@
+name: contract
+
+# Gắn tag contract-vX.Y.Z → tạo GitHub Release đính kèm vingo-openapi.yaml.
+# Repo vingo-agent và vingo-web tải contract theo tag ghim trong file CONTRACT_VERSION.
+on:
+  push:
+    tags: ['contract-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kiểm tra contract sinh được code
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: ./mvnw -B -q generate-sources
+      - name: Tạo release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" contracts/vingo-openapi.yaml \
+            --title "$GITHUB_REF_NAME" --notes "Contract API Vingo $GITHUB_REF_NAME"
