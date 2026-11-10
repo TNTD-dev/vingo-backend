@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Cấu hình CodeRabbit review PR. Quy tắc gốc nằm ở CLAUDE.md (AGENTS.md là symlink tới nó).
+language: vi-VN
+tone_instructions: "Ngắn gọn, đi thẳng vào lỗi. Giải thích lý do bằng tiếng Việt, tên code giữ tiếng Anh."
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - develop
+      - main
+  path_filters:
+    - "!target/**"
+    - "!docs/**/*.html"
+    - "!mvnw"
+    - "!mvnw.cmd"
+    - "!.mvn/**"
+  path_instructions:
+    - path: "src/main/java/vingo/**"
+      instructions: |
+        Kiểm theo CLAUDE.md:
+        - Module khác chỉ được gọi class ở gốc package (XxxService, *Result, *Exception). Cấm import web.* hay internal.* của module khác.
+        - shared không được import module nghiệp vụ. Truyền UUID giữa module, không truyền entity.
+        - @Transactional đặt ở method của XxxService, không đặt ở repository.
+        - Không gọi HTTP ra ngoài (VNPay, email, LLM) trong transaction đang giữ lock.
+        - Tiền dùng long/int VND, không double. Thời gian dùng OffsetDateTime UTC, lấy giờ qua Clock inject, không gọi now() trực tiếp.
+        - Lỗi: ném DomainException(ErrorCode.X, ...). Controller không tự build response lỗi.
+        - Dùng record cho DTO, constructor injection, không Lombok, không @Autowired trên field, service không trả null.
+        - Không log mật khẩu, token, OTP, vnp_HashSecret, số điện thoại đầy đủ. Không log body request.
+    - path: "src/main/java/vingo/*/web/**"
+      instructions: |
+        Controller phải implements interface sinh từ contract trong vingo.api, không tự viết @RequestMapping cho endpoint public.
+        Lấy user qua CurrentUser, không đọc header tay. Buyer chỉ xem/huỷ đơn và vé của mình (CurrentUser.requireOwner).
+    - path: "src/main/java/vingo/{booking,payment,ticketing,realtime}/**"
+      instructions: |
+        Module này chỉ dùng JdbcClient với SQL viết tay, không dùng JPA.
+        Job nền chọn dòng bằng FOR UPDATE SKIP LOCKED, có ShedLock, phải idempotent.
+    - path: "src/main/java/vingo/booking/**"
+      instructions: |
+        Module booking cần 2 người duyệt. Kiểm kỹ:
+        - Ghế trống = AVAILABLE hoặc (HELD và held_until < now). Không dùng Redis để giữ ghế.
+        - Giữ ghế bằng một câu UPDATE ... WHERE (điều kiện trống) RETURNING; thiếu ghế thì ném SeatTakenException để rollback cả đơn.
+        - Khu đứng: UPDATE showtime_zone_stock SET held = held + :n WHERE capacity - sold - held >= :n.
+        - Tạo đơn PENDING và giữ ghế trong cùng transaction, hạn 10 phút, mỗi user tối đa 1 đơn PENDING mỗi suất.
+    - path: "src/main/java/vingo/payment/**"
+      instructions: |
+        Module payment cần 2 người duyệt. Kiểm kỹ:
+        - Chỉ IPN hoặc querydr được chốt bán; trang return không đổi trạng thái.
+        - IPN kiểm chữ ký HMAC-SHA512 trước (sai trả 97), rồi SELECT ... FOR UPDATE đơn, ghi payment_transaction.
+        - IPN trùng (intent đã SUCCEEDED) trả 02. Tiền về nhưng đơn hết hạn/huỷ/sai tiền thì NEEDS_REVIEW và trả 00.
+        - So vnp_Amount/100 với orders.total_amount, không tin số tiền từ client.
+    - path: "src/main/resources/db/migration/**"
+      instructions: |
+        Tên file V<yyyyMMdd_HHmm>__<module>_<việc>.sql. Không sửa migration đã merge vào main, muốn đổi phải tạo file mới.
+        Có đủ constraint: unique, CHECK, partial index. Khoá chính dùng uuidv7(), tiền bigint, thời gian timestamptz.
+        Không thêm tính năng hoàn tiền hay đổi ghế.
+    - path: "contracts/vingo-openapi.yaml"
+      instructions: |
+        Mỗi operation phải có description rõ ràng và ví dụ lỗi (AI agent đọc để chọn tool).
+        Mã lỗi mới phải khớp ErrorCode.java và bảng mã lỗi trong CLAUDE.md. Thay đổi file này cần Đức duyệt.
+    - path: "src/test/**"
+      instructions: |
+        Test integration kế thừa support/IntegrationTest (PostgreSQL thật qua Testcontainers), không dùng H2.
+        Mỗi endpoint có test nhánh thành công và từng mã lỗi 4xx. Tên test mô tả hành vi, ví dụ holdSeats_returns409_whenSeatAlreadyHeld.
+        Không được tắt, skip hay xoá test để build xanh.
+  tools:
+    gitleaks:
+      enabled: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+
+chat:
+  auto_reply: true
