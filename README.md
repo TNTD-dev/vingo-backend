@@ -69,6 +69,7 @@ cd vingo-backend
 # 2. Tạo file môi trường
 cp deploy/.env.example .env.local
 # điền VNPAY_TMN_CODE, VNPAY_HASH_SECRET (sandbox), các giá trị khác để mặc định
+# JWT_SECRET để nguyên dòng comment; nếu bỏ comment thì phải điền chuỗi >= 32 ký tự
 
 # 3. Bật Postgres 18 + Redis
 docker compose -f deploy/compose.dev.yaml up -d
