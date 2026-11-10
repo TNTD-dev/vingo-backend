@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aws]
     steps:
       - uses: actions/checkout@v4
       - name: Kiểm tra contract sinh được code
@@ -19,7 +19,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+      # Runner tự host giữ ~/.m2 giữa các lượt; không dùng cache của GitHub.
       - run: ./mvnw -B -q generate-sources
       - name: Tạo release
         env:

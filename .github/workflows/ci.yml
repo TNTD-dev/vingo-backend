@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aws]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+      # Runner tự host giữ ~/.m2 giữa các lượt; không dùng cache của GitHub.
       # Sinh code từ contract, build, unit + integration (Testcontainers) + ModularityTest
       - run: ./mvnw -B verify
       - name: Lưu báo cáo test khi đỏ
