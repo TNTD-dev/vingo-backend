@@ -6,6 +6,7 @@ import java.util.List;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -32,7 +33,9 @@ public class SecurityConfig {
 
     private static final String API = "/api/v1";
 
+    // Profile worker chạy không có web (web-application-type: none) nên không có HttpSecurity.
     @Bean
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthenticationHandlers handlers) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
