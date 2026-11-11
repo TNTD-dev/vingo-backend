@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +46,14 @@ public abstract class IntegrationTest {
 
     @Autowired
     private JwtProperties jwtProperties;
+
+    /** Dựng sân, sự kiện, suất, tồn kho cho test booking. */
+    protected CatalogFixture catalog;
+
+    @BeforeEach
+    void initializeCatalogFixture() {
+        catalog = new CatalogFixture(jdbc, clock);
+    }
 
     /** Tạo user trong DB và trả access token hợp lệ của user đó. */
     protected String tokenFor(Role role) {
