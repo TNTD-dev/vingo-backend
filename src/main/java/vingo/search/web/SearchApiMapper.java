@@ -7,8 +7,18 @@ import org.springframework.stereotype.Component;
 
 import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
+import vingo.api.model.EventDetail;
+import vingo.api.model.EventStatus;
 import vingo.api.model.EventSummary;
+import vingo.api.model.PriceTier;
+import vingo.api.model.Showtime;
+import vingo.api.model.ShowtimeStatus;
+import vingo.api.model.Venue;
+import vingo.search.EventDetailResult;
 import vingo.search.EventSummaryResult;
+import vingo.search.PriceTierResult;
+import vingo.search.ShowtimeResult;
+import vingo.search.VenueResult;
 
 /** Chuyển kết quả của {@code SearchService} sang model sinh từ contract. */
 @Component
@@ -42,5 +52,57 @@ class SearchApiMapper {
             summary.cityName(r.city());
         }
         return summary;
+    }
+
+    EventDetail toEventDetail(EventDetailResult r) {
+        EventDetail detail = new EventDetail()
+                .id(r.id())
+                .title(r.title())
+                .description(r.description())
+                .category(EventCategory.fromValue(r.category()))
+                .status(EventStatus.fromValue(r.status()))
+                .attributes(r.attributes())
+                .maxTicketsPerOrder(r.maxTicketsPerOrder())
+                .priceTiers(r.priceTiers().stream().map(this::toPriceTier).toList())
+                .showtimes(r.showtimes().stream().map(this::toShowtime).toList());
+        if (r.posterUrl() != null) {
+            // Catalog chỉ lưu một poster_url: dùng cho cả bản mobile và desktop.
+            detail.posterMobileUrl(URI.create(r.posterUrl())).posterDesktopUrl(URI.create(r.posterUrl()));
+        }
+        r.venue().ifPresent(v -> detail.venue(toVenue(v)));
+        return detail;
+    }
+
+    Showtime toShowtime(ShowtimeResult r) {
+        return new Showtime()
+                .id(r.id())
+                .eventId(r.eventId())
+                .hallId(r.hallId())
+                .seatLayoutId(r.seatLayoutId())
+                .startsAt(r.startsAt())
+                .endsAt(r.endsAt())
+                .saleOpensAt(r.saleOpensAt())
+                .saleClosesAt(r.saleClosesAt())
+                .status(ShowtimeStatus.fromValue(r.status().name()))
+                .soldOut(r.soldOut());
+    }
+
+    private PriceTier toPriceTier(PriceTierResult r) {
+        return new PriceTier().id(r.id()).name(r.name()).price(r.price()).color(r.color());
+    }
+
+    private Venue toVenue(VenueResult r) {
+        Venue venue = new Venue()
+                .id(r.id())
+                .name(r.name())
+                .type(Venue.TypeEnum.fromValue(r.type()))
+                .address(r.address());
+        String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
+        if (cityName != null) {
+            venue.city(CityCode.fromValue(r.city())).cityName(cityName);
+        } else if (r.city() != null) {
+            venue.cityName(r.city());
+        }
+        return venue;
     }
 }
