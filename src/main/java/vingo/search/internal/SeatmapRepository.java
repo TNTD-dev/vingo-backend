@@ -34,9 +34,10 @@ class SeatmapRepository {
     /**
      * Một khu. {@code seatsLeft} chỉ có nghĩa với khu đứng ở {@link #findZones} và với mọi khu ở
      * {@link #countZones}. {@code stockMissing} là true khi khu đứng chưa có dòng {@code showtime_zone_stock}.
+     * {@code missingSeats} là số ghế của khu ngồi thiếu dòng {@code showtime_seat} (chỉ {@link #countZones} điền).
      */
     record ZoneRow(UUID id, String name, ZoneKind kind, Optional<PriceTierResult> tier, int seatsLeft,
-            boolean stockMissing) {
+            boolean stockMissing, int missingSeats) {
     }
 
     /** Một ghế kèm cờ {@code missing}: thuộc layout nhưng không có dòng {@code showtime_seat}. */
@@ -104,7 +105,7 @@ class SeatmapRepository {
             return new ZoneRow(
                     rs.getObject("id", UUID.class), rs.getString("name"), kind, tier(rs),
                     kind == ZoneKind.STANDING ? rs.getInt("seats_left") : 0,
-                    kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"));
+                    kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"), 0);
         }).list();
     }
 
@@ -158,14 +159,14 @@ class SeatmapRepository {
                         SELECT z.id, z.name, z.kind, pt.id AS tier_id, pt.name AS tier_name, pt.price, pt.color,
                                st.zone_id IS NULL AS stock_missing,
                                CASE WHEN z.kind = 'STANDING' THEN COALESCE(st.capacity - st.sold - st.held, 0)
-                                    ELSE COUNT(ss.seat_id) END AS seats_left
+                                    ELSE COUNT(ss.seat_id) FILTER (WHERE %s) END AS seats_left,
+                               COUNT(s.id) FILTER (WHERE ss.seat_id IS NULL) AS missing_seats
                         FROM zone z
                         LEFT JOIN zone_price zp ON zp.event_id = :eventId AND zp.zone_id = z.id
                         LEFT JOIN price_tier pt ON pt.id = zp.price_tier_id
                         LEFT JOIN showtime_zone_stock st ON st.showtime_id = :showtimeId AND st.zone_id = z.id
                         LEFT JOIN seat s ON s.zone_id = z.id AND z.kind = 'SEATED'
                         LEFT JOIN showtime_seat ss ON ss.showtime_id = :showtimeId AND ss.seat_id = s.id
-                                                  AND %s
                         WHERE z.seat_layout_id = :layoutId
                         GROUP BY z.id, z.name, z.kind, pt.id, pt.name, pt.price, pt.color,
                                  st.zone_id, st.capacity, st.sold, st.held
@@ -179,7 +180,8 @@ class SeatmapRepository {
                     ZoneKind kind = ZoneKind.valueOf(rs.getString("kind"));
                     return new ZoneRow(
                             rs.getObject("id", UUID.class), rs.getString("name"), kind, tier(rs),
-                            rs.getInt("seats_left"), kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"));
+                            rs.getInt("seats_left"), kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"),
+                            rs.getInt("missing_seats"));
                 }).list();
     }
 

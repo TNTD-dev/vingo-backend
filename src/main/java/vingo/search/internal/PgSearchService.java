@@ -139,7 +139,8 @@ class PgSearchService implements SearchService {
         ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
         OffsetDateTime now = OffsetDateTime.now(clock);
         List<ZoneRow> zones = seatmaps.countZones(showtime, now);
-        warnMissing(showtimeId, 0, (int) zones.stream().filter(ZoneRow::stockMissing).count());
+        warnMissing(showtimeId, zones.stream().mapToInt(ZoneRow::missingSeats).sum(),
+                (int) zones.stream().filter(ZoneRow::stockMissing).count());
         return new AvailabilityResult(
                 showtimeId, statusOf(showtime, now), zones.stream().allMatch(z -> z.seatsLeft() == 0),
                 zones.stream().map(z -> new ZoneAvailabilityResult(z.id(), z.name(), z.tier(), z.seatsLeft())).toList());
