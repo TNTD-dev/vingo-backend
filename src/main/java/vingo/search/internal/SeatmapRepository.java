@@ -61,7 +61,13 @@ class SeatmapRepository {
     record StandingStock(int seatsLeft, boolean missing) {
     }
 
-    private static final String FREE_SEAT_SQL = "(ss.status = 'AVAILABLE' OR (ss.status = 'HELD' AND ss.held_until < :now))";
+    private static final String FREE_SEAT_SQL = freeSeatSql("ss");
+
+    /** Điều kiện ghế trống theo Implicit Status cho dòng {@code showtime_seat} có alias {@code alias}. */
+    private static String freeSeatSql(String alias) {
+        return "(" + alias + ".status = 'AVAILABLE' OR (" + alias + ".status = 'HELD' AND " + alias
+                + ".held_until < :now))";
+    }
 
     private final JdbcClient jdbc;
 
@@ -223,7 +229,8 @@ class SeatmapRepository {
 
     /**
      * Ghế trống (Implicit Status) của khu SEATED thuộc layout của suất, theo {@code row_label}, {@code number}.
-     * Khu đứng, khu không thuộc suất hoặc suất không có thì rỗng.
+     * Ghế đôi chỉ tính là trống khi cả hai ghế của cặp đều trống (thiếu dòng {@code showtime_seat} là không
+     * trống), vì booking tự giữ cả cặp. Khu đứng, khu không thuộc suất hoặc suất không có thì rỗng.
      */
     List<FreeSeat> findFreeSeats(UUID showtimeId, UUID zoneId, OffsetDateTime now) {
         return jdbc.sql("""
@@ -233,8 +240,15 @@ class SeatmapRepository {
                         JOIN seat s ON s.zone_id = z.id
                         JOIN showtime_seat ss ON ss.showtime_id = sh.id AND ss.seat_id = s.id AND %s
                         WHERE sh.id = :showtimeId
+                          AND NOT EXISTS (
+                              SELECT 1 FROM seat_pair sp
+                              LEFT JOIN showtime_seat ps ON ps.showtime_id = sh.id
+                                   AND ps.seat_id = CASE WHEN sp.seat_a_id = s.id THEN sp.seat_b_id
+                                                         ELSE sp.seat_a_id END
+                              WHERE (sp.seat_a_id = s.id OR sp.seat_b_id = s.id)
+                                AND (ps.seat_id IS NULL OR NOT %s))
                         ORDER BY s.row_label, s.number
-                        """.formatted(FREE_SEAT_SQL))
+                        """.formatted(FREE_SEAT_SQL, freeSeatSql("ps")))
                 .param("showtimeId", showtimeId)
                 .param("zoneId", zoneId)
                 .param("now", now)
