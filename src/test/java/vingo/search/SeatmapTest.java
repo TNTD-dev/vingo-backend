@@ -152,7 +152,8 @@ class SeatmapTest extends IntegrationTest {
 
     @Test
     void getSeatmap_returns404_whenEventNotPublished() {
-        UUID showtime = fixtures.event().draft().showtime(s -> s.onSale().seated(2)).create().showtimeId();
+        UUID showtime = fixtures.event().draft().showtime(s -> s.scheduled().onSale().seated(2)).create()
+                .showtimeId();
 
         assertNotFound("/api/v1/showtimes/" + showtime + "/seatmap");
     }
@@ -237,6 +238,28 @@ class SeatmapTest extends IntegrationTest {
     @Test
     void getAvailability_returns404_whenShowtimeMissing() {
         assertNotFound("/api/v1/showtimes/" + UUID.randomUUID() + "/availability");
+    }
+
+    @Test
+    void getAvailability_ignoresSeatsAndStockWithoutRows() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).standing(50)).create().showtimeId();
+        List<UUID> zones = fixtures.zoneIds(showtime);
+        fixtures.deleteShowtimeSeat(showtime, fixtures.seatIds(zones.get(0)).get(0));
+        fixtures.deleteZoneStock(showtime, zones.get(1));
+
+        JsonNode body = get("/api/v1/showtimes/" + showtime + "/availability");
+
+        assertThat(body.path("zones").get(0).path("seats_left").asInt()).isEqualTo(2);
+        assertThat(body.path("zones").get(1).path("seats_left").asInt()).isZero();
+        assertThat(body.path("sold_out").asBoolean()).isFalse();
+    }
+
+    @Test
+    void getAvailability_returns404_whenEventNotPublished() {
+        UUID showtime = fixtures.event().draft().showtime(s -> s.scheduled().onSale().seated(2)).create()
+                .showtimeId();
+
+        assertNotFound("/api/v1/showtimes/" + showtime + "/availability");
     }
 
     @Test
