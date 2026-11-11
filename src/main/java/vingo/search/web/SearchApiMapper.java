@@ -34,7 +34,7 @@ class SearchApiMapper {
         if (r.priceFrom() != null) {
             summary.priceFrom(Math.toIntExact(r.priceFrom()));
         }
-        String cityName = CITY_NAMES.get(r.city());
+        String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {
             summary.city(CityCode.fromValue(r.city())).cityName(cityName);
         } else if (r.city() != null) {

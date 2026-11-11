@@ -151,6 +151,18 @@ class SearchEventsTest extends IntegrationTest {
     }
 
     @Test
+    void searchEvents_returnsEventWithoutCity_whenVenueCityIsNull() {
+        fixtures.event().title("Không có thành phố").create();
+        jdbc.sql("UPDATE venue SET city = NULL").update();
+
+        JsonNode data = search().path("data");
+
+        assertThat(data).hasSize(1);
+        assertThat(data.get(0).has("city")).isFalse();
+        assertThat(data.get(0).has("city_name")).isFalse();
+    }
+
+    @Test
     void searchEvents_priceFromIgnoresUnassignedTiers() {
         fixtures.event().title("Nhiều hạng giá")
                 .tier("Rẻ chưa gán", 100_000)
