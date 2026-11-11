@@ -34,15 +34,15 @@ class SearchController implements SearchApi {
     @Override
     public ResponseEntity<SearchEvents200Response> searchEvents(
             String q, EventCategory category, CityCode city, OffsetDateTime from, OffsetDateTime to,
-            Integer priceMin, Integer priceMax, String sort, String cursor, Integer limit) {
+            Long priceMin, Long priceMax, String sort, String cursor, Integer limit) {
         EventSearchCriteria criteria = new EventSearchCriteria(
                 q,
                 category == null ? null : category.getValue(),
                 city == null ? null : city.getValue(),
                 from,
                 to,
-                priceMin == null ? null : priceMin.longValue(),
-                priceMax == null ? null : priceMax.longValue(),
+                priceMin,
+                priceMax,
                 Sort.parse(sort),
                 limit == null ? 20 : limit,
                 null);

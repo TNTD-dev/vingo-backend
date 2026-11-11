@@ -32,7 +32,7 @@ class SearchApiMapper {
             summary.posterUrl(URI.create(r.posterUrl()));
         }
         if (r.priceFrom() != null) {
-            summary.priceFrom(Math.toIntExact(r.priceFrom()));
+            summary.priceFrom(r.priceFrom());
         }
         String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {

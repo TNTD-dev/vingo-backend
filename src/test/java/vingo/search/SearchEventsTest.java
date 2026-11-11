@@ -163,6 +163,16 @@ class SearchEventsTest extends IntegrationTest {
     }
 
     @Test
+    void searchEvents_returnsPriceFromAboveIntRange() {
+        fixtures.event().title("Vé siêu đắt").defaultPrice(3_000_000_000L).create();
+
+        JsonNode data = search().path("data");
+
+        assertThat(data.get(0).path("price_from").asLong()).isEqualTo(3_000_000_000L);
+        assertThat(search("price_min", "2500000000").path("data")).hasSize(1);
+    }
+
+    @Test
     void searchEvents_priceFromIgnoresUnassignedTiers() {
         fixtures.event().title("Nhiều hạng giá")
                 .tier("Rẻ chưa gán", 100_000)
