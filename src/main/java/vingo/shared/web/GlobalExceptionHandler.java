@@ -21,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
+import vingo.shared.ratelimit.RateLimitedException;
 
 /**
  * Chuyển mọi lỗi thành {@code application/problem+json} (RFC 9457) kèm trường {@code code}.
@@ -31,6 +32,14 @@ import vingo.shared.error.ErrorCode;
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** 429 RATE_LIMITED kèm header Retry-After (giây). */
+    @ExceptionHandler(RateLimitedException.class)
+    ResponseEntity<ProblemDetail> handleRateLimited(RateLimitedException ex) {
+        return ResponseEntity.status(ex.code().status())
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(ex.retryAfter()))
+                .body(handleDomain(ex));
+    }
 
     @ExceptionHandler(DomainException.class)
     ProblemDetail handleDomain(DomainException ex) {
