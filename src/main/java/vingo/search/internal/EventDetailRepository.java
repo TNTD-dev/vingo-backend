@@ -1,9 +1,11 @@
 package vingo.search.internal;
 
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -28,10 +30,13 @@ class EventDetailRepository {
             Map<String, Object> attributes, int maxTicketsPerOrder) {
     }
 
-    /** Một suất ở dạng thô: {@code storedStatus} là giá trị trong DB, chưa tính theo giờ. */
+    /**
+     * Một suất ở dạng thô: {@code storedStatus} là giá trị trong DB, chưa tính theo giờ; không có {@code sold_out}
+     * vì cờ đó đổi theo từng giây. Đây là dữ liệu được cache 10 phút.
+     */
     record ShowtimeRow(UUID id, UUID eventId, UUID hallId, UUID seatLayoutId, OffsetDateTime startsAt,
             OffsetDateTime endsAt, OffsetDateTime saleOpensAt, OffsetDateTime saleClosesAt, String storedStatus,
-            boolean soldOut, VenueResult venue) {
+            VenueResult venue) {
     }
 
     private final JdbcClient jdbc;
@@ -72,23 +77,13 @@ class EventDetailRepository {
                 .list();
     }
 
-    /**
-     * Các suất không phải DRAFT, theo {@code starts_at} rồi {@code id}. {@code sold_out} là true khi không còn ghế
-     * ngồi trống (AVAILABLE, hoặc HELD đã quá hạn tại {@code now}) và mọi khu đứng hết chỗ.
-     */
-    List<ShowtimeRow> findShowtimes(UUID eventId, OffsetDateTime now) {
+    /** Các suất không phải DRAFT, theo {@code starts_at} rồi {@code id}. Dữ liệu thô, không tính trạng thái. */
+    List<ShowtimeRow> findShowtimes(UUID eventId) {
         return jdbc.sql("""
                         SELECT s.id, s.event_id, s.hall_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at, s.status,
                                v.id AS venue_id, v.name AS venue_name, v.type AS venue_type,
-                               v.address AS venue_address, v.city AS venue_city,
-                               (NOT EXISTS (SELECT 1 FROM showtime_seat ss
-                                            WHERE ss.showtime_id = s.id
-                                              AND (ss.status = 'AVAILABLE'
-                                                   OR (ss.status = 'HELD' AND ss.held_until < :now)))
-                                AND NOT EXISTS (SELECT 1 FROM showtime_zone_stock z
-                                                WHERE z.showtime_id = s.id AND z.capacity - z.sold - z.held > 0)
-                               ) AS sold_out
+                               v.address AS venue_address, v.city AS venue_city
                         FROM showtime s
                         JOIN hall h ON h.id = s.hall_id
                         JOIN venue v ON v.id = h.venue_id
@@ -96,7 +91,6 @@ class EventDetailRepository {
                         ORDER BY s.starts_at, s.id
                         """)
                 .param("id", eventId)
-                .param("now", now)
                 .query((rs, n) -> new ShowtimeRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("event_id", UUID.class),
@@ -107,11 +101,32 @@ class EventDetailRepository {
                         rs.getObject("sale_opens_at", OffsetDateTime.class),
                         rs.getObject("sale_closes_at", OffsetDateTime.class),
                         rs.getString("status"),
-                        rs.getBoolean("sold_out"),
                         new VenueResult(
                                 rs.getObject("venue_id", UUID.class), rs.getString("venue_name"),
                                 rs.getString("venue_type"), rs.getString("venue_address"),
                                 rs.getString("venue_city"))))
                 .list();
+    }
+
+    /**
+     * Id các suất (không phải DRAFT) của sự kiện đã hết chỗ: không còn ghế ngồi trống (AVAILABLE, hoặc HELD đã quá
+     * hạn tại {@code now}) và mọi khu đứng hết chỗ. Không cache: đọc DB mỗi lần.
+     */
+    Set<UUID> findSoldOutShowtimeIds(UUID eventId, OffsetDateTime now) {
+        return new HashSet<>(jdbc.sql("""
+                        SELECT s.id
+                        FROM showtime s
+                        WHERE s.event_id = :id AND s.status <> 'DRAFT'
+                          AND NOT EXISTS (SELECT 1 FROM showtime_seat ss
+                                          WHERE ss.showtime_id = s.id
+                                            AND (ss.status = 'AVAILABLE'
+                                                 OR (ss.status = 'HELD' AND ss.held_until < :now)))
+                          AND NOT EXISTS (SELECT 1 FROM showtime_zone_stock z
+                                          WHERE z.showtime_id = s.id AND z.capacity - z.sold - z.held > 0)
+                        """)
+                .param("id", eventId)
+                .param("now", now)
+                .query(UUID.class)
+                .list());
     }
 }

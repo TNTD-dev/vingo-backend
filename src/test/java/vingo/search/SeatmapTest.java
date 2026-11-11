@@ -269,6 +269,71 @@ class SeatmapTest extends IntegrationTest {
         assertNotFound("/api/v1/showtimes/" + showtime + "/availability");
     }
 
+    // ------------------------------------------------------------------ suggestSeats với ghế đôi
+
+    /** Suất 4 ghế, ghế 0 và 1 là một cặp; trả (suất, khu, ghế). */
+    private record CoupleSetup(UUID showtime, UUID zone, List<UUID> seats) {
+    }
+
+    private CoupleSetup coupleSetup() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(4)).create().showtimeId();
+        UUID zone = fixtures.zoneIds(showtime).getFirst();
+        List<UUID> seats = fixtures.seatIds(zone);
+        fixtures.makeCouple(seats.get(0), seats.get(1));
+        return new CoupleSetup(showtime, zone, seats);
+    }
+
+    @Test
+    void suggestSeats_excludesCoupleSeat_whenPartnerHeld() {
+        var c = coupleSetup();
+        fixtures.holdSeat(c.showtime(), c.seats().get(1), NOW.plus(Duration.ofMinutes(5)));
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
+                .containsExactly(c.seats().get(2), c.seats().get(3));
+    }
+
+    @Test
+    void suggestSeats_excludesCoupleSeat_whenPartnerSold() {
+        var c = coupleSetup();
+        fixtures.sellSeat(c.showtime(), c.seats().get(1));
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
+                .containsExactly(c.seats().get(2), c.seats().get(3));
+    }
+
+    @Test
+    void suggestSeats_excludesCoupleSeat_whenPartnerBlocked() {
+        var c = coupleSetup();
+        fixtures.blockSeat(c.showtime(), c.seats().get(0));
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
+                .containsExactly(c.seats().get(2), c.seats().get(3));
+    }
+
+    @Test
+    void suggestSeats_excludesCoupleSeat_whenPartnerRowMissing() {
+        var c = coupleSetup();
+        fixtures.deleteShowtimeSeat(c.showtime(), c.seats().get(1));
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
+                .containsExactly(c.seats().get(2), c.seats().get(3));
+    }
+
+    @Test
+    void suggestSeats_includesCoupleSeats_whenPartnerHoldExpired() {
+        var c = coupleSetup();
+        fixtures.holdSeat(c.showtime(), c.seats().get(1), NOW.minus(Duration.ofMinutes(1)));
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4)).containsExactlyInAnyOrderElementsOf(c.seats());
+    }
+
+    @Test
+    void suggestSeats_includesBothCoupleSeats_whenPairFree() {
+        var c = coupleSetup();
+
+        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4)).containsExactlyInAnyOrderElementsOf(c.seats());
+    }
+
     // ------------------------------------------------------------------ suggestSeats
 
     @Test

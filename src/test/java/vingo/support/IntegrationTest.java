@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
@@ -49,6 +51,22 @@ public abstract class IntegrationTest {
 
     /** Dựng sân, sự kiện, suất, tồn kho cho test booking. */
     protected CatalogFixture catalog;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /** Xoá sạch Redis trước mỗi test để cache và bộ đếm rate limit của test trước không ảnh hưởng test sau. */
+    @BeforeEach
+    void flushRedis() {
+        try {
+            redis.execute((RedisCallback<Object>) connection -> {
+                connection.serverCommands().flushAll();
+                return null;
+            });
+        } catch (RuntimeException ex) {
+            // Test cố ý cho Redis sập: không có gì để xoá.
+        }
+    }
 
     @BeforeEach
     void initializeCatalogFixture() {
