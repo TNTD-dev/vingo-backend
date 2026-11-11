@@ -9,6 +9,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,8 +23,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import vingo.api.model.HoldRequest;
 import vingo.api.model.ListMyOrders200Response;
@@ -34,8 +37,10 @@ import vingo.booking.internal.BookingRepository.HoldItem;
 import vingo.booking.internal.BookingRepository.OrderPosition;
 import vingo.booking.internal.BookingRepository.PendingOrder;
 import vingo.booking.internal.OrderReader;
+import vingo.booking.internal.SeatHoldConflict;
 import vingo.realtime.RealtimeEventType;
 import vingo.realtime.RealtimeService;
+import vingo.search.SearchService;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.idempotency.IdempotencyService;
@@ -55,12 +60,15 @@ public class BookingService {
     private final CurrentUser currentUser;
     private final RealtimeService realtime;
     private final IdempotencyService idempotency;
+    private final SearchService search;
+    private final TransactionTemplate holdTransaction;
     private final ApplicationEventPublisher events;
     private final Clock clock;
     private final Duration holdTtl;
 
     public BookingService(BookingRepository repository, OrderReader orders, CurrentUser currentUser,
                           RealtimeService realtime, IdempotencyService idempotency,
+                          SearchService search, PlatformTransactionManager transactionManager,
                           ApplicationEventPublisher events, Clock clock,
                           @Value("${vingo.hold.ttl}") String holdTtl) {
         this.repository = repository;
@@ -68,6 +76,8 @@ public class BookingService {
         this.currentUser = currentUser;
         this.realtime = realtime;
         this.idempotency = idempotency;
+        this.search = search;
+        this.holdTransaction = new TransactionTemplate(transactionManager);
         this.events = events;
         this.clock = clock;
         this.holdTtl = Duration.parse(holdTtl);
@@ -274,7 +284,7 @@ public class BookingService {
      * Tạo đơn {@code PENDING} và giữ toàn bộ ghế hoặc số chỗ khu đứng trong cùng transaction,
      * với hạn giữ theo cấu hình {@code vingo.hold.ttl}; tự thêm ghế còn lại của cặp ghế đôi.
      * Cần đăng nhập và suất đang mở bán. Đơn PENDING cũ quá hạn của cùng người/suất được đóng trước;
-     * đơn còn hạn ngăn tạo mới. Thất bại thì rollback toàn bộ.
+     * đơn còn hạn ngăn tạo mới. Thất bại thì rollback toàn bộ; gợi ý ghế được đọc sau rollback.
      *
      * @param showtimeId suất cần giữ chỗ
      * @param idempotencyKey key trong phạm vi người dùng và suất; cùng key/body trả kết quả cũ trong 24 giờ
@@ -290,13 +300,21 @@ public class BookingService {
      *         {@code NOT_ENOUGH_STOCK} nếu khu đứng thiếu chỗ;
      *         {@code IDEMPOTENCY_CONFLICT} nếu key còn hiệu lực có body khác hoặc thiếu kết quả đã lưu
      */
-    @Transactional
     public Order holdSeats(UUID showtimeId, UUID idempotencyKey, HoldRequest request) {
         UUID userId = currentUser.require().id();
         // Gắn suất vào endpoint để cùng key ở suất khác có phạm vi độc lập.
         String endpoint = "POST /showtimes/{id}/holds:" + showtimeId;
-        return idempotency.execute(userId, endpoint, idempotencyKey, request, Order.class, 201,
-                () -> createHold(userId, showtimeId, request));
+        try {
+            return holdTransaction.execute(status -> idempotency.execute(
+                    userId, endpoint, idempotencyKey, request, Order.class, 201,
+                    () -> createHold(userId, showtimeId, request)));
+        } catch (SeatHoldConflict conflict) {
+            // Chỉ đọc gợi ý sau rollback để không giữ lock và thấy cả ghế vừa nhả.
+            var suggested = conflict.requestedByZone().entrySet().stream()
+                    .flatMap(zone -> search.suggestSeats(showtimeId, zone.getKey(), zone.getValue()).stream())
+                    .toList();
+            throw new SeatTakenException(conflict.takenSeatIds(), suggested);
+        }
     }
 
     private Order createHold(UUID userId, UUID showtimeId, HoldRequest request) {
@@ -354,7 +372,9 @@ public class BookingService {
             var held = new HashSet<>(repository.holdSeats(showtimeId, seatIds, orderId, expiresAt, now));
             if (held.size() != seatIds.size()) {
                 var taken = seatIds.stream().filter(id -> !held.contains(id)).toList();
-                throw new SeatTakenException(taken, repository.suggestSeats(showtimeId, seatIds, now));
+                Map<UUID, Integer> requestedByZone = new LinkedHashMap<>();
+                items.forEach(item -> requestedByZone.merge(item.zoneId(), item.quantity(), Integer::sum));
+                throw new SeatHoldConflict(taken, requestedByZone);
             }
         } else {
             UUID zoneId = request.getZoneId();

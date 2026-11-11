@@ -45,15 +45,10 @@ public class OrderReader {
             return List.of();
         }
         UUID[] ids = orderIds.toArray(UUID[]::new);
-        // Định nghĩa trùng với search; đổi một chỗ thì đổi cả hai.
         var orders = jdbc.sql("""
                         SELECT o.*, s.event_id, s.hall_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at,
-                               CASE WHEN s.status IN ('DRAFT', 'CANCELLED') THEN s.status
-                                    WHEN :now >= s.ends_at THEN 'FINISHED'
-                                    WHEN :now >= s.sale_closes_at THEN 'SALES_CLOSED'
-                                    WHEN :now >= s.sale_opens_at AND e.status = 'PUBLISHED' THEN 'ON_SALE'
-                                    ELSE 'SCHEDULED' END AS showtime_status,
+                               s.status AS stored_showtime_status,
                                e.title, e.category, e.poster_url, v.name AS venue_name, v.city,
                                (SELECT min(pt.price) FROM zone_price zp
                                 JOIN price_tier pt ON pt.id = zp.price_tier_id
@@ -97,7 +92,11 @@ public class OrderReader {
                             .endsAt(rs.getObject("ends_at", OffsetDateTime.class))
                             .saleOpensAt(rs.getObject("sale_opens_at", OffsetDateTime.class))
                             .saleClosesAt(rs.getObject("sale_closes_at", OffsetDateTime.class))
-                            .status(ShowtimeStatus.fromValue(rs.getString("showtime_status")));
+                            .status(ShowtimeStatus.valueOf(vingo.catalog.ShowtimeStatus.of(
+                                    rs.getString("stored_showtime_status"),
+                                    rs.getObject("sale_opens_at", OffsetDateTime.class),
+                                    rs.getObject("sale_closes_at", OffsetDateTime.class),
+                                    rs.getObject("ends_at", OffsetDateTime.class), now).name()));
                     var result = new Order().id(rs.getObject("id", UUID.class)).code(rs.getString("code"))
                             .status(OrderStatus.fromValue(rs.getString("status"))).event(event).showtime(showtime)
                             .currency(Order.CurrencyEnum.VND).totalAmount(rs.getLong("total_amount"))
