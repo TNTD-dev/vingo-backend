@@ -47,6 +47,7 @@ public class SecurityConfig {
                                 API + "/auth/login", API + "/auth/google", API + "/auth/refresh",
                                 API + "/auth/password/forgot", API + "/auth/password/reset").permitAll()
                         .requestMatchers(HttpMethod.GET,
+                                API + "/auth/google", API + "/auth/oauth2/callback/google",
                                 API + "/events", API + "/events/*", API + "/events/*/showtimes",
                                 API + "/showtimes/*/seatmap", API + "/showtimes/*/availability",
                                 API + "/payments/vnpay/ipn", API + "/payments/vnpay/return").permitAll()

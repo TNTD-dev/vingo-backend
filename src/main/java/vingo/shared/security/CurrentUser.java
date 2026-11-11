@@ -20,6 +20,16 @@ import vingo.shared.error.ErrorCode;
 public class CurrentUser {
 
     public static final String ROLE_CLAIM = "role";
+    public static final String SESSION_CLAIM = "sid";
+
+    /** Lấy UUID phiên từ claim sid khi request mang JWT của một phiên Vingo. */
+    public Optional<UUID> sessionId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof Jwt jwt) {
+            return Optional.ofNullable(jwt.getClaimAsString(SESSION_CLAIM)).map(UUID::fromString);
+        }
+        return Optional.empty();
+    }
 
     public AuthenticatedUser require() {
         return find().orElseThrow(() -> new DomainException(ErrorCode.UNAUTHORIZED, "Cần đăng nhập"));

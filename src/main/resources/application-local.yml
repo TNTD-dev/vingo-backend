@@ -9,5 +9,7 @@ logging:
   level:
     vingo: DEBUG
 vingo:
+  auth:
+    secure-cookies: ${AUTH_SECURE_COOKIES:false}
   jwt:
     secret: ${JWT_SECRET:local-dev-secret-change-me-at-least-32-bytes}

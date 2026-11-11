@@ -35,7 +35,8 @@ public enum ErrorCode {
     EVENT_INCOMPLETE(HttpStatus.UNPROCESSABLE_CONTENT, "Sự kiện thiếu suất, giá hoặc hạng"),
     SHOWTIME_LOCKED(HttpStatus.CONFLICT, "Suất đã mở bán, không sửa được"),
     ACTION_STATE_INVALID(HttpStatus.CONFLICT, "Thao tác đã hết hạn hoặc đã xử lý"),
-    RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Gọi quá nhanh");
+    RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Gọi quá nhanh"),
+    SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ tạm thời không khả dụng");
 
     private final HttpStatus status;
     private final String title;

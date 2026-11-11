@@ -116,6 +116,7 @@ Quy tắc:
 | 422 | MAX_TICKETS_EXCEEDED | Vượt số vé tối đa mỗi đơn |
 | 423 | ACCOUNT_LOCKED | Sai mật khẩu quá số lần |
 | 429 | RATE_LIMITED | Gọi quá nhanh |
+| 503 | SERVICE_UNAVAILABLE | Dịch vụ phụ thuộc tạm thời không khả dụng |
 
 - `Idempotency-Key` bắt buộc cho: tạo hold, tạo payment, resolve-review. Cùng key + cùng body → trả kết quả cũ; khác body → 409.
 - Phân trang bằng cursor: `?cursor=&limit=20` → `{ data, next_cursor }`.

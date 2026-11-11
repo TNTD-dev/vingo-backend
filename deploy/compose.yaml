@@ -14,6 +14,9 @@ services:
     <<: *backend
     environment:
       SPRING_PROFILES_ACTIVE: api
+      # Caddy thiết lập X-Forwarded-For và cổng API chỉ mở trên mạng nội bộ.
+      SERVER_FORWARD_HEADERS_STRATEGY: native
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     deploy:
       replicas: 2
     healthcheck:
