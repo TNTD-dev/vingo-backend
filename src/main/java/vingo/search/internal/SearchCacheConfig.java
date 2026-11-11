@@ -160,16 +160,27 @@ class SearchCacheConfig implements CachingConfigurer {
                 return (T) await(key, valueLoader, running);
             }
             try {
-                T value = valueLoader.call();
-                put(key, value);
-                // Đọc lại để chắc giá trị đã hiển thị với request đến sau khi nhả chỗ này.
-                get(key);
+                T value;
+                try {
+                    value = valueLoader.call();
+                } catch (Exception ex) {
+                    mine.completeExceptionally(ex);
+                    throw new ValueRetrievalException(key, valueLoader, ex);
+                }
+                try {
+                    put(key, value);
+                    // Đọc lại để chắc giá trị đã hiển thị với request đến sau khi nhả chỗ này.
+                    get(key);
+                } catch (RuntimeException ex) {
+                    // Đã tải xong: lỗi Redis chỉ làm mất cache, vẫn trả giá trị.
+                    log.warn("Cache search lỗi, bỏ qua và trả dữ liệu đã tải op=put cache={} error={}", getName(),
+                            ex.getClass().getSimpleName());
+                }
                 mine.complete(value);
                 return value;
-            } catch (Exception ex) {
-                mine.completeExceptionally(ex);
-                throw new ValueRetrievalException(key, valueLoader, ex);
             } finally {
+                // Chặn người chờ treo mãi nếu có Error bay qua.
+                mine.completeExceptionally(new IllegalStateException("Nạp cache không hoàn tất"));
                 inFlight.remove(key, mine);
             }
         }

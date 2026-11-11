@@ -1,6 +1,7 @@
 package vingo.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
@@ -86,7 +87,6 @@ class SearchCacheTest extends IntegrationTest {
         tx.executeWithoutResult(status -> publisher.publishEvent(new VenueChanged(UUID.randomUUID())));
 
         assertThat(eventTitle(eventId)).isEqualTo("Tên mới");
-        assertThat(redis.keys("vingo:search:search-showtimes:*")).isEmpty();
     }
 
     @Test
@@ -180,6 +180,27 @@ class SearchCacheTest extends IntegrationTest {
         UUID showtime = UUID.randomUUID();
         client.get().uri("/api/v1/showtimes/" + showtime + "/availability").exchange().expectStatus().isNotFound();
         assertThat(redis.keys("vingo:search:search-availability:*")).isEmpty();
+    }
+
+    @Test
+    void getEvent_returns200_whenRedisRejectsWrites() {
+        UUID eventId = fixtures.event().title("Tên cũ").create().id();
+        // Redis hết bộ nhớ: đọc được, ghi bị từ chối (OOM) nên bước put cache lỗi sau khi đã nạp xong từ DB.
+        setRedisMaxMemory("1");
+        try {
+            assertThatThrownBy(() -> redis.opsForValue().set("probe", "x")).as("Redis từ chối ghi").isNotNull();
+            assertThat(eventTitle(eventId)).isEqualTo("Tên cũ");
+            assertThat(eventTitle(eventId)).isEqualTo("Tên cũ");
+        } finally {
+            setRedisMaxMemory("0");
+        }
+    }
+
+    private void setRedisMaxMemory(String bytes) {
+        redis.execute((org.springframework.data.redis.core.RedisCallback<Object>) connection -> {
+            connection.serverCommands().setConfig("maxmemory", bytes);
+            return null;
+        });
     }
 
     private int seatsLeft(String path) {

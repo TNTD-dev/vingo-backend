@@ -8,6 +8,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.context.TestPropertySource;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -42,6 +44,27 @@ class SearchRateLimitTest extends IntegrationTest {
         var result = client.get().uri("/api/v1/events").exchange()
                 .expectStatus().isEqualTo(429)
                 .expectHeader().valueEquals("Retry-After", "50")
+                .expectBody(String.class).returnResult();
+
+        assertThat(JSON.readTree(result.getResponseBody()).path("code").asString()).isEqualTo("RATE_LIMITED");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"event", "showtimes", "seatmap"})
+    void searchEndpoint_returns429_whenIpExceedsLimit(String endpoint) {
+        var created = new CatalogFixtures(jdbc, clock).event().showtime(s -> s.onSale().seated(2)).create();
+        String path = switch (endpoint) {
+            case "event" -> "/api/v1/events/" + created.id();
+            case "showtimes" -> "/api/v1/events/" + created.id() + "/showtimes";
+            default -> "/api/v1/showtimes/" + created.showtimeId() + "/seatmap";
+        };
+        for (int i = 0; i < 3; i++) {
+            client.get().uri(path).exchange().expectStatus().isOk();
+        }
+
+        var result = client.get().uri(path).exchange()
+                .expectStatus().isEqualTo(429)
+                .expectHeader().exists("Retry-After")
                 .expectBody(String.class).returnResult();
 
         assertThat(JSON.readTree(result.getResponseBody()).path("code").asString()).isEqualTo("RATE_LIMITED");

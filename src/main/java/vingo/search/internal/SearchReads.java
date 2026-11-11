@@ -24,6 +24,8 @@ import vingo.shared.error.ErrorCode;
  *
  * <p>Chỉ cache dữ liệu thô. Trạng thái suất ({@code ShowtimeStatus}), {@code sold_out} và trạng thái ghế động do
  * {@code PgSearchService} tính lại mỗi lần đọc. Kết quả rỗng (không tìm thấy) không được cache.
+ *
+ * <p>Khoá của event, suất và layout gồm thế hệ ({@link CacheGenerations}), đọc trước khi truy vấn DB.
  */
 @Component
 class SearchReads {
@@ -39,20 +41,20 @@ class SearchReads {
     }
 
     /** Sự kiện PUBLISHED kèm bảng giá và các suất thô; rỗng nếu không tồn tại hoặc chưa PUBLISHED. */
-    @Cacheable(cacheNames = SearchCacheConfig.EVENT, key = "#eventId.toString()", unless = "#result == null")
+    @Cacheable(cacheNames = SearchCacheConfig.EVENT, key = "@cacheGenerations.eventKey(#eventId)", unless = "#result == null")
     Optional<EventCore> eventCore(UUID eventId) {
         return details.findPublished(eventId).map(event ->
                 new EventCore(event, details.findPriceTiers(eventId), details.findShowtimes(eventId)));
     }
 
     /** Các suất thô của sự kiện PUBLISHED; rỗng nếu sự kiện không tồn tại hoặc chưa PUBLISHED. */
-    @Cacheable(cacheNames = SearchCacheConfig.SHOWTIMES, key = "#eventId.toString()", unless = "#result == null")
+    @Cacheable(cacheNames = SearchCacheConfig.SHOWTIMES, key = "@cacheGenerations.eventKey(#eventId)", unless = "#result == null")
     Optional<List<ShowtimeRow>> showtimes(UUID eventId) {
         return details.findPublished(eventId).map(event -> details.findShowtimes(eventId));
     }
 
     /** Layout tĩnh của suất. Người gọi đã kiểm suất hiển thị được. */
-    @Cacheable(cacheNames = SearchCacheConfig.SEATMAP_LAYOUT, key = "#showtime.id().toString()")
+    @Cacheable(cacheNames = SearchCacheConfig.SEATMAP_LAYOUT, key = "@cacheGenerations.showtimeKey(#showtime.id())")
     SeatmapLayout layout(ShowtimeRef showtime) {
         return seatmaps.findLayout(showtime);
     }
