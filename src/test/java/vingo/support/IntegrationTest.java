@@ -30,7 +30,7 @@ import vingo.shared.security.SecurityConfig;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureRestTestClient
 @ActiveProfiles({"api", "test"})
-@Import(TestcontainersConfig.class)
+@Import({TestcontainersConfig.class, TestClockConfig.class})
 public abstract class IntegrationTest {
 
     @Autowired
@@ -38,6 +38,10 @@ public abstract class IntegrationTest {
 
     @Autowired
     protected JdbcClient jdbc;
+
+    /** Clock của ứng dụng trong test. Mặc định theo giờ thật; test cần mốc cố định thì gọi {@code set}. */
+    @Autowired
+    protected MutableClock clock;
 
     @Autowired
     private JwtProperties jwtProperties;
