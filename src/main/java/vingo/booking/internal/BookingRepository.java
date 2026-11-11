@@ -382,7 +382,7 @@ public class BookingRepository {
                 .param("order", orderId).param("showtime", showtimeId).query(Boolean.class).single();
         // Chặn held âm nhưng vẫn báo lệch tồn kho để không che lỗi ở nơi khác.
         if (skipped) {
-            log.atWarn().addKeyValue(LogKeys.ORDER_ID, orderId).addKeyValue("showtime_id", showtimeId)
+            log.atError().addKeyValue(LogKeys.ORDER_ID, orderId).addKeyValue("showtime_id", showtimeId)
                     .log("held khu đứng lệch, không trả held");
         }
     }

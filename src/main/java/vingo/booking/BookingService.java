@@ -148,9 +148,8 @@ public class BookingService {
         boolean hasMore = positions.size() > pageSize;
         var page = positions.subList(0, Math.min(pageSize, positions.size()));
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-        // shortcut: N+1 query khi liệt kê, gộp items một query nếu chậm.
         var response = new ListMyOrders200Response()
-                .data(page.stream().map(position -> orders.readOrder(position.id(), now)).toList());
+                .data(orders.readOrders(page.stream().map(OrderPosition::id).toList(), now));
         if (hasMore) {
             var last = page.getLast();
             response.nextCursor(Base64.getUrlEncoder().withoutPadding().encodeToString(

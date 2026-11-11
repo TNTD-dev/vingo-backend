@@ -26,7 +26,7 @@ public class ExpireHoldsJob {
     }
 
     // Trì hoãn lượt đầu để API có thời gian chạy migration vì worker không chạy Flyway.
-    @Scheduled(fixedDelayString = "PT5S", initialDelayString = "PT5S")
+    @Scheduled(fixedDelayString = "${vingo.jobs.expire-holds}", initialDelayString = "PT5S")
     @SchedulerLock(name = "expire_holds", lockAtMostFor = "PT1M", lockAtLeastFor = "PT1S")
     public void expireHolds() {
         int total = 0;

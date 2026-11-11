@@ -2,9 +2,14 @@ package vingo.booking.internal;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
 import vingo.api.model.BuyerProfile;
@@ -31,7 +36,17 @@ public class OrderReader {
 
     // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
     public Order readOrder(UUID orderId, OffsetDateTime now) {
-        Order order = jdbc.sql("""
+        return readOrders(List.of(orderId), now).stream().findFirst()
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
+    }
+
+    public List<Order> readOrders(List<UUID> orderIds, OffsetDateTime now) {
+        if (orderIds.isEmpty()) {
+            return List.of();
+        }
+        UUID[] ids = orderIds.toArray(UUID[]::new);
+        // Định nghĩa trùng với search; đổi một chỗ thì đổi cả hai.
+        var orders = jdbc.sql("""
                         SELECT o.*, s.event_id, s.hall_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at,
                                CASE WHEN s.status IN ('DRAFT', 'CANCELLED') THEN s.status
@@ -39,19 +54,31 @@ public class OrderReader {
                                     WHEN :now >= s.sale_closes_at THEN 'SALES_CLOSED'
                                     WHEN :now >= s.sale_opens_at AND e.status = 'PUBLISHED' THEN 'ON_SALE'
                                     ELSE 'SCHEDULED' END AS showtime_status,
-                               e.title, e.category, e.poster_url, v.name AS venue_name, v.city
+                               e.title, e.category, e.poster_url, v.name AS venue_name, v.city,
+                               (SELECT min(pt.price) FROM zone_price zp
+                                JOIN price_tier pt ON pt.id = zp.price_tier_id
+                                WHERE zp.event_id = e.id) AS price_from,
+                               (SELECT s2.starts_at FROM showtime s2
+                                WHERE s2.event_id = e.id AND s2.status = 'SCHEDULED' AND s2.starts_at >= :now
+                                ORDER BY s2.starts_at, s2.id LIMIT 1) AS first_starts_at,
+                               EXISTS (SELECT 1 FROM showtime s2
+                                       WHERE s2.event_id = e.id AND s2.status = 'SCHEDULED'
+                                         AND s2.starts_at >= :now AND s2.sale_opens_at <= :now
+                                         AND :now < s2.sale_closes_at) AS on_sale
                         FROM orders o JOIN showtime s ON s.id = o.showtime_id
                         JOIN event e ON e.id = s.event_id
                         JOIN hall h ON h.id = s.hall_id JOIN venue v ON v.id = h.venue_id
-                        WHERE o.id = :order
+                        WHERE o.id = ANY(:ids)
                         """)
-                .param("order", orderId).param("now", now)
+                .param("ids", new SqlArrayValue("uuid", ids)).param("now", now)
                 .query((rs, row) -> {
-                    // shortcut: bỏ các trường EventSummary tính toán, bổ sung khi CatalogService cung cấp.
                     String city = rs.getString("city");
                     var event = new EventSummary().id(rs.getObject("event_id", UUID.class))
                             .title(rs.getString("title")).category(EventCategory.fromValue(rs.getString("category")))
-                            .venueName(rs.getString("venue_name")).cityName(city);
+                            .venueName(rs.getString("venue_name")).cityName(city)
+                            .priceFrom(rs.getObject("price_from", Long.class))
+                            .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
+                            .onSale(rs.getBoolean("on_sale"));
                     // shortcut: venue.city là text tự do, catalog chốt mã thành phố thì đổi.
                     for (CityCode code : CityCode.values()) {
                         if (code.getValue().equals(city)) {
@@ -88,22 +115,31 @@ public class OrderReader {
                         result.buyer(new BuyerProfile().fullName(name).email(email).phone(phone));
                     }
                     return result;
-                }).optional().orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
+                }).list();
 
-        var items = jdbc.sql("""
-                        SELECT i.id, i.seat_id, i.unit_price, i.quantity, z.name AS zone_name,
+        Map<UUID, List<OrderItem>> itemsByOrder = new HashMap<>();
+        jdbc.sql("""
+                        SELECT i.order_id, i.id, i.seat_id, i.unit_price, i.quantity, z.name AS zone_name,
                                s.row_label, s.number, pt.name AS tier_name
                         FROM order_item i JOIN zone z ON z.id = i.zone_id
                         JOIN price_tier pt ON pt.id = i.price_tier_id LEFT JOIN seat s ON s.id = i.seat_id
-                        WHERE i.order_id = :order ORDER BY z.name, s.row_label, s.number, i.id
+                        WHERE i.order_id = ANY(:ids) ORDER BY i.order_id, z.name, s.row_label, s.number, i.id
                         """)
-                .param("order", orderId)
-                .query((rs, row) -> new OrderItem().id(rs.getObject("id", UUID.class))
-                        .zone(rs.getString("zone_name")).row(rs.getString("row_label"))
-                        .number(rs.getObject("number", Integer.class)).seatId(rs.getObject("seat_id", UUID.class))
-                        .tier(rs.getString("tier_name")).unitPrice(rs.getLong("unit_price"))
-                        .quantity(rs.getInt("quantity")))
+                .param("ids", new SqlArrayValue("uuid", ids))
+                .query((rs, row) -> {
+                    var item = new OrderItem().id(rs.getObject("id", UUID.class))
+                            .zone(rs.getString("zone_name")).row(rs.getString("row_label"))
+                            .number(rs.getObject("number", Integer.class)).seatId(rs.getObject("seat_id", UUID.class))
+                            .tier(rs.getString("tier_name")).unitPrice(rs.getLong("unit_price"))
+                            .quantity(rs.getInt("quantity"));
+                    itemsByOrder.computeIfAbsent(rs.getObject("order_id", UUID.class), id -> new ArrayList<>())
+                            .add(item);
+                    return item;
+                })
                 .list();
-        return order.items(items);
+        Map<UUID, Order> ordersById = new HashMap<>();
+        orders.forEach(order -> ordersById.put(order.getId(),
+                order.items(itemsByOrder.getOrDefault(order.getId(), List.of()))));
+        return orderIds.stream().filter(ordersById::containsKey).map(ordersById::get).toList();
     }
 }
