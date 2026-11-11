@@ -6,9 +6,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.AfterEach;
@@ -70,6 +72,65 @@ class SearchEventsTest extends IntegrationTest {
 
         assertThat(ids(search("q", "sky tour"))).containsExactly(target);
         assertThat(ids(search("q", "chao mung nam moi"))).containsExactly(target);
+    }
+
+    @Test
+    void searchEvents_findsEvent_whenQueryHasExtraWords() {
+        UUID target = fixtures.event().title("Sơn Tùng M-TP Sky Tour 2026").description("Đêm nhạc tại TP.HCM")
+                .create().id();
+        fixtures.event().title("Hòa nhạc Mùa Thu").create();
+
+        assertThat(ids(search("q", "son tung concert"))).containsExactly(target);
+    }
+
+    @Test
+    void searchEvents_doesNotLoosen_whenStrictMatchExists() {
+        UUID target = fixtures.event().title("Sơn Tùng M-TP Sky Tour").create().id();
+        fixtures.event().title("Lễ hội Sơn La").create();
+
+        assertThat(ids(search("q", "son tung"))).containsExactly(target);
+    }
+
+    @Test
+    void searchEvents_keepsLooseModeAcrossPages() {
+        // "concert" không có trong sự kiện nào nên khớp chặt rỗng, phải nới. Mỗi sự kiện chỉ khớp một phần.
+        Set<UUID> expected = new HashSet<>();
+        expected.add(fixtures.event().title("Sơn Tùng Sky Tour").create().id());
+        expected.add(fixtures.event().title("Sơn La Festival").create().id());
+        expected.add(fixtures.event().title("Tùng Núi Live").create().id());
+        expected.add(fixtures.event().title("Sơn Ca Đêm Nhạc").create().id());
+        fixtures.event().title("Hòa nhạc Mùa Thu").create();
+
+        List<UUID> paged = new ArrayList<>();
+        String cursor = null;
+        int pages = 0;
+        do {
+            JsonNode page = cursor == null
+                    ? search("q", "son tung concert", "limit", "1")
+                    : search("q", "son tung concert", "limit", "1", "cursor", cursor);
+            paged.addAll(ids(page));
+            cursor = nextCursor(page);
+            pages++;
+        } while (cursor != null && pages < 10);
+
+        assertThat(paged).hasSize(4).doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(pages).isEqualTo(4);
+    }
+
+    @Test
+    void searchEvents_doesNotLoosen_forSingleWordQuery() {
+        fixtures.event().title("Sơn Tùng M-TP Sky Tour").create();
+
+        assertThat(search("q", "concert").path("data")).isEmpty();
+    }
+
+    @Test
+    void searchEvents_looseMatchRanksMoreMatchedWordsFirst() {
+        UUID twoWords = fixtures.event().title("Sơn Tùng Sky Tour").create().id();
+        UUID oneWord = fixtures.event().title("Sơn La Festival").create().id();
+
+        // "concert" không có ở đâu nên chỉ khớp lỏng; sự kiện khớp 2 từ phải đứng trước sự kiện khớp 1 từ.
+        assertThat(ids(search("q", "son tung concert"))).containsExactly(twoWords, oneWord);
     }
 
     @Test

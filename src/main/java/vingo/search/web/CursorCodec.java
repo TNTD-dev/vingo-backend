@@ -11,23 +11,29 @@ import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.json.JsonMapper;
 import vingo.search.InvalidSearchRequestException;
+import vingo.search.MatchMode;
 
 /**
- * Mã hoá cursor: base64url của JSON {@code {s: sort, k: khoá cuối, i: id cuối, f: hash bộ lọc}}.
+ * Mã hoá cursor: base64url của JSON {@code {s: sort, k: khoá cuối, i: id cuối, f: hash bộ lọc, m: chế độ khớp}}.
  *
  * <p>Cursor chỉ gắn với bộ lọc, không ký; khoá sai định dạng bị repository từ chối.
  */
 @Component
 class CursorCodec {
 
-    record Payload(String s, String k, UUID i, String f) {
+    /** {@code m} là STRICT hoặc LOOSE; cursor cũ không có {@code m} coi là STRICT. */
+    record Payload(String s, String k, UUID i, String f, String m) {
+
+        MatchMode matchMode() {
+            return m == null ? MatchMode.STRICT : MatchMode.valueOf(m);
+        }
     }
 
     private final JsonMapper mapper = JsonMapper.builder().build();
 
-    String encode(String sort, String key, UUID id, String filterSignature) {
+    String encode(String sort, String key, UUID id, String filterSignature, MatchMode mode) {
         try {
-            byte[] json = mapper.writeValueAsBytes(new Payload(sort, key, id, hash(filterSignature)));
+            byte[] json = mapper.writeValueAsBytes(new Payload(sort, key, id, hash(filterSignature), mode.name()));
             return Base64.getUrlEncoder().withoutPadding().encodeToString(json);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Không mã hoá được cursor", e);
@@ -42,6 +48,7 @@ class CursorCodec {
             if (payload.s() == null || payload.k() == null || payload.i() == null || payload.f() == null) {
                 throw new IllegalArgumentException("thiếu trường");
             }
+            payload.matchMode(); // chế độ không hợp lệ ném IllegalArgumentException -> 400
             return payload;
         } catch (RuntimeException e) {
             throw new InvalidSearchRequestException("cursor", "cursor không hợp lệ");

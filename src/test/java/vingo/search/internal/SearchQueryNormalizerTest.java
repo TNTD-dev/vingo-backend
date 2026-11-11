@@ -43,4 +43,29 @@ class SearchQueryNormalizerTest {
         var longTerm = normalizer.normalize("x".repeat(100)).orElseThrow();
         assertThat(longTerm.text()).hasSize(SearchQueryNormalizer.MAX_TERM_LENGTH);
     }
+
+    @Test
+    void normalize_buildsLooseQueryJoinedByOr() {
+        var result = normalizer.normalize("son tung concert").orElseThrow();
+
+        assertThat(result.tsQuery()).isEqualTo("son:* & tung:* & concert:*");
+        assertThat(result.looseTsQuery()).isEqualTo("son:* | tung:* | concert:*");
+        assertThat(result.canLoosen()).isTrue();
+    }
+
+    @Test
+    void normalize_dropsSingleCharacterTermsFromLooseQuery() {
+        var result = normalizer.normalize("m tp sky").orElseThrow();
+
+        assertThat(result.tsQuery()).isEqualTo("m:* & tp:* & sky:*");
+        assertThat(result.looseTsQuery()).isEqualTo("tp:* | sky:*");
+    }
+
+    @Test
+    void normalize_cannotLoosen_whenSingleWordOrNoUsefulTerm() {
+        assertThat(normalizer.normalize("concert").orElseThrow().canLoosen()).isFalse();
+        var onlyShort = normalizer.normalize("a b").orElseThrow();
+        assertThat(onlyShort.looseTsQuery()).isEmpty();
+        assertThat(onlyShort.canLoosen()).isFalse();
+    }
 }

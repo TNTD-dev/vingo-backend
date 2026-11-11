@@ -377,8 +377,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div class="panel" style="padding:18px 20px">
       <ol class="steps">
         <li><div><b>Validate</b><span class="sub">limit 1..100, from ≤ to, price_min ≤ price_max, cursor khớp bộ lọc.</span><span class="err">Sai → 400 VALIDATION_ERROR</span></div></li>
-        <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → <code>son:* &amp; tung:*</code>.</span></div></li>
-        <li><div><b>Khớp</b><span class="sub">FTS <code>@@</code> (từ gõ dở) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → tsquery chặt <code>son:* &amp; tung:*</code> và tsquery lỏng <code>son:* | tung:*</code> (bỏ từ 1 ký tự).</span></div></li>
+        <li><div><b>Khớp chặt</b><span class="sub">FTS trên title + mô tả <code>@@</code> tsquery chặt (mọi từ phải có) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Nới khi rỗng</b><span class="sub">Trang đầu, q từ 2 từ trở lên, khớp chặt ra 0 dòng → chạy lại với tsquery lỏng, xếp theo relevance. <code>son tung concert</code> vẫn ra Sơn Tùng. Cursor ghi chế độ (<code>m</code>: STRICT/LOOSE) để các trang sau dùng đúng chế độ.</span></div></li>
         <li><div><b>Card</b><span class="sub">venue, city, first_starts_at lấy từ suất sớm nhất <b>thoả bộ lọc</b>; price_from chỉ tính hạng đã gán khu qua zone_price.</span></div></li>
         <li><div><b>Keyset</b><span class="sub"><code>(sort_key, id)</code>, lấy limit + 1 dòng để biết có next_cursor.</span></div></li>
       </ol>
@@ -396,6 +397,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         </table>
       </div>
       <div class="note">Ghép WHERE động, không viết <code>:x IS NULL OR …</code>. Biểu thức phải giống hệt lúc tạo index, kiểm bằng <code>EXPLAIN</code>.</div>
+      <div class="note info"><b>Agent điền q:</b> <code>q</code> chỉ chứa tên sự kiện, nghệ sĩ hoặc đội; loại sự kiện đưa vào <code>category</code>, thành phố vào <code>city</code>, thời gian vào <code>from</code>/<code>to</code> (đã ghi trong description của contract). Khớp lỏng là lưới an toàn khi người dùng hoặc agent vẫn gõ thừa từ.</div>
       <div class="note info"><b>Thành phố:</b> <code>city</code> là enum <code>CityCode</code> (HCM, HN, DN…). Backend không tự đổi "Sài Gòn" → HCM: web chọn dropdown, agent tự map nhờ description của enum.</div>
     </div>
   </div>
@@ -461,7 +463,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   <div class="panel prs">
     <div class="pr"><div class="prtag">PR 0<span class="chip warn">contract</span></div><div class="prbody"><p class="sub">404 cho showtimes, availability · 400 cho /events · 429 cho cả 5 · <code>relevance</code> · <code>zone_id</code> · <code>CityCode</code> + <code>city_name</code> · description kèm ví dụ lỗi. Cần người khác duyệt.</p></div></div>
     <div class="pr"><div class="prtag">Fixture</div><div class="prbody"><p class="sub"><code>CatalogFixtures</code> dựng venue → showtime_seat bằng JdbcClient.</p></div></div>
-    <div class="pr"><div class="prtag">PR 1<span class="chip">search</span></div><div class="prbody"><p class="sub">Không dấu · gõ sai · một đoạn tiêu đề · loại DRAFT và sự kiện đã qua · bộ lọc · card đúng thành phố · price_from · relevance mặc định · phân trang không trùng · 400 cursor, limit.</p></div></div>
+    <div class="pr"><div class="prtag">PR 1<span class="chip">search</span></div><div class="prbody"><p class="sub">Không dấu · gõ sai · một đoạn tiêu đề · loại DRAFT và sự kiện đã qua · bộ lọc · card đúng thành phố · price_from · relevance mặc định · phân trang không trùng · 400 cursor, limit. Bổ sung: khớp lỏng khi q có từ thừa, không nới khi đã khớp chặt hoặc q một từ, giữ chế độ qua các trang.</p></div></div>
     <div class="pr"><div class="prtag">PR 2<span class="chip">detail</span></div><div class="prbody"><p class="sub">ShowtimeStatus ở từng mốc giờ · 404 DRAFT · 404 event không có.</p></div></div>
     <div class="pr"><div class="prtag">PR 3<span class="chip">seatmap</span></div><div class="prbody"><p class="sub">HELD quá hạn → AVAILABLE · ghế đôi, khu đứng · sold_out · zone_id, 404 zone lạ · thiếu dòng → BLOCKED · gợi ý ghế liền nhau · EXPLAIN với 10k sự kiện, 40k ghế.</p></div></div>
     <div class="pr"><div class="prtag">PR 4<span class="chip">cache</span></div><div class="prbody"><p class="sub">Redis sập vẫn trả · thấy thay đổi sau commit · hết TTL · nhiều miss đọc DB một lần · 429.</p></div></div>
