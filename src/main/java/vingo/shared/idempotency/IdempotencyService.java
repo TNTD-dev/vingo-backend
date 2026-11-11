@@ -32,6 +32,29 @@ public class IdempotencyService {
         this.clock = clock;
     }
 
+    /**
+     * Chạy action và lưu key/kết quả trong cùng transaction hiện có ({@code MANDATORY}).
+     * Trong phạm vi {@code userId + endpoint + key}, cùng body JSON đã tuần tự hoá trả kết quả cũ,
+     * không chạy lại action; khác body trả {@code IDEMPOTENCY_CONFLICT} (HTTP 409).
+     * Key hết hiệu lực sau 24 giờ từ lúc tạo, được xoá khi gặp lại để có thể thực hiện yêu cầu mới.
+     *
+     * <p>Action thất bại phải để exception làm rollback transaction để không lưu key hay kết quả lỗi.
+     * Tối đa 3 vòng thử xử lý key bị xoá/tạo lại hoặc hết hạn, không phải 3 lần retry action.
+     *
+     * @param <T> kiểu kết quả thành công
+     * @param userId chủ phạm vi key
+     * @param endpoint định danh thao tác, gồm tham số đường dẫn cần tách phạm vi
+     * @param key key do người gọi cung cấp
+     * @param request body dùng để tính hash cùng endpoint; cần giữ cách tuần tự hoá nhất quán khi gửi lại
+     * @param responseType kiểu để đọc lại kết quả đã lưu
+     * @param responseStatus mã HTTP thành công được lưu cùng kết quả
+     * @param action nghiệp vụ chỉ chạy khi chèn được key mới; lỗi phải rollback transaction
+     * @return kết quả action hoặc kết quả thành công đã lưu
+     * @throws DomainException với {@code IDEMPOTENCY_CONFLICT} nếu key còn hạn có body khác
+     *         hoặc bản ghi cũ thiếu kết quả; lỗi nghiệp vụ từ action cũng được truyền ra ngoài
+     * @throws IllegalStateException nếu không xử lý được key sau 3 vòng thử
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public <T> T execute(UUID userId, String endpoint, UUID key, Object request, Class<T> responseType,
                          int responseStatus, Supplier<T> action) {

@@ -73,12 +73,37 @@ public class BookingService {
         this.holdTtl = Duration.parse(holdTtl);
     }
 
-    /** Khoá đơn bằng SELECT FOR UPDATE trong transaction của payment. */
+    /**
+     * Đọc và khoá đơn bằng {@code SELECT FOR UPDATE} đến khi transaction của payment kết thúc.
+     * Phải có transaction đang chạy ({@code MANDATORY}); không kiểm trạng thái hay quyền sở hữu.
+     *
+     * @param orderId đơn cần khoá trước khi đối chiếu thanh toán
+     * @return dữ liệu đơn với trạng thái DB hiện tại, hoặc rỗng nếu không tồn tại
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<OrderForPayment> lockOrderForPayment(UUID orderId) {
         return repository.lockOrder(orderId);
     }
 
+    /**
+     * Chốt bán đơn {@code PENDING} trong transaction hiện có ({@code MANDATORY}): bán tồn kho,
+     * chuyển đơn sang {@code PAID}, ghi lịch sử và sự kiện {@code order.paid}.
+     * Nếu thiếu tồn kho, chuyển cả đơn sang {@code NEEDS_REVIEW} với lý do {@code PAID_AFTER_EXPIRY}.
+     * Không tự kiểm số tiền hay {@code expiresAt}; đơn PENDING quá hạn vẫn bán được nếu còn đủ tồn kho.
+     *
+     * <p>Trong IPN đã xác thực: {@link #lockOrderForPayment} → đối chiếu số tiền →
+     * {@code markSold} hoặc {@link #markNeedsReview} → {@link #orderLines} để phát vé chỉ khi
+     * kết quả là {@link SaleOutcome#SOLD}. Với {@code NEEDS_REVIEW}, không phát vé.
+     * IPN/querydr mới được chốt bán; không gọi từ trang return.
+     *
+     * @param orderId đơn PENDING đã được payment kiểm tra
+     * @return {@code SOLD} khi đơn đã PAID; {@code NEEDS_REVIEW} khi thiếu tồn kho, chưa bán
+     * @throws DomainException với {@code NOT_FOUND} nếu không có đơn;
+     *         {@code ORDER_STATE_INVALID} nếu đơn không PENDING
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     * @throws IllegalStateException nếu không bán được khu đứng sau khi đã khoá và kiểm đủ tồn kho
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public SaleOutcome markSold(UUID orderId) {
         var order = repository.lockOrder(orderId)
@@ -107,6 +132,18 @@ public class BookingService {
         return SaleOutcome.SOLD;
     }
 
+    /**
+     * Chuyển đơn {@code PENDING}, {@code EXPIRED} hoặc {@code CANCELLED} sang {@code NEEDS_REVIEW},
+     * lưu lý do, lịch sử và sự kiện {@code order.needs_review} trong transaction hiện có ({@code MANDATORY}).
+     * Với đơn PENDING, nhả tồn kho còn giữ; người gọi không phát vé cho đơn NEEDS_REVIEW.
+     *
+     * @param orderId đơn có tiền về nhưng cần xử lý ngoại lệ
+     * @param reason lý do xử lý, không được null
+     * @throws DomainException với {@code NOT_FOUND} nếu không có đơn;
+     *         {@code ORDER_STATE_INVALID} nếu trạng thái không thuộc ba trạng thái cho phép
+     * @throws NullPointerException nếu reason là null sau khi đơn đã qua kiểm tra trạng thái
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void markNeedsReview(UUID orderId, ReviewReason reason) {
         var order = repository.lockOrder(orderId)
@@ -127,11 +164,27 @@ public class BookingService {
         logTransition(orderId, order.userId(), order.status(), "NEEDS_REVIEW");
     }
 
+    /**
+     * Đọc các dòng vé trong transaction hiện có ({@code MANDATORY}), theo thứ tự id dòng đơn.
+     * Không kiểm trạng thái hay quyền sở hữu; luồng thanh toán chỉ dùng để phát vé sau kết quả {@code SOLD}.
+     *
+     * @param orderId đơn cần đọc dòng vé
+     * @return các dòng ghế ngồi/khu đứng; rỗng nếu không có dòng hoặc không tồn tại đơn
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<OrderLine> orderLines(UUID orderId) {
         return repository.orderLines(orderId);
     }
 
+    /**
+     * Đọc chi tiết đơn của người đang đăng nhập, gồm các dòng vé; không đổi trạng thái đơn quá hạn.
+     *
+     * @param orderId đơn cần xem
+     * @return chi tiết đơn với trạng thái đang lưu trong DB
+     * @throws DomainException với {@code NOT_FOUND} nếu đơn không tồn tại hoặc không thuộc người gọi;
+     *         {@code UNAUTHORIZED} nếu cần kiểm chủ sở hữu nhưng chưa đăng nhập
+     */
     public Order getOrder(UUID orderId) {
         UUID ownerId = repository.findOrderOwner(orderId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
@@ -139,6 +192,17 @@ public class BookingService {
         return orders.readOrder(orderId, OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
     }
 
+    /**
+     * Liệt kê đơn của người đang đăng nhập, mới nhất trước theo {@code created_at} rồi id.
+     * Người gọi phải cung cấp limit hợp lệ (API giới hạn 1–100); hàm không tự kiểm giới hạn này.
+     *
+     * @param status trạng thái DB cần lọc, hoặc null để lấy mọi trạng thái
+     * @param cursor con trỏ từ trang trước, hoặc null để lấy trang đầu
+     * @param limit số đơn tối đa mỗi trang, null dùng 20
+     * @return trang chi tiết đơn và nextCursor khi còn trang tiếp theo
+     * @throws DomainException với {@code UNAUTHORIZED} nếu chưa đăng nhập;
+     *         {@code VALIDATION_ERROR} nếu cursor không hợp lệ
+     */
     public ListMyOrders200Response listMyOrders(OrderStatus status, String cursor, Integer limit) {
         UUID userId = currentUser.require().id();
         int pageSize = limit == null ? 20 : limit;
@@ -175,6 +239,17 @@ public class BookingService {
         }
     }
 
+    /**
+     * Khoá và huỷ đơn {@code PENDING} của người đang đăng nhập, kể cả khi đã quá hạn giữ.
+     * Trong cùng transaction, nhả tồn kho, chuyển đơn sang {@code CANCELLED}, ghi lịch sử
+     * và phát đồng bộ {@link OrderCancelled} để listener tham gia transaction huỷ.
+     *
+     * @param orderId đơn PENDING cần huỷ
+     * @return chi tiết đơn sau khi chuyển sang CANCELLED
+     * @throws DomainException với {@code NOT_FOUND} nếu đơn không tồn tại hoặc không thuộc người gọi;
+     *         {@code UNAUTHORIZED} nếu cần kiểm chủ sở hữu nhưng chưa đăng nhập;
+     *         {@code ORDER_STATE_INVALID} nếu đơn không PENDING
+     */
     @Transactional
     public Order cancelOrder(UUID orderId) {
         var order = repository.lockOrder(orderId)
@@ -195,6 +270,26 @@ public class BookingService {
         return result;
     }
 
+    /**
+     * Tạo đơn {@code PENDING} và giữ toàn bộ ghế hoặc số chỗ khu đứng trong cùng transaction,
+     * với hạn giữ theo cấu hình {@code vingo.hold.ttl}; tự thêm ghế còn lại của cặp ghế đôi.
+     * Cần đăng nhập và suất đang mở bán. Đơn PENDING cũ quá hạn của cùng người/suất được đóng trước;
+     * đơn còn hạn ngăn tạo mới. Thất bại thì rollback toàn bộ.
+     *
+     * @param showtimeId suất cần giữ chỗ
+     * @param idempotencyKey key trong phạm vi người dùng và suất; cùng key/body trả kết quả cũ trong 24 giờ
+     * @param request một trong hai dạng: seatIds, hoặc zoneId kèm quantity
+     * @return đơn vừa tạo, hoặc kết quả thành công đã lưu cho cùng key/body
+     * @throws SeatTakenException với {@code SEAT_TAKEN} nếu không giữ được đủ ghế
+     * @throws DomainException với {@code UNAUTHORIZED} nếu chưa đăng nhập;
+     *         {@code VALIDATION_ERROR} nếu yêu cầu hoặc ghế/khu không hợp lệ;
+     *         {@code NOT_FOUND} nếu suất không tồn tại hoặc DRAFT;
+     *         {@code SHOWTIME_NOT_ON_SALE} nếu suất chưa/không còn mở bán hoặc khu chưa có giá;
+     *         {@code MAX_TICKETS_EXCEEDED} nếu vượt số vé tối đa, kể cả ghế đôi được thêm;
+     *         {@code ORDER_STATE_INVALID} nếu đã có đơn PENDING còn hạn;
+     *         {@code NOT_ENOUGH_STOCK} nếu khu đứng thiếu chỗ;
+     *         {@code IDEMPOTENCY_CONFLICT} nếu key còn hiệu lực có body khác hoặc thiếu kết quả đã lưu
+     */
     @Transactional
     public Order holdSeats(UUID showtimeId, UUID idempotencyKey, HoldRequest request) {
         UUID userId = currentUser.require().id();
@@ -337,7 +432,14 @@ public class BookingService {
                 .log("Order status {} -> {}", from, to);
     }
 
-    /** Chuyển tối đa {@code limit} đơn PENDING quá hạn thành EXPIRED trong một transaction, bỏ qua đơn đang bị khoá và trả số đơn đã chuyển. */
+    /**
+     * Chuyển tối đa {@code limit} đơn PENDING có {@code expires_at <= now} sang {@code EXPIRED}
+     * trong cùng transaction; nhả tồn kho, ghi lịch sử và sự kiện {@code order.expired}.
+     * Dùng {@code FOR UPDATE SKIP LOCKED} để bỏ qua đơn đang bị khoá; chạy lại không xử lý đơn đã EXPIRED.
+     *
+     * @param limit số đơn tối đa cần xử lý, phải không âm
+     * @return số đơn đã chuyển sang EXPIRED trong lần gọi này
+     */
     @Transactional
     public int expireOverdueHolds(int limit) {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);

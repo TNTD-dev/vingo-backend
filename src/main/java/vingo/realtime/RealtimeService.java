@@ -22,7 +22,17 @@ public class RealtimeService {
         this.jsonMapper = jsonMapper;
     }
 
-    // Event phải nằm cùng transaction nghiệp vụ để rollback cùng thay đổi dữ liệu.
+    /**
+     * Ghi sự kiện vào {@code realtime_event} và gọi {@code pg_notify} trên kênh cùng tên,
+     * chỉ gửi id để listener đọc lại payload. Phải có transaction nghiệp vụ ({@code MANDATORY});
+     * sự kiện rollback cùng dữ liệu và PostgreSQL chỉ chuyển NOTIFY sau commit.
+     *
+     * @param userId người dùng nhận sự kiện
+     * @param type loại sự kiện với giá trị DB tương ứng
+     * @param payload nội dung được lưu dưới dạng JSON, theo cấu trúc của từng loại sự kiện
+     * @return id sự kiện vừa ghi; chưa đảm bảo transaction đã commit hay client đã nhận
+     * @throws org.springframework.transaction.IllegalTransactionStateException nếu chưa có transaction
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public UUID publish(UUID userId, RealtimeEventType type, Map<String, Object> payload) {
         UUID id = jdbc.sql("""

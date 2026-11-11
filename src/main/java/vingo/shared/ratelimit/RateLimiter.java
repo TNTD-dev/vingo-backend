@@ -23,6 +23,19 @@ public class RateLimiter {
         this.clock = clock;
     }
 
+    /**
+     * Đếm và kiểm request theo {@code userId + bucket} trong cửa sổ cố định (fixed window),
+     * chia theo thời gian epoch từ Clock. Mỗi lần gọi đều tăng bộ đếm, kể cả lần vượt giới hạn.
+     * Redis ném lỗi khi tăng bộ đếm/đặt TTL thì cho request đi tiếp.
+     *
+     * @param userId người dùng cần giới hạn
+     * @param bucket tên nhóm thao tác dùng chung bộ đếm
+     * @param limit số lần gọi tối đa được phép trong một cửa sổ, phải dương
+     * @param window độ dài cửa sổ, ít nhất 1 mili giây
+     * @throws RateLimitedException với {@code RATE_LIMITED} (HTTP 429) nếu số lần gọi vượt limit,
+     *         kèm số giây còn lại đến cửa sổ mới, làm tròn lên
+     * @throws IllegalArgumentException nếu limit không dương hoặc window dưới 1 mili giây
+     */
     public void check(UUID userId, String bucket, int limit, Duration window) {
         long windowMillis = window.toMillis();
         if (limit < 1 || windowMillis < 1) {
