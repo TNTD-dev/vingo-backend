@@ -64,7 +64,7 @@ public final class CatalogFixtures {
         }
     }
 
-    private record ZoneSpec(String kind, String name, int size, String tier) {
+    private record ZoneSpec(String kind, String name, int size, String tier, int perRow) {
     }
 
     // ------------------------------------------------------------------ Showtime
@@ -154,7 +154,13 @@ public final class CatalogFixtures {
 
         /** Khu ghế ngồi gán hạng giá {@code tier}; {@code null} là hạng mặc định. */
         public ShowtimeBuilder seated(int seats, String tier) {
-            zones.add(new ZoneSpec("SEATED", "Ghế ngồi " + (zones.size() + 1), seats, tier));
+            zones.add(new ZoneSpec("SEATED", "Ghế ngồi " + (zones.size() + 1), seats, tier, 0));
+            return this;
+        }
+
+        /** Khu ghế ngồi nhiều hàng: hàng A, B, C... mỗi hàng {@code perRow} ghế đánh số từ 1. */
+        public ShowtimeBuilder seatedRows(int rows, int perRow, String tier) {
+            zones.add(new ZoneSpec("SEATED", "Ghế ngồi " + (zones.size() + 1), rows * perRow, tier, perRow));
             return this;
         }
 
@@ -163,7 +169,7 @@ public final class CatalogFixtures {
         }
 
         public ShowtimeBuilder standing(int capacity, String tier) {
-            zones.add(new ZoneSpec("STANDING", "Khu đứng " + (zones.size() + 1), capacity, tier));
+            zones.add(new ZoneSpec("STANDING", "Khu đứng " + (zones.size() + 1), capacity, tier, 0));
             return this;
         }
 
@@ -291,7 +297,7 @@ public final class CatalogFixtures {
                     insertZonePrice(eventId, zoneId, tierIds.get(z.tier() != null ? z.tier() : DEFAULT_TIER));
                     created.put(zoneId, z);
                     if (z.kind().equals("SEATED")) {
-                        seatsByZone.put(zoneId, insertSeats(zoneId, z.size()));
+                        seatsByZone.put(zoneId, insertSeats(zoneId, z.size(), z.perRow()));
                     }
                 }
 
@@ -357,6 +363,87 @@ public final class CatalogFixtures {
         }
     }
 
+
+    // ------------------------------------------------------------------ Chỉnh dữ liệu sau khi tạo
+
+    /** Id các khu của suất theo {@code name} (cùng thứ tự API trả). */
+    public List<UUID> zoneIds(UUID showtimeId) {
+        return jdbc.sql("""
+                        SELECT z.id FROM zone z JOIN showtime s ON s.seat_layout_id = z.seat_layout_id
+                        WHERE s.id = :s ORDER BY z.name, z.id
+                        """)
+                .param("s", showtimeId).query(UUID.class).list();
+    }
+
+    /** Id các ghế của khu theo {@code row_label}, {@code number}. */
+    public List<UUID> seatIds(UUID zoneId) {
+        return jdbc.sql("SELECT id FROM seat WHERE zone_id = :z ORDER BY row_label, number")
+                .param("z", zoneId).query(UUID.class).list();
+    }
+
+    /** Đặt ghế sang HELD của một đơn PENDING mới, hết hạn giữ lúc {@code heldUntil}. */
+    public void holdSeat(UUID showtimeId, UUID seatId, Instant heldUntil) {
+        UUID order = insertOrder(showtimeId, "PENDING", heldUntil);
+        jdbc.sql("""
+                        UPDATE showtime_seat SET status = 'HELD', order_id = :o, held_until = :until
+                        WHERE showtime_id = :s AND seat_id = :seat
+                        """)
+                .param("o", order).param("until", utc(heldUntil)).param("s", showtimeId).param("seat", seatId)
+                .update();
+    }
+
+    public void blockSeat(UUID showtimeId, UUID seatId) {
+        jdbc.sql("UPDATE showtime_seat SET status = 'BLOCKED', order_id = NULL, held_until = NULL "
+                        + "WHERE showtime_id = :s AND seat_id = :seat")
+                .param("s", showtimeId).param("seat", seatId).update();
+    }
+
+    public void sellSeat(UUID showtimeId, UUID seatId) {
+        UUID order = insertOrder(showtimeId, "PAID", clock.instant());
+        jdbc.sql("UPDATE showtime_seat SET status = 'SOLD', order_id = :o, held_until = NULL "
+                        + "WHERE showtime_id = :s AND seat_id = :seat")
+                .param("o", order).param("s", showtimeId).param("seat", seatId).update();
+    }
+
+    /** Xoá dòng showtime_seat của ghế, mô phỏng suất chưa được khởi tạo tồn kho. */
+    public void deleteShowtimeSeat(UUID showtimeId, UUID seatId) {
+        jdbc.sql("DELETE FROM showtime_seat WHERE showtime_id = :s AND seat_id = :seat")
+                .param("s", showtimeId).param("seat", seatId).update();
+    }
+
+    public void deleteZoneStock(UUID showtimeId, UUID zoneId) {
+        jdbc.sql("DELETE FROM showtime_zone_stock WHERE showtime_id = :s AND zone_id = :z")
+                .param("s", showtimeId).param("z", zoneId).update();
+    }
+
+    /** Đặt số đã bán và đang giữ của khu đứng. */
+    public void setZoneStock(UUID showtimeId, UUID zoneId, int sold, int held) {
+        jdbc.sql("UPDATE showtime_zone_stock SET sold = :sold, held = :held WHERE showtime_id = :s AND zone_id = :z")
+                .param("sold", sold).param("held", held).param("s", showtimeId).param("z", zoneId).update();
+    }
+
+    /** Biến hai ghế thành một cặp ghế đôi (loại COUPLE, ghi vào seat_pair theo thứ tự id). */
+    public void makeCouple(UUID seatA, UUID seatB) {
+        jdbc.sql("UPDATE seat SET seat_type_id = (SELECT id FROM seat_type WHERE code = 'COUPLE') "
+                        + "WHERE id IN (:a, :b)")
+                .param("a", seatA).param("b", seatB).update();
+        UUID low = seatA.compareTo(seatB) < 0 ? seatA : seatB;
+        UUID high = low.equals(seatA) ? seatB : seatA;
+        jdbc.sql("INSERT INTO seat_pair (seat_a_id, seat_b_id) VALUES (:a, :b)")
+                .param("a", low).param("b", high).update();
+    }
+
+    private UUID insertOrder(UUID showtimeId, String status, Instant expiresAt) {
+        UUID buyer = insertBuyer();
+        return jdbc.sql("""
+                        INSERT INTO orders (code, user_id, showtime_id, status, total_amount, expires_at, paid_at)
+                        VALUES (:code, :u, :s, :status, 0, :exp, CASE WHEN :status = 'PAID' THEN :exp END) RETURNING id
+                        """)
+                .param("code", UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase())
+                .param("u", buyer).param("s", showtimeId).param("status", status).param("exp", utc(expiresAt))
+                .query(UUID.class).single();
+    }
+
     // ------------------------------------------------------------------ SQL dùng chung
 
     private UUID insertVenue(String name, String city) {
@@ -405,14 +492,19 @@ public final class CatalogFixtures {
                 .param("e", eventId).param("z", zoneId).param("t", tierId).update();
     }
 
-    private List<UUID> insertSeats(UUID zoneId, int count) {
+    private List<UUID> insertSeats(UUID zoneId, int count, int perRow) {
         List<UUID> ids = new ArrayList<>();
-        for (int i = 1; i <= count; i++) {
+        for (int i = 0; i < count; i++) {
+            // perRow = 0: một hàng A duy nhất. Ngược lại hàng A, B, C... mỗi hàng perRow ghế.
+            String row = perRow == 0 ? "A" : String.valueOf((char) ('A' + i / perRow));
+            int number = perRow == 0 ? i + 1 : i % perRow + 1;
+            int y = perRow == 0 ? 0 : i / perRow;
             ids.add(jdbc.sql("""
                             INSERT INTO seat (zone_id, seat_type_id, row_label, number, x, y)
-                            VALUES (:z, (SELECT id FROM seat_type WHERE code = 'STANDARD'), 'A', :n, :n, 0) RETURNING id
+                            VALUES (:z, (SELECT id FROM seat_type WHERE code = 'STANDARD'), :row, :n, :n, :y) RETURNING id
                             """)
-                    .param("z", zoneId).param("n", i).query(UUID.class).single());
+                    .param("z", zoneId).param("row", row).param("n", number).param("y", y)
+                    .query(UUID.class).single());
         }
         return ids;
     }
