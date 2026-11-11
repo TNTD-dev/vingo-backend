@@ -10,7 +10,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-import vingo.auth.domain.AuthUser;
+import vingo.auth.AuthUser;
 import vingo.shared.security.Role;
 
 @Repository

@@ -6,7 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -20,15 +21,19 @@ import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import org.springframework.web.util.UriComponentsBuilder;
+
 import tools.jackson.databind.json.JsonMapper;
 
 /** Token endpoint và JWK Set giả để chạy callback thật mà không gọi Google. */
 final class GoogleTestProvider implements AutoCloseable {
 
+    static final String CLIENT_ID = "test-google-client";
+
     private final JsonMapper json = JsonMapper.builder().build();
     private final RSAKey key = new RSAKeyGenerator(2048).keyID("google-test").generate();
     private final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-    private final AtomicReference<String> idToken = new AtomicReference<>();
+    private final Map<String, String> tokens = new ConcurrentHashMap<>();
 
     /** Khởi động máy chủ HTTP loopback với cổng riêng cho test. */
     GoogleTestProvider() throws IOException, JOSEException {
@@ -42,24 +47,27 @@ final class GoogleTestProvider implements AutoCloseable {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }
 
-    /** Ký ID token với nonce của lượt đăng nhập đang được kiểm thử. */
-    void issueIdToken(String audience, String nonce, String subject, String email, String avatar) throws JOSEException {
+    /** Trả authorization code riêng cho mỗi ID token đã ký, kể cả khi test chạy đồng thời. */
+    String issueCode(String nonce, String subject, String email, boolean verified, String avatar) throws JOSEException {
         Instant now = Instant.now();
-        var claims = new JWTClaimsSet.Builder().issuer("https://accounts.google.com").audience(audience)
+        var claims = new JWTClaimsSet.Builder().issuer("https://accounts.google.com").audience(CLIENT_ID)
                 .subject(subject).issueTime(Date.from(now)).expirationTime(Date.from(now.plusSeconds(300)))
-                .claim("nonce", nonce).claim("email", email).claim("email_verified", true)
+                .claim("nonce", nonce).claim("email", email).claim("email_verified", verified)
                 .claim("name", "Google Test").claim("picture", avatar).build();
         var jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(), claims);
         jwt.sign(new RSASSASigner(key));
-        idToken.set(jwt.serialize());
+        String code = UUID.randomUUID().toString();
+        tokens.put(code, jwt.serialize());
+        return code;
     }
 
     /** Cấp token đúng một lần khi Spring gửi code và PKCE verifier đến token endpoint. */
     private void tokenResponse(HttpExchange exchange) throws IOException {
-        String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        String token = idToken.getAndSet(null);
-        if (!"POST".equals(exchange.getRequestMethod()) || !request.contains("code=google-test-code")
-                || !request.contains("code_verifier=") || token == null) {
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        var form = UriComponentsBuilder.fromPath("/").query(body).build().getQueryParams();
+        String code = form.getFirst("code");
+        String token = code == null ? null : tokens.remove(code);
+        if (!"POST".equals(exchange.getRequestMethod()) || !form.containsKey("code_verifier") || token == null) {
             write(exchange, 400, Map.of("error", "invalid_grant"));
             return;
         }

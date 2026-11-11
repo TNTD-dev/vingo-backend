@@ -137,6 +137,27 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
   /auth/google:
+    post:
+      operationId: loginWithGoogle
+      tags: [Auth]
+      summary: Đăng nhập bằng Google id_token (tạo user ACTIVE nếu chưa có)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       operationId: startGoogleLogin
       tags: [Auth]

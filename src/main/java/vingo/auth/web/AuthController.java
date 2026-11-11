@@ -15,7 +15,7 @@ import vingo.api.model.LogoutRequest;
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
 import vingo.api.model.User;
-import vingo.auth.application.AuthService;
+import vingo.auth.AuthService;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.security.CurrentUser;

@@ -1,4 +1,4 @@
-package vingo.auth.dto;
+package vingo.auth.internal;
 
 import java.net.URI;
 

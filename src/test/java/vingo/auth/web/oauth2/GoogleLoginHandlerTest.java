@@ -20,7 +20,7 @@ import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
 
-import vingo.auth.application.GoogleLoginService;
+import vingo.auth.GoogleLoginService;
 import vingo.auth.internal.AuthProperties;
 import vingo.auth.web.AuthCookies;
 

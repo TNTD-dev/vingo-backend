@@ -17,9 +17,9 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import vingo.auth.application.GoogleLoginService;
-import vingo.auth.dto.GoogleLoginRequest;
+import vingo.auth.GoogleLoginService;
 import vingo.auth.internal.AuthProperties;
+import vingo.auth.internal.GoogleLoginRequest;
 import vingo.auth.web.AuthCookies;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;

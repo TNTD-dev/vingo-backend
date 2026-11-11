@@ -4,7 +4,7 @@ Vingo dùng **OAuth 2.0 Authorization Code + OpenID Connect (OIDC)**. Google xá
 
 ## 1. Phạm vi triển khai
 
-- Đổi contract Google từ `POST /api/v1/auth/google` nhận ID token sang luồng điều hướng qua `GET /api/v1/auth/google` và callback do Spring Security xử lý.
+- Bổ sung luồng điều hướng qua `GET /api/v1/auth/google` và callback do Spring Security xử lý. OpenAPI vẫn giữ operation `POST /api/v1/auth/google` nhận ID token từ `develop`. Luồng browser dùng `GET`, còn operation `POST` hiện dùng stub sinh từ OpenAPI và chưa hỗ trợ xác minh ID token.
 - Tạo tài khoản `BUYER` ở lần đăng nhập đầu, lưu Google `sub` và avatar nếu có. Lần sau dùng lại UUID Vingo theo `google_sub`.
 - Tạo phiên trong PostgreSQL cho mỗi lượt đăng nhập thành công. Trình duyệt nhận refresh token qua cookie `HttpOnly`. Access JWT được cấp khi frontend gọi refresh.
 - Xoay vòng refresh token khi refresh và thu hồi một phiên hoặc mọi phiên của tài khoản khi logout.
@@ -71,11 +71,11 @@ Google trả người dùng về **callback của backend** trên cổng `8080`.
 | [`GoogleLoginStartFilter`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginStartFilter.java) và [`GoogleLoginRateLimiter`](../src/main/java/vingo/auth/internal/GoogleLoginRateLimiter.java) | Giới hạn request bắt đầu theo IP bằng Redis trước khi Spring dọn hoặc lưu state trong PostgreSQL. |
 | [`GoogleAuthorizationRequests`](../src/main/java/vingo/auth/web/oauth2/GoogleAuthorizationRequests.java) | Nối Spring Security với kho yêu cầu OAuth2. Tạo cookie tạm, chuyển yêu cầu OAuth2 thành dữ liệu lưu trữ và khôi phục yêu cầu khi callback quay về. |
 | [`GoogleLoginHandler`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginHandler.java) | Đọc claim từ `OidcUser` đã xác thực, gọi use case, đặt cookie refresh và redirect. |
-| [`GoogleLoginService`](../src/main/java/vingo/auth/application/GoogleLoginService.java) | Kiểm tra điều kiện tài khoản, tìm hoặc tạo user, tạo session trong một transaction. |
-| [`AuthController`](../src/main/java/vingo/auth/web/AuthController.java) và [`AuthService`](../src/main/java/vingo/auth/application/AuthService.java) | Nhận HTTP refresh/logout, xử lý vòng đời phiên, ký JWT và trả kết quả theo OpenAPI. |
+| [`GoogleLoginService`](../src/main/java/vingo/auth/GoogleLoginService.java) | Kiểm tra điều kiện tài khoản, tìm hoặc tạo user, tạo session trong một transaction. |
+| [`AuthController`](../src/main/java/vingo/auth/web/AuthController.java) và [`AuthService`](../src/main/java/vingo/auth/AuthService.java) | Nhận HTTP refresh/logout, xử lý vòng đời phiên, ký JWT và trả kết quả theo OpenAPI. |
 | [`AuthRepository`](../src/main/java/vingo/auth/internal/AuthRepository.java) và [`GoogleAuthorizationRequestRepository`](../src/main/java/vingo/auth/internal/GoogleAuthorizationRequestRepository.java) | Thực hiện SQL trên `users`, `sessions` và `oauth_login_request`. |
 
-Luồng nghiệp vụ đi theo **điểm vào HTTP → service → repository → PostgreSQL**. Callback OAuth2 đi vào qua Spring Security nên `GoogleLoginHandler` đảm nhận vai trò điểm vào. Kho trạng thái OAuth2 là hạ tầng của filter chain, được gọi qua adapter riêng. `AuthUser` là model nội bộ, còn các kiểu HTTP như `User` và `RefreshResult` được sinh từ OpenAPI.
+Luồng nghiệp vụ đi theo **điểm vào HTTP → service → repository → PostgreSQL**. Callback OAuth2 đi qua Spring Security và `GoogleLoginHandler`. Kho trạng thái OAuth2 là hạ tầng của filter chain, được gọi qua adapter riêng. Các service và `AuthUser` nằm ở package gốc `vingo.auth`. DTO nội bộ nằm trong `vingo.auth.internal`. Các kiểu HTTP như `User` và `RefreshResult` được sinh từ OpenAPI.
 
 ## 4. Vì sao chọn cách này?
 

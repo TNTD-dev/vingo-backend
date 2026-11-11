@@ -1,8 +1,8 @@
-package vingo.auth.dto;
+package vingo.auth.internal;
 
 import java.time.OffsetDateTime;
 
-import vingo.auth.domain.AuthUser;
+import vingo.auth.AuthUser;
 
 public record AuthResponse(String accessToken, String refreshToken, OffsetDateTime expiresAt,
                            int expiresIn, AuthUser user) {

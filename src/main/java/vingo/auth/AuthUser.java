@@ -1,4 +1,4 @@
-package vingo.auth.domain;
+package vingo.auth;
 
 import java.net.URI;
 import java.util.UUID;

@@ -1,4 +1,4 @@
-package vingo.auth.application;
+package vingo.auth;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -14,8 +14,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import vingo.auth.dto.AuthResponse;
 import vingo.auth.internal.AuthRepository;
+import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.TokenSecrets;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;

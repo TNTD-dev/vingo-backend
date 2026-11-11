@@ -3,7 +3,6 @@ package vingo.auth.web;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Arrays;
 import java.util.Optional;
 
 import jakarta.servlet.http.Cookie;
@@ -11,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.WebUtils;
 
 import vingo.auth.internal.AuthProperties;
 
@@ -37,24 +37,19 @@ public class AuthCookies {
 
     /** Tạo cookie HttpOnly với SameSite=Lax và chính sách Secure của môi trường. */
     public ResponseCookie cookie(String name, String value, Duration ttl) {
+        boolean secure = properties.secureCookies();
         return ResponseCookie.from(cookieName(name), value)
                 .httpOnly(true)
-                .secure(properties.secureCookies())
+                .secure(secure)
                 .sameSite("Lax")
-                .path(properties.secureCookies() ? "/" : "/api/v1/auth")
+                .path(secure ? "/" : "/api/v1/auth")
                 .maxAge(ttl)
                 .build();
     }
 
     /** Đọc cookie theo tên hiệu lực của môi trường hiện tại. */
     public Optional<String> read(HttpServletRequest request, String name) {
-        Cookie[] cookies = request.getCookies();
-        if (cookies == null) {
-            return Optional.empty();
-        }
-        String expectedName = cookieName(name);
-        return Arrays.stream(cookies).filter(cookie -> expectedName.equals(cookie.getName()))
-                .map(Cookie::getValue).findFirst();
+        return Optional.ofNullable(WebUtils.getCookie(request, cookieName(name))).map(Cookie::getValue);
     }
 
     /** Áp dụng tiền tố __Host- khi cookie chạy qua HTTPS. */

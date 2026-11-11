@@ -1,7 +1,8 @@
-package vingo.auth.application;
+package vingo.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,10 +19,9 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
-import vingo.auth.domain.AuthUser;
-import vingo.auth.dto.GoogleLoginRequest;
 import vingo.auth.internal.AuthProperties;
 import vingo.auth.internal.AuthRepository;
+import vingo.auth.internal.GoogleLoginRequest;
 import vingo.auth.internal.TokenSecrets;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
@@ -59,8 +59,7 @@ class GoogleLoginServiceTest {
 
         assertThatThrownBy(() -> login.login(new GoogleLoginRequest(SUBJECT, EMAIL, true, null, null)))
                 .isInstanceOfSatisfying(DomainException.class, ex -> assertThat(ex.code()).isEqualTo(ErrorCode.UNAUTHORIZED));
-        verify(accounts, never()).createSession(
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(accounts, never()).createSession(any(), any(), any());
     }
 
     /** Tạo buyer Google với trạng thái tài khoản mà test cần. */
