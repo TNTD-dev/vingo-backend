@@ -324,16 +324,39 @@ paths:
       operationId: searchEvents
       tags: [Search]
       summary: Tìm kiếm sự kiện đã PUBLISHED
+      description: |
+        Gọi khi người dùng muốn tìm sự kiện theo từ khoá, loại, thành phố, khoảng thời gian hoặc khoảng giá. Trả danh sách `EventSummary` phân trang bằng cursor.
+
+        Phạm vi kết quả: chỉ sự kiện PUBLISHED còn ít nhất một suất SCHEDULED chưa diễn ra. Tìm theo `q` chịu được gõ không dấu và gõ sai chính tả.
+        `venue_name`, `city`, `first_starts_at` lấy từ suất sớm nhất thoả bộ lọc. `price_from` là giá thấp nhất trong các hạng vé đã gán khu.
+
+        Sắp xếp (`sort`): không truyền thì có `q` dùng `relevance`, không có `q` dùng `starts_at`. `relevance` mà không có `q` trả 400.
+        `popularity` = tổng vé đã bán của các suất sắp tới.
+
+        Cursor gắn với bộ lọc và `sort` đã dùng khi sinh ra nó. Dùng cursor với bộ lọc hoặc sort khác trả 400 `VALIDATION_ERROR`.
+
+        `city` là mã thành phố (`CityCode`), không phải tên. Người dùng nói "Sài Gòn" thì agent tự đổi sang `HCM` theo mô tả của `CityCode`.
+
+        Ví dụ lỗi 400:
+        ```json
+        { "title": "Tham số không hợp lệ", "status": 400, "code": "VALIDATION_ERROR",
+          "detail": "sort=relevance cần có tham số q",
+          "errors": [ { "field": "sort", "message": "relevance chỉ dùng khi có q" } ] }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters:
         - { name: q, in: query, schema: { type: string } }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
-        - { name: city, in: query, schema: { type: string } }
+        - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
         - { name: price_min, in: query, schema: { type: integer } }
         - { name: price_max, in: query, schema: { type: integer } }
-        - { name: sort, in: query, schema: { type: string, enum: [starts_at, price, popularity], default: starts_at } }
+        - { name: sort, in: query, schema: { type: string, enum: [relevance, starts_at, price, popularity] } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -349,11 +372,25 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/EventSummary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /events/{event_id}:
     get:
       operationId: getEvent
       tags: [Search]
       summary: Chi tiết sự kiện, địa điểm và bảng giá
+      description: |
+        Gọi khi đã biết `event_id` (lấy từ `searchEvents`) và cần mô tả, địa điểm, bảng giá các hạng vé và các suất. Trả `EventDetail`.
+        Sự kiện không tồn tại hoặc chưa PUBLISHED trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy sự kiện", "status": 404, "code": "NOT_FOUND", "detail": "Sự kiện không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
@@ -363,11 +400,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /events/{event_id}/showtimes:
     get:
       operationId: listEventShowtimes
       tags: [Search]
       summary: Danh sách suất của sự kiện
+      description: |
+        Gọi khi cần liệt kê các suất của một sự kiện để người dùng chọn ngày giờ. Trả `data` là danh sách `Showtime` kèm `status` tính theo thời điểm gọi.
+        Sự kiện không tồn tại trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy sự kiện", "status": 404, "code": "NOT_FOUND", "detail": "Sự kiện không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
@@ -381,14 +431,33 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Showtime' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/seatmap:
     get:
       operationId: getSeatmap
       tags: [Search]
       summary: Sơ đồ ghế theo suất kèm hạng, giá và trạng thái
-      description: Ghế HELD đã quá held_until được trả về là AVAILABLE. Có thể cache vài giây.
+      description: |
+        Gọi khi người dùng cần chọn ghế cụ thể. Trả sơ đồ ghế của suất kèm hạng vé, giá và trạng thái từng ghế. Có thể cache vài giây.
+
+        Không truyền `zone_id` thì trả mọi khu; truyền `zone_id` thì chỉ trả khu đó. `zone_id` không thuộc sơ đồ của suất trả 404.
+        Ghế HELD đã quá `held_until` được trả là AVAILABLE. Ghế thiếu dữ liệu trạng thái được trả là BLOCKED.
+
+        Gợi ý cho agent: gọi `getAvailability` trước để biết khu nào còn chỗ, rồi gọi seatmap theo từng khu bằng `zone_id` để giảm dữ liệu.
+
+        Ví dụ lỗi 404 (suất hoặc khu không tồn tại):
+        ```json
+        { "title": "Không tìm thấy khu", "status": 404, "code": "NOT_FOUND", "detail": "zone_id không thuộc sơ đồ của suất" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
-      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - { name: zone_id, in: query, required: false, description: 'Chỉ trả khu này; bỏ trống để trả mọi khu', schema: { type: string, format: uuid } }
       responses:
         '200':
           description: OK
@@ -396,11 +465,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SeatMap' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/availability:
     get:
       operationId: getAvailability
       tags: [Search]
       summary: Số chỗ còn theo khu và hạng vé
+      description: |
+        Gọi khi cần biết suất còn chỗ không và khu/hạng nào còn bao nhiêu chỗ, trước khi chọn ghế hoặc tạo hold. Nhẹ hơn `getSeatmap`.
+        Trả `sold_out` và danh sách khu kèm hạng vé. Suất không tồn tại trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy suất", "status": 404, "code": "NOT_FOUND", "detail": "Suất không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       responses:
@@ -423,6 +505,8 @@ paths:
                         name: { type: string }
                         tier: { $ref: '#/components/schemas/PriceTier' }
                         seats_left: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   # ------------------------------------------------------------------ Booking
   /showtimes/{showtime_id}/holds:
@@ -1461,6 +1545,14 @@ components:
         phone: { type: string }
         email: { type: string, format: email, description: Email nhận vé }
 
+    CityCode:
+      type: string
+      enum: [HCM, HN, DN]
+      description: |
+        Mã thành phố (danh sách tạm, catalog sẽ chốt). Backend không tự đổi tên sang mã; agent tự map tên người dùng nói sang mã:
+        HCM: TP. Hồ Chí Minh, Sài Gòn, HCMC;
+        HN: Hà Nội, Hanoi;
+        DN: Đà Nẵng, Da Nang.
     EventCategory: { type: string, enum: [FOOTBALL, CONCERT, THEATER, OTHER] }
     EventStatus: { type: string, enum: [DRAFT, PUBLISHED, ENDED, CANCELLED] }
     ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
@@ -1476,7 +1568,8 @@ components:
         name: { type: string }
         type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
         address: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
+        city_name: { type: string, description: Tên hiển thị của thành phố }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
@@ -1495,7 +1588,7 @@ components:
         name: { type: string }
         type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
         address: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
@@ -1572,7 +1665,8 @@ components:
         category: { $ref: '#/components/schemas/EventCategory' }
         poster_url: { type: string, format: uri }
         venue_name: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
+        city_name: { type: string, description: Tên hiển thị của thành phố }
         first_starts_at: { type: string, format: date-time }
         price_from: { type: integer }
         on_sale: { type: boolean }
