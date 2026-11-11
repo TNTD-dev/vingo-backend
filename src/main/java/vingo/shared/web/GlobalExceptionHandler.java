@@ -1,8 +1,11 @@
 package vingo.shared.web;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -34,6 +37,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.debug("Lỗi nghiệp vụ {}: {}", ex.code(), ex.getMessage());
         ProblemDetail problem = problem(ex.code(), ex.getMessage());
         ex.properties().forEach(problem::setProperty);
+        return problem;
+    }
+
+    /** Ràng buộc Bean Validation trên tham số của interface sinh từ contract (ví dụ limit 1..100). */
+    @ExceptionHandler(ConstraintViolationException.class)
+    ProblemDetail handleConstraintViolation(ConstraintViolationException ex) {
+        ProblemDetail problem = problem(ErrorCode.VALIDATION_ERROR, "Có tham số không hợp lệ");
+        List<Map<String, String>> errors = ex.getConstraintViolations().stream()
+                .map(v -> Map.of("field", fieldName(v), "message", v.getMessage()))
+                .toList();
+        problem.setProperty("errors", errors);
         return problem;
     }
 
@@ -69,6 +83,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle(code.title());
         problem.setProperty("code", code.name());
         return problem;
+    }
+
+    /** {@code searchEvents.priceMin} → {@code price_min}. */
+    private static String fieldName(ConstraintViolation<?> violation) {
+        String path = violation.getPropertyPath().toString();
+        String name = path.substring(path.lastIndexOf('.') + 1);
+        return name.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
     }
 
     private static ErrorCode codeFor(HttpStatusCode status) {
