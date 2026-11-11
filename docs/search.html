@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Module search · Vingo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: một cột tài liệu kỹ thuật 980px, thanh mục lục dính trên cùng; cùng font và bảng màu với docs/architecture.html */
+:root {
+  --bg: #f7f8fa; --surface: #ffffff; --ink: #172033; --muted: #5f6b7a; --line: #dfe3e9; --code: #f2f4f7;
+  --accent: #1f4fd1; --accent-soft: #eaf0fd;
+  --good: #15803d; --good-soft: #e5f5ea; --warn: #a15c07; --warn-soft: #fcf1df; --bad: #b42318; --bad-soft: #fde9e7;
+  --sold: #5f6b7a; --sold-soft: #e7eaef;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1420; --surface: #161d2b; --ink: #e6eaf2; --muted: #9aa6b8; --line: #2a3445; --code: #1b2333;
+  --accent: #7ea4ff; --accent-soft: #1c2a4d;
+  --good: #5cc98a; --good-soft: #15301f; --warn: #e3a54a; --warn-soft: #33260f; --bad: #f08a80; --bad-soft: #3a1a1a;
+  --sold: #9aa6b8; --sold-soft: #252e3d; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1420; --surface: #161d2b; --ink: #e6eaf2; --muted: #9aa6b8; --line: #2a3445; --code: #1b2333;
+  --accent: #7ea4ff; --accent-soft: #1c2a4d;
+  --good: #5cc98a; --good-soft: #15301f; --warn: #e3a54a; --warn-soft: #33260f; --bad: #f08a80; --bad-soft: #3a1a1a;
+  --sold: #9aa6b8; --sold-soft: #252e3d; color-scheme: dark }
+
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.6; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+.wrap { max-width: 980px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { text-wrap: balance; line-height: 1.25; margin: 0; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 21px; font-weight: 600; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+:not(pre) > code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* header */
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); }
+header.top .wrap { padding-block: 32px 24px; display: grid; gap: 12px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.lede { color: var(--muted); font-size: 16px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); white-space: nowrap; }
+.chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.chip.good { background: var(--good-soft); border-color: transparent; color: var(--good); }
+.chip.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+nav.toc .wrap { display: flex; gap: 4px; overflow-x: auto; padding-block: 8px; scrollbar-width: none; }
+nav.toc a { flex: none; text-decoration: none; color: var(--muted); font-size: 13.5px; font-weight: 500; padding: 4px 10px; border-radius: 6px; }
+nav.toc a:hover { background: var(--bg); color: var(--ink); }
+
+main .wrap { display: grid; gap: 56px; padding-block: 40px 80px; }
+section { display: grid; gap: 18px; scroll-margin-top: 64px; }
+.sec-head { display: grid; gap: 6px; }
+.sec-head .eyebrow { color: var(--accent); }
+.sub { color: var(--muted); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.scroll-x { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td .mono { white-space: nowrap; }
+.method { font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--good); background: var(--good-soft); padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
+
+/* diagram */
+.diagram { padding: 12px; }
+.diagram svg { display: block; width: 100%; min-width: 760px; height: auto; }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+svg .box.own { fill: var(--accent-soft); stroke: var(--accent); }
+svg .box.ext { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; }
+svg .box.db { fill: var(--code); stroke: var(--muted); }
+svg .box.cache { fill: var(--warn-soft); stroke: var(--warn); }
+svg .t { fill: var(--ink); font-family: var(--sans); font-size: 13.5px; font-weight: 600; }
+svg .s { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+svg .lbl { fill: var(--muted); font-family: var(--sans); font-size: 11px; }
+svg .edge { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+svg .edge.evt { stroke: var(--warn); stroke-dasharray: 5 4; }
+svg .arrow { fill: var(--muted); }
+svg .arrow.evt { fill: var(--warn); }
+svg .grp { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 6 4; }
+svg .grplbl { fill: var(--accent); font-family: var(--mono); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--muted); padding: 0 6px 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 10px; border-radius: 2px; border: 1px solid; display: inline-block; }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.two > * { min-width: 0; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+
+pre { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--ink); }
+.kw { color: var(--accent); }
+.cm { color: var(--muted); }
+.st { color: var(--good); }
+
+.tree { padding: 16px 18px; font-family: var(--mono); font-size: 12.5px; line-height: 1.75; white-space: pre; overflow-x: auto; }
+.tree .d { color: var(--accent); font-weight: 500; }
+.tree .n { color: var(--muted); }
+
+.decisions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.decisions > div { padding: 16px; display: grid; gap: 6px; align-content: start; }
+@media (max-width: 760px) { .decisions { grid-template-columns: 1fr; } }
+
+/* flow tabs */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding: 10px 12px 0; }
+.tab { font: inherit; font-size: 13.5px; font-weight: 500; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 10px 9px; cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tabpanel { padding: 20px; display: grid; gap: 18px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding: 8px 0; position: relative; }
+.steps li::before { content: counter(s); width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); }
+.steps li:not(:last-child)::after { content: ""; position: absolute; left: 11.5px; top: 34px; bottom: -6px; width: 1px; background: var(--line); }
+.steps li > div { min-width: 0; display: grid; gap: 2px; }
+.steps .err { color: var(--bad); font-size: 13px; }
+.note { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; font-size: 14px; }
+.note.info { border-left-color: var(--accent); background: var(--accent-soft); }
+
+/* status timeline */
+.lab { padding: 20px; display: grid; gap: 16px; }
+.timeline { position: relative; display: grid; gap: 6px; }
+.bar { display: flex; height: 34px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.bar > div { display: grid; place-items: center; font-size: 11.5px; font-weight: 600; font-family: var(--mono); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; transition: opacity .15s; }
+.seg-sch { background: var(--accent-soft); color: var(--accent); }
+.seg-on { background: var(--good-soft); color: var(--good); }
+.seg-cl { background: var(--warn-soft); color: var(--warn); }
+.seg-fin { background: var(--sold-soft); color: var(--sold); }
+.bar.cancelled > div { opacity: .3; }
+.ticks { position: relative; height: 34px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; text-align: center; line-height: 1.3; }
+.ticks span:first-child { transform: none; }
+.ticks span:last-child { transform: translateX(-100%); text-align: right; }
+.cursor { position: absolute; top: -6px; height: 46px; width: 2px; background: var(--ink); pointer-events: none; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.controls label { font-size: 13.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+input[type=range] { width: min(420px, 100%); accent-color: var(--accent); }
+.readout { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; }
+.big { font-family: var(--mono); font-weight: 600; font-size: 15px; padding: 3px 10px; border-radius: 6px; }
+
+/* seats */
+.seatrow { display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: center; }
+.seatrow > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; }
+.rowlbl { font-size: 12.5px; color: var(--muted); }
+.seat { width: 50px; height: 42px; border-radius: 6px 6px 3px 3px; border: 1.5px solid; display: grid; place-items: center; font-family: var(--mono); font-size: 10.5px; line-height: 1.15; text-align: center; transition: background .15s, color .15s; }
+.seat.AVAILABLE { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.seat.HELD { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.seat.SOLD { background: var(--sold-soft); border-color: var(--sold); color: var(--sold); }
+.seat.BLOCKED { background: repeating-linear-gradient(45deg, var(--surface) 0 4px, var(--line) 4px 6px); border-color: var(--line); color: var(--muted); }
+.seat.flip { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 4px var(--accent); }
+@media (max-width: 520px) { .seatrow { grid-template-columns: 1fr; } .seat { width: 44px; } }
+
+/* cache */
+.cache-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.cache-grid > div { padding: 16px; display: grid; gap: 8px; align-content: start; }
+.ttl { font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) { .cache-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 460px) { .cache-grid { grid-template-columns: 1fr; } }
+
+/* PR plan */
+.prs { display: grid; gap: 0; }
+.pr { display: grid; grid-template-columns: 92px 1fr; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.pr:last-child { border-bottom: 0; }
+.pr > div { min-width: 0; }
+.prtag { font-family: var(--mono); font-weight: 600; font-size: 13px; color: var(--accent); display: grid; gap: 6px; align-content: start; }
+.prbody { display: grid; gap: 10px; }
+.prbody ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 14px; }
+.tests { display: grid; gap: 4px; }
+.tests label { display: flex; gap: 8px; align-items: flex-start; font-family: var(--mono); font-size: 12.5px; cursor: pointer; overflow-wrap: anywhere; }
+.tests input { margin-top: 3px; accent-color: var(--good); flex: none; }
+.tests input:checked + span { color: var(--muted); text-decoration: line-through; }
+.progress { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .pr { grid-template-columns: 1fr; gap: 8px; } .prtag { grid-auto-flow: column; justify-content: start; align-items: center; } }
+
+.qs { display: grid; gap: 12px; }
+.q { padding: 16px 18px; display: grid; grid-template-columns: 36px 1fr; gap: 14px; }
+.q > div { min-width: 0; display: grid; gap: 6px; }
+.qn { font-family: var(--mono); font-weight: 600; color: var(--warn); font-size: 15px; }
+.q .rec { font-size: 14px; }
+.q .rec b { font-weight: 600; }
+.who { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.gaps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.gaps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: baseline; font-size: 14.5px; }
+.gaps li > span:last-child { min-width: 0; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="eyebrow">vingo-backend · vingo.search · chủ: Đức · cập nhật 11/11/2026</div>
+    <h1>Module search</h1>
+    <p class="lede">Tìm sự kiện (gõ không dấu vẫn ra), sơ đồ ghế, số chỗ còn. Toàn bộ là luồng đọc, public, phục vụ web và hai tool <code>search_events</code>, <code>get_seatmap</code> của Buyer agent.</p>
+    <p class="sub">Thiết kế, chưa có code. Bổ sung cho <a href="architecture.html">architecture.html</a>; khi code và tài liệu mâu thuẫn, hỏi Đức.</p>
+    <div class="facts">
+      <span class="chip accent">5 endpoint public</span>
+      <span class="chip">Read model · JdbcClient</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Mục lục">
+  <div class="wrap">
+    <a href="#endpoints">Endpoint</a>
+    <a href="#arch">Kiến trúc</a>
+    <a href="#rules">Quy tắc đọc</a>
+    <a href="#search">Tìm kiếm</a>
+    <a href="#seatmap">Seatmap</a>
+    <a href="#cache">Cache</a>
+    <a href="#roadmap">Lộ trình</a>
+  </div>
+</nav>
+
+<main>
+<div class="wrap">
+
+<section id="endpoints">
+  <div class="sec-head"><div class="eyebrow">Endpoint</div><h2>5 endpoint, tag Search</h2></div>
+  <div class="panel scroll-x">
+    <table>
+      <thead><tr><th>Endpoint</th><th>Agent tool</th><th>Lỗi</th><th>Cache</th></tr></thead>
+      <tbody>
+        <tr><td class="mono"><span class="method">GET</span>/events</td><td class="mono">search_events</td><td>400, 429</td><td>Không</td></tr>
+        <tr><td class="mono"><span class="method">GET</span>/events/{id}</td><td>—</td><td>404, 429</td><td>10 phút</td></tr>
+        <tr><td class="mono"><span class="method">GET</span>/events/{id}/showtimes</td><td>—</td><td>404, 429</td><td>10 phút</td></tr>
+        <tr><td class="mono"><span class="method">GET</span>/showtimes/{id}/seatmap?zone_id=</td><td class="mono">get_seatmap</td><td>404, 429</td><td>Layout 10 phút, trạng thái 3 giây</td></tr>
+        <tr><td class="mono"><span class="method">GET</span>/showtimes/{id}/availability</td><td>—</td><td>404, 429</td><td>3 giây</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="sec-head"><div class="eyebrow">Kiến trúc</div><h2>Read model sau interface SearchService</h2>
+    <p class="sub">Search không sở hữu bảng nào. Đọc bảng catalog và booking bằng SQL chỉ đọc; Luân, Danh báo Đức khi đổi schema các bảng này.</p></div>
+  <div class="panel diagram scroll-x">
+    <svg viewBox="0 0 960 470" role="img" aria-label="Sơ đồ thành phần module search">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow evt" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="grp" x="236" y="18" width="508" height="440" rx="10"/>
+      <text class="grplbl" x="250" y="38">vingo.search</text>
+
+      <rect class="box ext" x="16" y="96" width="180" height="52" rx="8"/>
+      <text class="t" x="30" y="119">Web app</text><text class="s" x="30" y="137">React, gọi REST</text>
+      <rect class="box ext" x="16" y="176" width="180" height="60" rx="8"/>
+      <text class="t" x="30" y="199">Buyer agent</text><text class="s" x="30" y="217">search_events</text><text class="s" x="30" y="230">get_seatmap</text>
+
+      <rect class="box own" x="262" y="120" width="210" height="60" rx="8"/>
+      <text class="t" x="278" y="145">SearchController</text><text class="s" x="278" y="164">web/ · implements SearchApi</text>
+      <rect class="box own" x="262" y="232" width="210" height="56" rx="8"/>
+      <text class="t" x="278" y="256">SearchService</text><text class="s" x="278" y="274">interface · gốc package</text>
+      <rect class="box own" x="262" y="342" width="210" height="62" rx="8"/>
+      <text class="t" x="278" y="367">PgSearchService</text><text class="s" x="278" y="386">internal/ · readOnly tx · Clock</text>
+
+      <rect class="box cache" x="534" y="56" width="190" height="58" rx="8"/>
+      <text class="t" x="550" y="80">Redis</text><text class="s" x="550" y="99">cache đọc · 3 giây / 10 phút</text>
+      <rect class="box own" x="534" y="188" width="190" height="58" rx="8"/>
+      <text class="t" x="550" y="211">CatalogChangedListener</text><text class="s" x="550" y="230">sau commit → xoá key</text>
+      <rect class="box own" x="534" y="330" width="190" height="88" rx="8"/>
+      <text class="t" x="550" y="354">Repositories</text><text class="s" x="550" y="373">EventSearchRepository</text><text class="s" x="550" y="389">SeatmapRepository</text><text class="s" x="550" y="405">AvailabilityRepository</text>
+
+      <rect class="box ext" x="786" y="56" width="160" height="58" rx="8"/>
+      <text class="t" x="800" y="80">catalog</text><text class="s" x="800" y="99">Luân · admin sửa</text>
+      <rect class="box db" x="786" y="210" width="160" height="248" rx="8"/>
+      <text class="t" x="800" y="234">PostgreSQL 18</text>
+      <text class="grplbl" x="800" y="258">catalog</text>
+      <text class="s" x="800" y="276">event · showtime</text><text class="s" x="800" y="292">venue · hall</text><text class="s" x="800" y="308">zone · seat · seat_pair</text><text class="s" x="800" y="324">price_tier · zone_price</text>
+      <text class="grplbl" x="800" y="352">booking</text>
+      <text class="s" x="800" y="370">showtime_seat</text><text class="s" x="800" y="386">showtime_zone_stock</text>
+      <text class="grplbl" x="800" y="414">search (index)</text>
+      <text class="s" x="800" y="432">event_title_fts_idx</text><text class="s" x="800" y="448">event_title_trgm_idx</text>
+
+      <path class="edge" d="M196,122 C228,122 230,140 260,140" marker-end="url(#ar)"/>
+      <path class="edge" d="M196,206 C228,206 230,162 260,162" marker-end="url(#ar)"/>
+      <text class="lbl" x="200" y="262">REST /api/v1</text><text class="lbl" x="200" y="276">public</text>
+      <path class="edge" d="M367,180 L367,230" marker-end="url(#ar)"/>
+      <path class="edge" d="M367,288 L367,340" marker-end="url(#ar)"/>
+      <path class="edge" d="M472,384 L532,384" marker-end="url(#ar)"/>
+      <path class="edge" d="M472,356 L500,356 L500,85 L532,85" marker-end="url(#ar)"/>
+      <text class="lbl" x="482" y="140">get/put</text><text class="lbl" x="482" y="154">lỗi → bỏ qua</text>
+      <path class="edge" d="M724,384 L784,384" marker-end="url(#ar)"/>
+      <text class="lbl" x="738" y="376">SQL</text>
+      <path class="edge evt" d="M866,114 L866,150 L640,150 L640,186" marker-end="url(#ae)"/>
+      <text class="lbl" x="676" y="143">CatalogChanged(eventId)</text>
+      <path class="edge evt" d="M600,188 L600,116" marker-end="url(#ae)"/>
+      <text class="lbl" x="560" y="172">evict</text>
+    </svg>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></i>Class của module search</span>
+      <span><i class="sw" style="background:var(--bg);border-color:var(--line);border-style:dashed"></i>Bên ngoài module</span>
+      <span><i class="sw" style="background:var(--warn-soft);border-color:var(--warn)"></i>Cache</span>
+      <span><i class="sw" style="background:transparent;border-color:var(--warn);border-style:dashed"></i>Event sau commit</span>
+    </div>
+  </div>
+  <div class="two">
+    <div class="panel tree"><span class="d">vingo/search/</span>
+├── SearchService.java, EventSearchCriteria.java
+├── *Result.java, Page.java
+├── <span class="d">web/</span>      SearchController <span class="n"># implements SearchApi</span>
+│           SearchApiMapper, CursorCodec
+└── <span class="d">internal/</span> PgSearchService
+            EventSearchRepository, SeatmapRepository
+            AvailabilityRepository, SearchQueryNormalizer
+            SearchCacheConfig, CatalogChangedListener</div>
+    <div class="decisions" style="grid-template-columns:1fr">
+      <div class="panel"><h3>Chỉ JdbcClient</h3><p class="sub">Mọi truy vấn join bảng của module khác; entity JPA thuộc catalog.</p></div>
+      <div class="panel"><h3>Giờ lấy từ Clock</h3><p class="sub">Truyền <code>:now</code> vào SQL, không dùng <code>now()</code> của Postgres trong query search.</p></div>
+      <div class="panel"><h3>Phụ thuộc</h3><p class="sub">Chỉ gọi gốc <code>catalog</code> (<code>ShowtimeStatus</code>, <code>CatalogChanged</code>). Booking gọi <code>SearchService.suggestSeats</code>.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="sec-head"><div class="eyebrow">Quy tắc đọc</div><h2>Trạng thái tính khi đọc, không lưu</h2>
+    <p class="sub">Sự kiện hiện ra khi <code>PUBLISHED</code> và còn ít nhất một suất <code>SCHEDULED</code> chưa diễn; DRAFT, CANCELLED trả 404. Trạng thái suất dùng chung <code>catalog.ShowtimeStatus</code>. Kéo thanh trượt để thử.</p></div>
+  <div class="panel lab">
+    <div class="timeline">
+      <div class="bar" id="bar">
+        <div class="seg-sch" id="seg-sch">SCHEDULED</div>
+        <div class="seg-on" id="seg-on">ON_SALE</div>
+        <div class="seg-cl" id="seg-cl">SALES_CLOSED</div>
+        <div class="seg-fin" id="seg-fin">FINISHED</div>
+      </div>
+      <div class="cursor" id="cursor"></div>
+      <div class="ticks" id="ticks"></div>
+    </div>
+    <div class="controls">
+      <label for="now">now <input type="range" id="now" min="0" max="1000" value="380"></label>
+      <label for="cancel"><input type="checkbox" id="cancel"> Admin huỷ suất (CANCELLED)</label>
+    </div>
+    <div class="readout">
+      <span class="mono" id="nowtxt"></span>
+      <span>→ API trả</span>
+      <span class="big" id="status"></span>
+      <span class="sub" id="why"></span>
+    </div>
+  </div>
+
+  <div class="panel lab">
+    <div style="display:grid;gap:4px">
+      <h3>Implicit Status của ghế</h3>
+      <p class="sub">Ghế HELD quá <code>held_until</code> được trả là AVAILABLE dù DB chưa đổi; job <code>expire_holds</code> dọn sau. Đơn A giữ lúc 20:00, đơn B giữ lúc 20:06, mỗi đơn giữ 10 phút.</p>
+    </div>
+    <div class="controls"><label for="seatnow">now <input type="range" id="seatnow" min="0" max="20" value="8"></label><span class="mono" id="seatnowtxt"></span></div>
+    <div class="seatrow"><div class="rowlbl">Trong DB</div><div id="dbrow"></div></div>
+    <div class="seatrow"><div class="rowlbl">API trả về</div><div id="apirow"></div></div>
+    <div class="legend" style="padding:0">
+      <span><i class="sw" style="background:var(--good-soft);border-color:var(--good)"></i>AVAILABLE</span>
+      <span><i class="sw" style="background:var(--warn-soft);border-color:var(--warn)"></i>HELD</span>
+      <span><i class="sw" style="background:var(--sold-soft);border-color:var(--sold)"></i>SOLD</span>
+      <span><i class="sw" style="background:var(--line);border-color:var(--line)"></i>BLOCKED</span>
+      <span><i class="sw" style="background:var(--surface);border-color:var(--accent);border-width:2px"></i>Khác DB</span>
+    </div>
+  </div>
+  <div class="note info">Ghế không có dòng <code>showtime_seat</code> → <code>BLOCKED</code> + log WARN. Khu đứng: <code>seats_left = capacity − sold − held</code>, có thể thấp hơn thực tế vài giây tới khi <code>expire_holds</code> chạy.</div>
+</section>
+
+<section id="search">
+  <div class="sec-head"><div class="eyebrow">Tìm kiếm</div><h2>GET /events</h2></div>
+  <div class="two">
+    <div class="panel" style="padding:18px 20px">
+      <ol class="steps">
+        <li><div><b>Validate</b><span class="sub">limit 1..100, from ≤ to, price_min ≤ price_max, cursor khớp bộ lọc.</span><span class="err">Sai → 400 VALIDATION_ERROR</span></div></li>
+        <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → <code>son:* &amp; tung:*</code>.</span></div></li>
+        <li><div><b>Khớp</b><span class="sub">FTS <code>@@</code> (từ gõ dở) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Card</b><span class="sub">venue, city, first_starts_at lấy từ suất sớm nhất <b>thoả bộ lọc</b>; price_from chỉ tính hạng đã gán khu qua zone_price.</span></div></li>
+        <li><div><b>Keyset</b><span class="sub"><code>(sort_key, id)</code>, lấy limit + 1 dòng để biết có next_cursor.</span></div></li>
+      </ol>
+    </div>
+    <div style="display:grid;gap:12px;align-content:start;min-width:0">
+      <div class="panel scroll-x">
+        <table>
+          <thead><tr><th>sort</th><th>Khoá</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">relevance</td><td>greatest(ts_rank, word_similarity). Mặc định khi có q; không có q → 400</td></tr>
+            <tr><td class="mono">starts_at</td><td>first_starts_at. Mặc định khi không có q</td></tr>
+            <tr><td class="mono">price</td><td>price_from</td></tr>
+            <tr><td class="mono">popularity</td><td>Tổng vé SOLD của các suất sắp tới</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">Ghép WHERE động, không viết <code>:x IS NULL OR …</code>. Biểu thức phải giống hệt lúc tạo index, kiểm bằng <code>EXPLAIN</code>.</div>
+      <div class="note info"><b>Thành phố:</b> <code>city</code> là enum <code>CityCode</code> (HCM, HN, DN…). Backend không tự đổi "Sài Gòn" → HCM: web chọn dropdown, agent tự map nhờ description của enum.</div>
+    </div>
+  </div>
+</section>
+
+<section id="seatmap">
+  <div class="sec-head"><div class="eyebrow">Seatmap</div><h2>Seatmap, availability, gợi ý ghế</h2></div>
+  <div class="decisions">
+    <div class="panel"><h3>Seatmap</h3><p class="sub">Ghép layout tĩnh (zone, seat, ghế đôi, hạng giá) với trạng thái động. <code>zone_id</code> không thuộc suất → 404. Agent gọi availability trước rồi seatmap theo khu.</p></div>
+    <div class="panel"><h3>Availability</h3><p class="sub">Một câu <code>GROUP BY zone</code>. <code>sold_out</code> khi mọi khu bằng 0.</p></div>
+    <div class="panel"><h3>suggestSeats</h3><p class="sub">Ghế trống, ưu tiên cùng hàng liền nhau. Booking gọi sau khi giữ ghế rollback (SEAT_TAKEN), đọc thẳng DB.</p></div>
+  </div>
+</section>
+
+<section id="cache">
+  <div class="sec-head"><div class="eyebrow">Cache</div><h2>Redis chỉ cache đọc; sập thì đọc DB</h2></div>
+  <div class="cache-grid">
+    <div class="panel"><span class="eyebrow">Event, suất</span><div class="ttl">10 phút</div><p class="sub">Lưu mốc giờ thô, status tính lại mỗi lần đọc.</p></div>
+    <div class="panel"><span class="eyebrow">Layout seatmap</span><div class="ttl">10 phút</div><p class="sub">Xoá cùng lúc với event.</p></div>
+    <div class="panel"><span class="eyebrow">Ghế, availability</span><div class="ttl">3 giây</div><p class="sub"><code>@Cacheable(sync = true)</code> chống dồn request lúc mở bán.</p></div>
+    <div class="panel"><span class="eyebrow">/events?q=</span><div class="ttl">—</div><p class="sub">Không cache.</p></div>
+  </div>
+  <div class="panel diagram scroll-x"><svg viewBox="0 0 900 400" role="img" aria-label="Trình tự xoá cache khi admin sửa sự kiện">
+      <defs>
+        <marker id="sq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="sqe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow evt" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="box ext" x="20" y="14" width="130" height="40" rx="7"/><text class="t" x="85" y="39" text-anchor="middle">Admin</text>
+      <rect class="box ext" x="205" y="14" width="160" height="40" rx="7"/><text class="t" x="285" y="39" text-anchor="middle">catalog</text>
+      <rect class="box db" x="420" y="14" width="130" height="40" rx="7"/><text class="t" x="485" y="39" text-anchor="middle">PostgreSQL</text>
+      <rect class="box own" x="605" y="14" width="140" height="40" rx="7"/><text class="t" x="675" y="39" text-anchor="middle">search</text>
+      <rect class="box cache" x="790" y="14" width="96" height="40" rx="7"/><text class="t" x="838" y="39" text-anchor="middle">Redis</text>
+      <path class="edge" d="M85,54 V390 M285,54 V390 M485,54 V390 M675,54 V390 M838,54 V390" style="stroke:var(--line)"/>
+      <rect x="275" y="92" width="20" height="132" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+      <text class="grplbl" x="300" y="106">@Transactional</text>
+
+      <path class="edge" d="M85,92 H273" marker-end="url(#sq)"/><text class="lbl" x="95" y="86">PATCH /admin/events/{id}</text>
+      <path class="edge" d="M297,124 H483" marker-end="url(#sq)"/><text class="lbl" x="310" y="118">UPDATE event, price_tier…</text>
+      <path class="edge" d="M297,158 C330,158 330,176 297,176" marker-end="url(#sq)"/><text class="lbl" x="336" y="166">publishEvent(CatalogChanged)</text>
+      <text class="s" x="336" y="182">Spring giữ lại, chưa giao</text>
+      <path class="edge" d="M297,214 H483" marker-end="url(#sq)"/><text class="lbl" x="350" y="208">COMMIT</text>
+
+      <path class="edge evt" d="M297,250 H673" marker-end="url(#sqe)"/><text class="lbl" x="420" y="244">CatalogChanged(eventId, showtimeIds)</text>
+      <text class="s" x="440" y="266">chỉ khi commit thành công</text>
+      <path class="edge evt" d="M677,284 H836" marker-end="url(#sqe)"/><text class="lbl" x="690" y="278">DEL event:{id}…</text>
+
+      <path class="edge" d="M20,330 H0" style="stroke:none"/>
+      <text class="lbl" x="560" y="318">request đọc tiếp theo</text>
+      <path class="edge" d="M675,326 H836" marker-end="url(#sq)"/><text class="lbl" x="745" y="320">miss</text>
+      <path class="edge" d="M673,352 H487" marker-end="url(#sq)"/><text class="lbl" x="530" y="346">SELECT mới</text>
+      <path class="edge" d="M677,378 H836" marker-end="url(#sq)"/><text class="lbl" x="700" y="372">SET, TTL 10 phút</text>
+    </svg></div>
+  <div class="two">
+    <div class="note"><b>Phải xoá sau commit.</b> Xoá trước commit thì request đọc chen vào sẽ ghi lại dữ liệu cũ vào cache. Rollback thì không có event, không xoá oan.</div>
+    <div class="note info"><b>TTL là lưới an toàn</b> khi mất event (app sập sau commit, Redis sập lúc xoá). Không thêm cache trong bộ nhớ: 2 instance api dùng chung Redis. Rate limit theo IP cho cả 5 endpoint, bộ đếm Redis.</div>
+  </div>
+</section>
+
+
+<section id="roadmap">
+  <div class="sec-head"><div class="eyebrow">Lộ trình</div><h2>5 PR</h2>
+    <p class="sub">Mỗi PR: <code>./mvnw verify</code> và <code>ModularityTest</code> xanh, gọi thử trên Swagger staging.</p></div>
+  <div class="panel prs">
+    <div class="pr"><div class="prtag">PR 0<span class="chip warn">contract</span></div><div class="prbody"><p class="sub">404 cho showtimes, availability · 400 cho /events · 429 cho cả 5 · <code>relevance</code> · <code>zone_id</code> · <code>CityCode</code> + <code>city_name</code> · description kèm ví dụ lỗi. Cần người khác duyệt.</p></div></div>
+    <div class="pr"><div class="prtag">Fixture</div><div class="prbody"><p class="sub"><code>CatalogFixtures</code> dựng venue → showtime_seat bằng JdbcClient.</p></div></div>
+    <div class="pr"><div class="prtag">PR 1<span class="chip">search</span></div><div class="prbody"><p class="sub">Không dấu · gõ sai · một đoạn tiêu đề · loại DRAFT và sự kiện đã qua · bộ lọc · card đúng thành phố · price_from · relevance mặc định · phân trang không trùng · 400 cursor, limit.</p></div></div>
+    <div class="pr"><div class="prtag">PR 2<span class="chip">detail</span></div><div class="prbody"><p class="sub">ShowtimeStatus ở từng mốc giờ · 404 DRAFT · 404 event không có.</p></div></div>
+    <div class="pr"><div class="prtag">PR 3<span class="chip">seatmap</span></div><div class="prbody"><p class="sub">HELD quá hạn → AVAILABLE · ghế đôi, khu đứng · sold_out · zone_id, 404 zone lạ · thiếu dòng → BLOCKED · gợi ý ghế liền nhau · EXPLAIN với 10k sự kiện, 40k ghế.</p></div></div>
+    <div class="pr"><div class="prtag">PR 4<span class="chip">cache</span></div><div class="prbody"><p class="sub">Redis sập vẫn trả · thấy thay đổi sau commit · hết TTL · nhiều miss đọc DB một lần · 429.</p></div></div>
+  </div>
+</section>
+
+<footer>Nguồn: contracts/vingo-openapi.yaml, docs/architecture.html, migration V20261110_*. Sửa tài liệu này qua PR như code.</footer>
+
+</div>
+</main>
+
+<script>
+(function () {
+  // Showtime timeline: mốc theo phút kể từ 01/12 00:00 UTC
+  const D = 24 * 60;
+  const m = { start: 0, open: 1 * D + 10 * 60, close: 19 * D + 18 * 60, starts: 19 * D + 19 * 60 + 30, ends: 19 * D + 22 * 60, end: 21 * D };
+  const total = m.end - m.start;
+  const pct = x => (x - m.start) / total * 100;
+  // Thanh hiển thị không theo tỉ lệ thời gian thật để đoạn ngắn vẫn đọc được
+  const vis = [[m.start, m.open, 18], [m.open, m.close, 46], [m.close, m.ends, 18], [m.ends, m.end, 18]];
+  ['seg-sch', 'seg-on', 'seg-cl', 'seg-fin'].forEach((id, i) => document.getElementById(id).style.flex = '0 0 ' + vis[i][2] + '%');
+  function toVis(t) {
+    let acc = 0;
+    for (const [a, b, w] of vis) { if (t <= b) return acc + (t - a) / (b - a) * w; acc += w; }
+    return 100;
+  }
+  function fromSlider(v) {
+    const p = v / 10; let acc = 0;
+    for (const [a, b, w] of vis) { if (p <= acc + w) return a + (p - acc) / w * (b - a); acc += w; }
+    return m.end;
+  }
+  const fmt = t => {
+    const d = new Date(Date.UTC(2026, 11, 1) + t * 60000);
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getUTCDate()) + '/' + p(d.getUTCMonth() + 1) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes());
+  };
+  const ticks = document.getElementById('ticks');
+  [['', m.start], ['sale_opens_at', m.open], ['sale_closes_at', m.close], ['ends_at', m.ends], ['', m.end]].forEach(([name, t]) => {
+    const s = document.createElement('span');
+    s.style.left = toVis(t) + '%';
+    s.innerHTML = (name ? name + '<br>' : '<br>') + fmt(t);
+    ticks.appendChild(s);
+  });
+  const slider = document.getElementById('now'), cancel = document.getElementById('cancel');
+  const cls = { SCHEDULED: 'seg-sch', ON_SALE: 'seg-on', SALES_CLOSED: 'seg-cl', FINISHED: 'seg-fin', CANCELLED: 'chip bad' };
+  function render() {
+    const t = fromSlider(+slider.value);
+    document.getElementById('cursor').style.left = 'calc(' + (slider.value / 10) + '% - 1px)';
+    let st, why;
+    if (cancel.checked) { st = 'CANCELLED'; why = 'status lưu trong DB là CANCELLED, bỏ qua mốc giờ'; }
+    else if (t < m.open) { st = 'SCHEDULED'; why = 'now < sale_opens_at'; }
+    else if (t < m.close) { st = 'ON_SALE'; why = 'sale_opens_at ≤ now < sale_closes_at'; }
+    else if (t < m.ends) { st = 'SALES_CLOSED'; why = 'sale_closes_at ≤ now < ends_at'; }
+    else { st = 'FINISHED'; why = 'now ≥ ends_at'; }
+    document.getElementById('bar').classList.toggle('cancelled', cancel.checked);
+    document.getElementById('nowtxt').textContent = 'now = ' + fmt(Math.round(t)) + ' UTC';
+    const s = document.getElementById('status');
+    s.textContent = st; s.className = 'big ' + cls[st];
+    document.getElementById('why').textContent = why;
+  }
+  slider.addEventListener('input', render); cancel.addEventListener('change', render); render();
+
+  // Seat demo: phút kể từ 20:00
+  const seats = [
+    { l: 'A1', s: 'SOLD' }, { l: 'A2', s: 'SOLD' },
+    { l: 'A3', s: 'HELD', u: 10, o: 'A' }, { l: 'A4', s: 'HELD', u: 10, o: 'A' },
+    { l: 'A5', s: 'AVAILABLE' }, { l: 'A6', s: 'BLOCKED' },
+    { l: 'A7', s: 'HELD', u: 16, o: 'B', from: 6 }, { l: 'A8', s: 'AVAILABLE' }
+  ];
+  const sn = document.getElementById('seatnow');
+  const hm = n => '20:' + String(n).padStart(2, '0');
+  function seatRender() {
+    const now = +sn.value;
+    document.getElementById('seatnowtxt').textContent = 'now = ' + hm(now) + ' · expire_holds chưa chạy';
+    const db = document.getElementById('dbrow'), api = document.getElementById('apirow');
+    db.innerHTML = ''; api.innerHTML = '';
+    seats.forEach(x => {
+      const dbs = (x.s === 'HELD' && x.from && now < x.from) ? 'AVAILABLE' : x.s;
+      const apis = (dbs === 'HELD' && x.u <= now) ? 'AVAILABLE' : dbs;
+      const sub = dbs === 'HELD' ? 'tới ' + hm(x.u) : dbs === 'SOLD' ? 'đã bán' : dbs === 'BLOCKED' ? 'khoá' : 'trống';
+      const a = document.createElement('div'); a.className = 'seat ' + dbs; a.innerHTML = x.l + '<br>' + sub; a.title = x.l + ': ' + dbs;
+      const b = document.createElement('div'); b.className = 'seat ' + apis + (apis !== dbs ? ' flip' : ''); b.innerHTML = x.l + '<br>' + (apis === 'AVAILABLE' ? 'trống' : apis === 'HELD' ? 'đang giữ' : sub); b.title = x.l + ': ' + apis;
+      db.appendChild(a); api.appendChild(b);
+    });
+  }
+  sn.addEventListener('input', seatRender); seatRender();
+
+})();
+</script>
+</body>
+</html>

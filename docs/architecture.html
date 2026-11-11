@@ -177,9 +177,9 @@
         <div class="vs">Agent không có tool đổi trạng thái thanh toán. Thao tác ghi cần xác nhận trừ khi người dùng bật <code>auto_confirm</code>.</div></div>
       <div class="card decision"><div class="card-head"><h3>Không hoàn tiền, không đổi ghế</h3><span class="tag ok">Đã chốt</span></div>
         <p>Vé đã bán không hoàn, không đổi. Muốn đổi ghế thì huỷ đơn PENDING rồi giữ lại. Ngoại lệ duy nhất: đơn <code>NEEDS_REVIEW</code> không xuất vé được thì admin hoàn thủ công trên cổng VNPay rồi đánh dấu <code>REFUNDED</code>.</p></div>
-      <div class="card decision"><div class="card-head"><h3>Tìm kiếm sự kiện</h3><span class="tag open">Câu hỏi mở</span></div>
-        <p>Đề xuất: <b>PostgreSQL full-text</b> (<code>tsvector</code> + <code>unaccent</code> + <code>pg_trgm</code>) sau interface <code>SearchService</code>. Phương án khác: Elasticsearch đồng bộ qua outbox.</p>
-        <div class="vs">Elasticsearch đáng dùng khi có hàng trăm nghìn sự kiện hoặc cần autocomplete, facet phức tạp.</div></div>
+      <div class="card decision"><div class="card-head"><h3>Tìm kiếm sự kiện</h3><span class="tag ok">Đã chốt</span></div>
+        <p><b>PostgreSQL full-text</b> (<code>tsvector</code> + <code>unaccent</code> + <code>pg_trgm</code>, so khớp bằng <code>word_similarity</code>) sau interface <code>SearchService</code>. Search là read model, đọc bảng catalog và booking bằng SQL chỉ đọc. Thiết kế chi tiết: <a href="search.html">search.html</a>.</p>
+        <div class="vs">Elasticsearch (đồng bộ qua outbox) chỉ xét lại khi có hàng trăm nghìn sự kiện hoặc cần autocomplete, facet phức tạp.</div></div>
     </div>
 
     <h3 style="margin-top:8px">Chống bán trùng: 4 lớp</h3>
@@ -321,7 +321,6 @@
         <tr><td>Trần chi phí LLM / hội thoại</td><td><span class="tag open">TBD</span></td></tr>
         <tr><td>Số bước agent tối đa</td><td>8</td></tr></tbody></table></div>
       <div class="card"><h3>Câu hỏi mở</h3><ul style="margin:0;padding-left:18px;display:grid;gap:4px">
-        <li>Search: PostgreSQL full-text hay Elasticsearch?</li>
         <li><code>order_item.quantity = n</code> (khu đứng) đang mâu thuẫn với <code>ticket.order_item_id</code> UNIQUE: đổi quan hệ thành 1—n, hay tách n dòng?</li>
         <li>Các giá trị NFR đang TBD.</li></ul></div>
     </div>

@@ -2,6 +2,7 @@
 
 File này là quy tắc bắt buộc khi viết code trong repo. Đọc hết trước khi sửa bất kỳ file nào.
 Thiết kế hệ thống: đọc `docs/architecture.html` (C4, ERD, sequence 5a–5e, state machine, bảng mã lỗi, sự kiện SSE). Bản online mới nhất: https://claude.ai/artifact/5RTS81Ssp79nLF9DxVCUwj. Khi code và tài liệu mâu thuẫn, hỏi lại, không tự đoán.
+Thiết kế chi tiết theo module: `docs/search.html` (search).
 
 ## 1. Dự án
 
