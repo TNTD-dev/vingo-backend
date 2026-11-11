@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import vingo.search.EventSearchCriteria;
 import vingo.search.EventSummaryResult;
+import vingo.search.MatchMode;
 import vingo.search.Page;
 import vingo.search.SearchService;
 import vingo.search.internal.SearchQueryNormalizer.NormalizedQuery;
@@ -40,9 +41,17 @@ class PgSearchService implements SearchService {
             }
             query = normalized.get();
         }
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        // Trang sau dùng đúng chế độ ghi trong cursor; trang đầu bắt đầu bằng khớp chặt.
+        MatchMode mode = criteria.after() == null ? MatchMode.STRICT : criteria.after().matchMode();
         // Lấy dư một dòng để biết còn trang sau.
-        List<EventSummaryResult> rows = events.search(criteria, query, OffsetDateTime.now(clock), criteria.limit() + 1);
+        List<EventSummaryResult> rows = events.search(criteria, query, mode, now, criteria.limit() + 1);
+        // Khớp chặt không ra gì ở trang đầu thì nới sang khớp lỏng (từ thừa như "concert", "vé").
+        if (rows.isEmpty() && criteria.after() == null && query != null && query.canLoosen()) {
+            mode = MatchMode.LOOSE;
+            rows = events.search(criteria, query, mode, now, criteria.limit() + 1);
+        }
         boolean hasMore = rows.size() > criteria.limit();
-        return new Page<>(hasMore ? rows.subList(0, criteria.limit()) : rows, hasMore);
+        return new Page<>(hasMore ? rows.subList(0, criteria.limit()) : rows, hasMore, mode);
     }
 }

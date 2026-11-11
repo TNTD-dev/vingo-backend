@@ -52,7 +52,7 @@ class SearchController implements SearchApi {
             if (!cursors.matches(payload, criteria.sort().value(), criteria.filterSignature())) {
                 throw new InvalidSearchRequestException("cursor", "cursor không khớp bộ lọc hoặc sort hiện tại");
             }
-            criteria = criteria.withAfter(new After(payload.k(), payload.i()));
+            criteria = criteria.withAfter(new After(payload.k(), payload.i(), payload.matchMode()));
         }
 
         Page<EventSummaryResult> page = searchService.searchEvents(criteria);
@@ -60,7 +60,8 @@ class SearchController implements SearchApi {
         String nextCursor = null;
         if (page.hasMore()) {
             EventSummaryResult last = page.items().getLast();
-            nextCursor = cursors.encode(criteria.sort().value(), last.sortKey(), last.id(), criteria.filterSignature());
+            nextCursor = cursors.encode(
+                    criteria.sort().value(), last.sortKey(), last.id(), criteria.filterSignature(), page.matchMode());
         }
         return ResponseEntity.ok(new SearchEvents200Response()
                 .data(page.items().stream().map(mapper::toEventSummary).toList())

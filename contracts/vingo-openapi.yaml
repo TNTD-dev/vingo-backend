@@ -385,7 +385,7 @@ paths:
       description: |
         Gọi khi người dùng muốn tìm sự kiện theo từ khoá, loại, thành phố, khoảng thời gian hoặc khoảng giá. Trả danh sách `EventSummary` phân trang bằng cursor.
 
-        Phạm vi kết quả: chỉ sự kiện PUBLISHED còn ít nhất một suất SCHEDULED chưa diễn ra. Tìm theo `q` chịu được gõ không dấu và gõ sai chính tả.
+        Phạm vi kết quả: chỉ sự kiện PUBLISHED còn ít nhất một suất SCHEDULED chưa diễn ra. Tìm theo `q` chịu được gõ không dấu và gõ sai chính tả. Nếu không sự kiện nào khớp đủ mọi từ trong `q`, trả các sự kiện khớp một phần, xếp theo độ khớp.
         `venue_name`, `city`, `first_starts_at` lấy từ suất sớm nhất thoả bộ lọc. `price_from` là giá thấp nhất trong các hạng vé đã gán khu.
 
         Sắp xếp (`sort`): không truyền thì có `q` dùng `relevance`, không có `q` dùng `starts_at`. `relevance` mà không có `q` trả 400.
@@ -407,7 +407,10 @@ paths:
         ```
       security: []
       parameters:
-        - { name: q, in: query, schema: { type: string } }
+        - name: q
+          in: query
+          description: "Tên sự kiện, nghệ sĩ hoặc đội. Không đưa loại sự kiện (dùng `category`), thành phố (dùng `city`) hay thời gian (dùng `from`/`to`) vào đây. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`."
+          schema: { type: string }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
         - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }

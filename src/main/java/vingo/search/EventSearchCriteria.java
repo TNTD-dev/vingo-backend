@@ -12,7 +12,7 @@ import java.util.UUID;
  * @param from     suất bắt đầu từ mốc này
  * @param to       suất bắt đầu tới mốc này
  * @param sort     null thì có {@code q} dùng RELEVANCE, không có thì dùng STARTS_AT
- * @param after    dòng cuối của trang trước (keyset), null là trang đầu
+ * @param after    dòng cuối của trang trước (keyset) kèm chế độ khớp, null là trang đầu
  */
 public record EventSearchCriteria(
         String q,
@@ -58,8 +58,19 @@ public record EventSearchCriteria(
         }
     }
 
-    /** Khoá sắp xếp (dạng chuỗi) và id của dòng cuối trang trước. */
-    public record After(String key, UUID id) {
+    /**
+     * Khoá sắp xếp (dạng chuỗi), id của dòng cuối trang trước và chế độ khớp đã dùng ở trang đó
+     * (trang sau phải dùng lại đúng chế độ, không tự nới).
+     */
+    public record After(String key, UUID id, MatchMode matchMode) {
+
+        public After {
+            matchMode = matchMode == null ? MatchMode.STRICT : matchMode;
+        }
+
+        public After(String key, UUID id) {
+            this(key, id, MatchMode.STRICT);
+        }
     }
 
     public EventSearchCriteria {

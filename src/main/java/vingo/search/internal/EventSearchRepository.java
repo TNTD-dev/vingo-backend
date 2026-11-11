@@ -12,6 +12,7 @@ import vingo.search.EventSearchCriteria;
 import vingo.search.EventSearchCriteria.Sort;
 import vingo.search.EventSummaryResult;
 import vingo.search.InvalidSearchRequestException;
+import vingo.search.MatchMode;
 import vingo.search.internal.SearchQueryNormalizer.NormalizedQuery;
 
 /**
@@ -40,8 +41,12 @@ class EventSearchRepository {
         this.jdbc = jdbc;
     }
 
-    /** Lấy tối đa {@code fetchSize} dòng của trang kế tiếp. */
-    List<EventSummaryResult> search(EventSearchCriteria c, NormalizedQuery q, OffsetDateTime now, int fetchSize) {
+    /**
+     * Lấy tối đa {@code fetchSize} dòng của trang kế tiếp. {@code mode} chọn tsquery chặt hoặc lỏng; trigram giữ
+     * nguyên ở cả hai chế độ.
+     */
+    List<EventSummaryResult> search(EventSearchCriteria c, NormalizedQuery q, MatchMode mode, OffsetDateTime now,
+            int fetchSize) {
         Map<String, Object> params = new HashMap<>();
         params.put("now", now);
         params.put("fetch_size", fetchSize);
@@ -68,7 +73,7 @@ class EventSearchRepository {
         }
         if (q != null) {
             where.append(" AND (").append(FTS_MATCH).append(" OR ").append(TRGM_MATCH).append(')');
-            params.put("ts_query", q.tsQuery());
+            params.put("ts_query", q.tsQuery(mode));
             params.put("q_norm", q.text());
         }
         if (c.priceMin() != null || c.priceMax() != null) {
