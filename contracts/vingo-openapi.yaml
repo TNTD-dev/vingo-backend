@@ -137,35 +137,34 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
   /auth/google:
-    post:
-      operationId: loginWithGoogle
+    get:
+      operationId: startGoogleLogin
       tags: [Auth]
-      summary: Đăng nhập bằng Google id_token (tạo user ACTIVE nếu chưa có)
+      summary: Bắt đầu đăng nhập Google
+      description: Mở đường dẫn bằng trình duyệt để chuyển tới Google. Google sẽ gọi callback đã đăng ký.
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [id_token]
-              properties:
-                id_token: { type: string }
       responses:
-        '200':
-          description: Thành công
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '302': { description: Chuyển hướng tới Google }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /auth/oauth2/callback/google:
+    get:
+      operationId: completeGoogleLogin
+      tags: [Auth]
+      summary: Nhận callback từ Google
+      description: Spring Security xử lý callback. Thành công đặt cookie refresh HttpOnly và chuyển về web với google_login=created hoặc google_login=success. Thất bại chuyển về web với google_login=failed hoặc google_login=email_taken.
+      security: []
+      responses:
+        '302': { description: Chuyển hướng về web }
+        '404': { $ref: '#/components/responses/NotFound' }
   /auth/refresh:
     post:
       operationId: refreshToken
       tags: [Auth]
       summary: Đổi refresh token lấy cặp token mới (token cũ bị thu hồi)
+      description: Trình duyệt gửi cookie refresh và Origin của web. Client khác có thể gửi refresh_token trong JSON. Với cookie, refresh token mới chỉ được gửi qua Set-Cookie.
       security: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -178,13 +177,16 @@ paths:
           description: Thành công
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
+              schema: { $ref: '#/components/schemas/RefreshResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /auth/logout:
     post:
       operationId: logout
       tags: [Auth]
       summary: Đăng xuất phiên hiện tại hoặc tất cả thiết bị
+      description: Thu hồi refresh token của phiên trong access token, hoặc tất cả phiên của user. Xoá cookie refresh trên trình duyệt.
       requestBody:
         content:
           application/json:
@@ -194,6 +196,7 @@ paths:
                 all_devices: { type: boolean, default: false }
       responses:
         '204': { description: Đã thu hồi phiên }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /auth/password/forgot:
     post:
       operationId: forgotPassword
@@ -1528,6 +1531,14 @@ components:
         refresh_token: { type: string }
         expires_in: { type: integer, description: Giây }
         user: { $ref: '#/components/schemas/User' }
+    RefreshResult:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string, description: Chỉ có khi refresh token được gửi trong JSON }
+        expires_in: { type: integer, description: Giây }
+        user: { $ref: '#/components/schemas/User' }
     User:
       type: object
       properties:
@@ -1535,6 +1546,7 @@ components:
         email: { type: string, format: email }
         phone: { type: string }
         full_name: { type: string }
+        avatar_url: { type: string, format: uri }
         role: { type: string, enum: [BUYER, ADMIN] }
         status: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED] }
     BuyerProfile:

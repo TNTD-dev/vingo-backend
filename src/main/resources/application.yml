@@ -41,7 +41,14 @@ vingo:
     api-url: ${VNPAY_API_URL:https://sandbox.vnpayment.vn/merchant_webapi/api/transaction}
     return-url: ${VNPAY_RETURN_URL:http://localhost:5173/payment/result}
   google:
+    enabled: ${GOOGLE_LOGIN_ENABLED:false}
     client-id: ${GOOGLE_CLIENT_ID:}
+    client-secret: ${GOOGLE_CLIENT_SECRET:}
+    redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/api/v1/auth/oauth2/callback/google}
+  auth:
+    frontend-return-url: ${AUTH_FRONTEND_RETURN_URL:http://localhost:3000/auth/google}
+    secure-cookies: ${AUTH_SECURE_COOKIES:true}
+    refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:P30D}
   mail:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}
