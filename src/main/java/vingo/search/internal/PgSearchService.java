@@ -92,7 +92,7 @@ class PgSearchService implements SearchService {
     private static ShowtimeResult toShowtime(ShowtimeRow r, OffsetDateTime now) {
         ShowtimeStatus status = ShowtimeStatus.of(r.storedStatus(), r.saleOpensAt(), r.saleClosesAt(), r.endsAt(), now);
         return new ShowtimeResult(r.id(), r.eventId(), r.hallId(), r.seatLayoutId(), r.startsAt(), r.endsAt(),
-                r.saleOpensAt(), r.saleClosesAt(), status, r.soldOut());
+                r.saleOpensAt(), r.saleClosesAt(), status, r.soldOut(), r.venue());
     }
 
     private static DomainException eventNotFound() {

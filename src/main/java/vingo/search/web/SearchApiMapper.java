@@ -2,7 +2,10 @@ package vingo.search.web;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import vingo.api.model.CityCode;
@@ -24,6 +27,8 @@ import vingo.search.VenueResult;
 @Component
 class SearchApiMapper {
 
+    private static final Logger log = LoggerFactory.getLogger(SearchApiMapper.class);
+
     // TẠM: tên hiển thị thành phố map ở search, chờ catalog chốt danh sách và tên (CityCode trong yaml cũng là danh sách tạm).
     private static final Map<String, String> CITY_NAMES = Map.of(
             "HCM", "TP. Hồ Chí Minh",
@@ -39,7 +44,10 @@ class SearchApiMapper {
                 .firstStartsAt(r.firstStartsAt())
                 .onSale(r.onSale());
         if (r.posterUrl() != null) {
-            summary.posterUrl(URI.create(r.posterUrl()));
+            URI poster = parsePoster(r.posterUrl(), r.id());
+            if (poster != null) {
+                summary.posterUrl(poster);
+            }
         }
         if (r.priceFrom() != null) {
             summary.priceFrom(r.priceFrom());
@@ -65,9 +73,10 @@ class SearchApiMapper {
                 .maxTicketsPerOrder(r.maxTicketsPerOrder())
                 .priceTiers(r.priceTiers().stream().map(this::toPriceTier).toList())
                 .showtimes(r.showtimes().stream().map(this::toShowtime).toList());
-        if (r.posterUrl() != null) {
+        URI poster = r.posterUrl() == null ? null : parsePoster(r.posterUrl(), r.id());
+        if (poster != null) {
             // Catalog chỉ lưu một poster_url: dùng cho cả bản mobile và desktop.
-            detail.posterMobileUrl(URI.create(r.posterUrl())).posterDesktopUrl(URI.create(r.posterUrl()));
+            detail.posterMobileUrl(poster).posterDesktopUrl(poster);
         }
         r.venue().ifPresent(v -> detail.venue(toVenue(v)));
         return detail;
@@ -84,7 +93,18 @@ class SearchApiMapper {
                 .saleOpensAt(r.saleOpensAt())
                 .saleClosesAt(r.saleClosesAt())
                 .status(ShowtimeStatus.fromValue(r.status().name()))
-                .soldOut(r.soldOut());
+                .soldOut(r.soldOut())
+                .venue(toVenue(r.venue()));
+    }
+
+    /** Đọc URI poster; sai cú pháp thì bỏ trống poster và ghi WARN, không làm hỏng cả response. */
+    private static URI parsePoster(String url, UUID eventId) {
+        try {
+            return URI.create(url);
+        } catch (IllegalArgumentException e) {
+            log.warn("poster_url sai cú pháp, bỏ qua poster event_id={}", eventId);
+            return null;
+        }
     }
 
     private PriceTier toPriceTier(PriceTierResult r) {

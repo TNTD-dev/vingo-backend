@@ -184,6 +184,39 @@ class EventDetailTest extends IntegrationTest {
     }
 
     @Test
+    void listEventShowtimes_returnsVenuePerShowtime_forTouringEvent() {
+        var created = fixtures.event()
+                .showtime(s -> s.venue("Sân Phú Thọ").city("HCM").startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(1))
+                .showtime(s -> s.venue("Sân Mỹ Đình").city("HN").startsAt(NOW.plus(Duration.ofDays(9))).onSale().seated(1))
+                .create();
+
+        JsonNode data = get("/api/v1/events/" + created.id() + "/showtimes").path("data");
+
+        assertThat(data.get(0).path("venue").path("name").asString()).isEqualTo("Sân Phú Thọ");
+        assertThat(data.get(0).path("venue").path("city").asString()).isEqualTo("HCM");
+        assertThat(data.get(0).path("venue").path("city_name").asString()).isEqualTo("TP. Hồ Chí Minh");
+        assertThat(data.get(1).path("venue").path("name").asString()).isEqualTo("Sân Mỹ Đình");
+        assertThat(data.get(1).path("venue").path("city").asString()).isEqualTo("HN");
+        assertThat(data.get(1).path("venue").path("city_name").asString()).isEqualTo("Hà Nội");
+
+        JsonNode inDetail = get("/api/v1/events/" + created.id()).path("showtimes");
+        assertThat(inDetail.get(0).path("venue").path("name").asString()).isEqualTo("Sân Phú Thọ");
+        assertThat(inDetail.get(1).path("venue").path("name").asString()).isEqualTo("Sân Mỹ Đình");
+    }
+
+    @Test
+    void getEvent_omitsPoster_whenPosterUrlInvalid() {
+        UUID id = fixtures.event().create().id();
+        jdbc.sql("UPDATE event SET poster_url = 'http://bad url' WHERE id = :id").param("id", id).update();
+
+        JsonNode body = get("/api/v1/events/" + id);
+
+        assertThat(body.path("id").asString()).isEqualTo(id.toString());
+        assertThat(body.has("poster_mobile_url")).isFalse();
+        assertThat(body.has("poster_desktop_url")).isFalse();
+    }
+
+    @Test
     void listEventShowtimes_returns404_whenEventMissing() {
         assertNotFound("/api/v1/events/" + UUID.randomUUID() + "/showtimes");
     }
