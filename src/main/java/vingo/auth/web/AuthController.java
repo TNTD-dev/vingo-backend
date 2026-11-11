@@ -30,6 +30,7 @@ class AuthController implements AuthApi {
     private final AuthWebConfig web;
     private final HttpServletRequest request;
 
+    /** Nối contract auth với nghiệp vụ phiên và xử lý cookie của request. */
     AuthController(AuthService auth, CurrentUser currentUser, AuthCookies cookies,
                    AuthWebConfig web, HttpServletRequest request) {
         this.auth = auth;
@@ -39,16 +40,19 @@ class AuthController implements AuthApi {
         this.request = request;
     }
 
+    /** Trả 404 khi trang bắt đầu không được filter OAuth2 tiếp nhận. */
     @Override
     public ResponseEntity<Void> startGoogleLogin() {
         throw googleUnavailable();
     }
 
+    /** Trả 404 khi callback không được filter OAuth2 tiếp nhận. */
     @Override
     public ResponseEntity<Void> completeGoogleLogin() {
         throw googleUnavailable();
     }
 
+    /** Nhận refresh token qua cookie cùng Origin hợp lệ hoặc body JSON. */
     @Override
     public ResponseEntity<RefreshResult> refreshToken(RefreshTokenRequest body) {
         boolean useCookie = body == null;
@@ -78,6 +82,7 @@ class AuthController implements AuthApi {
         return response.body(result);
     }
 
+    /** Thu hồi phiên theo bearer token và xoá cookie refresh. */
     @Override
     public ResponseEntity<Void> logout(LogoutRequest body) {
         var user = currentUser.require();
@@ -92,6 +97,7 @@ class AuthController implements AuthApi {
                 .build();
     }
 
+    /** Dùng chung ProblemDetail cho các đường dẫn Google khi tính năng tắt. */
     private static DomainException googleUnavailable() {
         return new DomainException(ErrorCode.NOT_FOUND, "Đăng nhập Google chưa được bật");
     }

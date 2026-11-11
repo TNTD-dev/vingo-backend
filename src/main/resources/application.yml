@@ -45,6 +45,7 @@ vingo:
     client-id: ${GOOGLE_CLIENT_ID:}
     client-secret: ${GOOGLE_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/api/v1/auth/oauth2/callback/google}
+    rate-limit-per-minute: ${GOOGLE_LOGIN_RATE_LIMIT_PER_MINUTE:10}
   auth:
     frontend-return-url: ${AUTH_FRONTEND_RETURN_URL:http://localhost:3000/auth/google}
     secure-cookies: ${AUTH_SECURE_COOKIES:true}

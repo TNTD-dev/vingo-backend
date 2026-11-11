@@ -38,6 +38,7 @@ class GoogleLoginServiceTest {
     private final GoogleLoginService login = new GoogleLoginService(accounts,
             new AuthProperties(URI.create("http://localhost:3000/auth/google"), false, SESSION_TTL), CLOCK);
 
+    /** Email chuẩn hoá được dùng làm tên khi Google thiếu thông tin hồ sơ. */
     @Test
     void newAccount_usesNormalizedEmailAsNameWhenGoogleOmitsProfile() {
         var account = account("ACTIVE");
@@ -51,6 +52,7 @@ class GoogleLoginServiceTest {
         verify(accounts).createSession(account.id(), TokenSecrets.hash(result.refreshToken()), result.expiresAt());
     }
 
+    /** User đã khoá không được tạo phiên mới. */
     @Test
     void existingLockedAccount_cannotStartSession() {
         when(accounts.findByGoogleSubject(SUBJECT)).thenReturn(Optional.of(account("LOCKED")));
@@ -61,6 +63,7 @@ class GoogleLoginServiceTest {
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
+    /** Tạo buyer Google với trạng thái tài khoản mà test cần. */
     private static AuthUser account(String status) {
         return new AuthUser(UUID.randomUUID(), EMAIL, null, EMAIL, null, Role.BUYER, status);
     }

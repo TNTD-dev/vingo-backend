@@ -37,12 +37,14 @@ class GoogleLoginHandler {
     private final AuthProperties properties;
     private final AuthCookies cookies;
 
+    /** Nối danh tính OIDC đã xác minh với phiên Vingo và URL trả về web. */
     GoogleLoginHandler(GoogleLoginService loginService, AuthProperties properties, AuthCookies cookies) {
         this.loginService = loginService;
         this.properties = properties;
         this.cookies = cookies;
     }
 
+    /** Tạo phiên Vingo và chuyển về web với trạng thái đăng nhập tương ứng. */
     void success(HttpServletRequest request, HttpServletResponse response,
                  Authentication authentication) throws IOException {
         if (!(authentication.getPrincipal() instanceof OidcUser google)) {
@@ -51,17 +53,23 @@ class GoogleLoginHandler {
             return;
         }
 
+        String result;
         try {
             var login = loginService.login(new GoogleLoginRequest(google.getSubject(), google.getEmail(),
                     Boolean.TRUE.equals(google.getEmailVerified()), google.getFullName(), avatar(google.getPicture())));
             response.addHeader(HttpHeaders.SET_COOKIE, cookies.refresh(login.refreshToken(), login.expiresAt()).toString());
-            redirect(response, login.created() ? "created" : "success");
+            result = login.created() ? "created" : "success";
         } catch (DomainException ex) {
             log.info("Google sign-in rejected: reason={}", ex.code());
-            redirect(response, ex.code() == ErrorCode.EMAIL_TAKEN ? "email_taken" : "failed");
+            result = ex.code() == ErrorCode.EMAIL_TAKEN ? "email_taken" : "failed";
+        } catch (RuntimeException ex) {
+            log.warn("Google sign-in failed: reason=unexpected_error");
+            result = "failed";
         }
+        redirect(response, result);
     }
 
+    /** Ghi mã lỗi OAuth2 đã biết và chuyển về web với trạng thái thất bại. */
     void failure(HttpServletRequest request, HttpServletResponse response, AuthenticationException failure)
             throws IOException {
         String code = failure instanceof OAuth2AuthenticationException oauth ? oauth.getError().getErrorCode() : "";
@@ -70,6 +78,7 @@ class GoogleLoginHandler {
         redirect(response, "failed");
     }
 
+    /** Trả trạng thái qua URL frontend đã cấu hình và ngăn lưu cache. */
     private void redirect(HttpServletResponse response, String result) throws IOException {
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         response.setHeader("Referrer-Policy", "no-referrer");
@@ -77,6 +86,7 @@ class GoogleLoginHandler {
                 .replaceQueryParam("google_login", result).build(true).toUriString());
     }
 
+    /** Chỉ nhận URL HTTPS hợp lệ từ claim picture. */
     private static URI avatar(String picture) {
         if (picture == null || picture.length() > 2048) {
             return null;

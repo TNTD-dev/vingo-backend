@@ -18,12 +18,17 @@ Vingo dùng **OAuth 2.0 Authorization Code + OpenID Connect (OIDC)**. Google xá
 sequenceDiagram
     actor Browser as Người dùng và trình duyệt
     participant OAuth as Spring Security và GoogleLoginHandler
+    participant Redis as Redis
     participant Google as Google
     participant Login as GoogleLoginService
     participant DB as PostgreSQL
     participant API as AuthController và AuthService
 
     Browser->>OAuth: GET /api/v1/auth/google
+    OAuth->>Redis: Kiểm tra giới hạn theo IP trước khi lưu state
+    break Vượt hạn mức hoặc Redis không khả dụng
+        OAuth-->>Browser: 429 với Retry-After hoặc 503
+    end
     OAuth->>DB: Lưu yêu cầu OAuth2 và hash của cookie tạm, TTL 10 phút
     OAuth-->>Browser: 302 tới Google, đặt cookie tạm thời
     Browser->>Google: Đăng nhập và đồng ý chia sẻ thông tin cơ bản
@@ -63,6 +68,7 @@ Google trả người dùng về **callback của backend** trên cổng `8080`.
 | Thành phần | Trách nhiệm |
 |---|---|
 | [`GoogleOAuth2SecurityConfig`](../src/main/java/vingo/auth/web/oauth2/GoogleOAuth2SecurityConfig.java) | Đăng ký Google client, bật PKCE, cấu hình hai đường dẫn OAuth2 và gắn success/failure handler. Filter chain này chỉ áp dụng cho trang bắt đầu và callback. |
+| [`GoogleLoginStartFilter`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginStartFilter.java) và [`GoogleLoginRateLimiter`](../src/main/java/vingo/auth/internal/GoogleLoginRateLimiter.java) | Giới hạn request bắt đầu theo IP bằng Redis trước khi Spring dọn hoặc lưu state trong PostgreSQL. |
 | [`GoogleAuthorizationRequests`](../src/main/java/vingo/auth/web/oauth2/GoogleAuthorizationRequests.java) | Nối Spring Security với kho yêu cầu OAuth2. Tạo cookie tạm, chuyển yêu cầu OAuth2 thành dữ liệu lưu trữ và khôi phục yêu cầu khi callback quay về. |
 | [`GoogleLoginHandler`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginHandler.java) | Đọc claim từ `OidcUser` đã xác thực, gọi use case, đặt cookie refresh và redirect. |
 | [`GoogleLoginService`](../src/main/java/vingo/auth/application/GoogleLoginService.java) | Kiểm tra điều kiện tài khoản, tìm hoặc tạo user, tạo session trong một transaction. |
@@ -81,6 +87,7 @@ Frontend điều hướng trình duyệt đến endpoint bắt đầu. Backend d
 - **PKCE S256** gắn authorization code với code verifier mà backend giữ. Google kiểm tra verifier khi đổi code.
 - **OIDC nonce** gắn ID token với yêu cầu đăng nhập ban đầu. Spring kiểm tra nonce trong quá trình xác thực.
 - **PostgreSQL cho trạng thái OAuth2** cho phép một replica bắt đầu luồng và replica khác nhận callback. Bảng có TTL 10 phút. Callback hợp lệ lấy và xóa bản ghi bằng một câu SQL `DELETE … RETURNING`. Yêu cầu hết hạn bị bỏ qua khi đọc và được dọn khi lưu yêu cầu mới.
+- **Giới hạn bắt đầu đăng nhập** mặc định là 10 lượt/IP trong 60 giây, điều chỉnh bằng `GOOGLE_LOGIN_RATE_LIMIT_PER_MINUTE`. Vượt hạn mức trả `429` kèm `Retry-After`. Nếu Redis không khả dụng, trang bắt đầu trả `503` để tránh tạo state khi bộ giới hạn ngừng hoạt động. Callback của lượt đã bắt đầu vẫn được xử lý. Ở deploy Compose, Tomcat lấy IP qua Caddy và các replica dùng chung Redis.
 
 ### Dùng Google `sub` để nhận diện tài khoản
 
@@ -113,7 +120,7 @@ Phiên mặc định có hạn 30 ngày tính từ lúc đăng nhập. Mỗi l�
 
 | API | Cách gọi | Kết quả |
 |---|---|---|
-| `GET /api/v1/auth/google` | Điều hướng trình duyệt tới endpoint này | `302` sang Google khi tính năng được bật |
+| `GET /api/v1/auth/google` | Điều hướng trình duyệt tới endpoint này | `302` sang Google, `404` nếu tắt, `429` nếu vượt hạn mức hoặc `503` nếu Redis không khả dụng |
 | `GET /api/v1/auth/oauth2/callback/google` | Google điều hướng trình duyệt về cùng code và state, hoặc thông tin lỗi | `302` về URL frontend với `google_login=created`, `success`, `email_taken` hoặc `failed` |
 | `POST /api/v1/auth/refresh` | Web gửi cookie, body rỗng. Client API có thể gửi `{"refresh_token":"…"}` | `200` với `access_token`, `expires_in` và `user`. Với cookie, token refresh mới đi qua `Set-Cookie`. Với JSON, token mới nằm trong `refresh_token`. |
 | `POST /api/v1/auth/logout` | Gửi bearer JWT của Vingo. Dùng `{"all_devices":true}` để thu hồi mọi phiên. | `204` khi thu hồi phiên và gửi lệnh xóa cookie |
@@ -166,7 +173,7 @@ Frontend giữ access token trong bộ nhớ và gửi `Authorization: Bearer <a
 .\mvnw.cmd clean verify
 ```
 
-Lần kiểm thử gần nhất chạy `verify` thành công với **24 test**, gồm 2 test service và 7 test tích hợp Google trên PostgreSQL 18. Test tích hợp kiểm tra redirect, PKCE, nonce, state gắn với trình duyệt, tạo tài khoản đồng thời, email trùng, refresh và logout. Test dùng danh tính Google mô phỏng cho nhánh callback thành công, nên bước đổi code với Google thật vẫn cần kiểm tra bằng trình duyệt.
+Test tích hợp dùng PostgreSQL 18 và Redis để kiểm tra state, giới hạn tần suất, tạo tài khoản đồng thời, email trùng, refresh và logout. Test callback HTTP đi qua filter chain thật, dùng token endpoint và JWK Set mô phỏng trên loopback để đổi code, kiểm tra chữ ký và nonce. Có test riêng cho các đường dẫn Google khi tính năng tắt. Bước đổi code với Google thật được kiểm tra thủ công bằng trình duyệt.
 
 ### Lỗi local đã gặp
 

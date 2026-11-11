@@ -10,17 +10,29 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
+import org.testcontainers.containers.GenericContainer;
 
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
@@ -30,8 +42,11 @@ import vingo.support.IntegrationTest;
 @TestPropertySource(properties = {
         "vingo.google.enabled=true",
         "vingo.google.client-id=test-google-client",
-        "vingo.google.client-secret=test-google-secret"
+        "vingo.google.client-secret=test-google-secret",
+        "vingo.google.rate-limit-per-minute=3",
+        "server.forward-headers-strategy=none"
 })
+@Import(GoogleLoginIntegrationTest.TestOAuthConfig.class)
 class GoogleLoginIntegrationTest extends IntegrationTest {
 
     private static final String ORIGIN = "http://localhost:3000";
@@ -41,6 +56,19 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
     @Autowired
     private GoogleLoginHandler handler;
 
+    @Autowired
+    private GoogleTestProvider provider;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /** Mỗi test có cửa sổ rate limit riêng trên Redis của test context. */
+    @BeforeEach
+    void resetRateLimit() {
+        redis.delete(redis.keys("vingo:auth:google:start:*"));
+    }
+
+    /** State chỉ được tiêu thụ khi callback gửi đúng cookie của trình duyệt. */
     @Test
     void start_storesPkceAndNonce_andCallbackConsumesStateOnlyForTheOriginalBrowser() {
         var response = client.get().uri("/api/v1/auth/google").exchange()
@@ -69,6 +97,59 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         assertThat(pending(state)).isZero();
     }
 
+    /** Callback thành công đi qua Spring Security, đổi code và tạo phiên Vingo. */
+    @Test
+    void callback_exchangesCodeThroughFilterChain_andCreatesVingoSession() throws Exception {
+        var start = client.get().uri("/api/v1/auth/google").exchange()
+                .expectStatus().isFound().returnResult(Void.class).getResponseHeaders();
+        var params = UriComponentsBuilder.fromUri(start.getLocation()).build(true).getQueryParams();
+        String state = UriUtils.decode(params.getFirst("state"), StandardCharsets.UTF_8);
+        String nonce = UriUtils.decode(params.getFirst("nonce"), StandardCharsets.UTF_8);
+        String browserCookie = start.getFirst(HttpHeaders.SET_COOKIE);
+        String subject = UUID.randomUUID().toString();
+        provider.issueIdToken("test-google-client", nonce, subject, subject + "@gmail.com", AVATAR);
+
+        var callback = client.get()
+                .uri(builder -> builder.path("/api/v1/auth/oauth2/callback/google")
+                        .queryParam("code", "google-test-code").queryParam("state", state).build())
+                .cookie(cookieName(browserCookie), cookieValue(browserCookie))
+                .exchange().expectStatus().isFound()
+                .expectHeader().location(ORIGIN + "/auth/google?google_login=created")
+                .returnResult(Void.class).getResponseHeaders();
+
+        assertThat(callback.get(HttpHeaders.SET_COOKIE))
+                .anyMatch(cookie -> cookie.startsWith("__Host-vingo_refresh="))
+                .noneMatch(cookie -> cookie.contains("JSESSIONID") || cookie.contains("google-test-access"));
+        assertThat(pending(state)).isZero();
+        assertThat(jdbc.sql("""
+                        SELECT count(*) FROM sessions s JOIN users u ON s.user_id = u.id
+                        WHERE u.google_sub = :subject AND u.avatar_url = :avatar
+                        """).param("subject", subject).param("avatar", AVATAR).query(Integer.class).single()).isEqualTo(1);
+    }
+
+    /** Request vượt giới hạn bị chặn trước cả thao tác xoá trạng thái hết hạn. */
+    @Test
+    void start_returns429_beforeWritingToPostgres_whenIpExceedsLimit() {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            client.get().uri("/api/v1/auth/google").exchange().expectStatus().isFound();
+        }
+        String sentinel = UUID.randomUUID().toString();
+        jdbc.sql("""
+                        INSERT INTO oauth_login_request (state_hash, browser_hash, request_json, expires_at)
+                        VALUES (:hash, 'expired', '{}', now() - interval '1 minute')
+                        """).param("hash", TokenSecrets.hash(sentinel)).update();
+        int before = jdbc.sql("SELECT count(*) FROM oauth_login_request").query(Integer.class).single();
+
+        client.get().uri("/api/v1/auth/google").header("X-Forwarded-For", "192.0.2.42")
+                .exchange().expectStatus().isEqualTo(429)
+                .expectHeader().valueMatches(HttpHeaders.RETRY_AFTER, "[1-9][0-9]*")
+                .expectBody().jsonPath("$.code").isEqualTo("RATE_LIMITED");
+
+        assertThat(pending(sentinel)).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM oauth_login_request").query(Integer.class).single()).isEqualTo(before);
+    }
+
+    /** Hai lượt đăng nhập cùng Google tạo hai phiên cho cùng một tài khoản. */
     @Test
     void firstAndReturningLogin_createTwoSessionsForOneAccount_andExposeAvatar() throws Exception {
         String email = UUID.randomUUID() + "@gmail.com";
@@ -102,6 +183,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .exchange().expectStatus().isUnauthorized().expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
     }
 
+    /** Email trùng tài khoản hiện có không cấp phiên hoặc tự liên kết. */
     @Test
     void matchingEmail_doesNotLinkOrCreateSession() throws Exception {
         String email = UUID.randomUUID() + "@gmail.com";
@@ -120,6 +202,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .param("id", userId).query(Integer.class).single()).isEqualTo(1);
     }
 
+    /** Callback đồng thời dùng cùng Google subject chỉ tạo một bản ghi user. */
     @Test
     void simultaneousCallbacks_createOnlyOneAccount() throws Exception {
         String subject = UUID.randomUUID().toString();
@@ -134,6 +217,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .param("subject", subject).query(Integer.class).single()).isEqualTo(1);
     }
 
+    /** Claim email chưa xác minh không tạo tài khoản. */
     @Test
     void unverifiedEmail_doesNotCreateAccount() throws Exception {
         String subject = UUID.randomUUID().toString();
@@ -143,6 +227,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .param("subject", subject).query(Integer.class).single()).isZero();
     }
 
+    /** Refresh bằng cookie cần Origin đúng, và logout thu hồi phiên đã xoay vòng. */
     @Test
     void cookieRequiresTrustedOrigin_andLogoutRevokesTheRotatedSession() throws Exception {
         String cookie = callback(UUID.randomUUID().toString(), UUID.randomUUID() + "@gmail.com", true)
@@ -161,6 +246,15 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .exchange().expectStatus().isUnauthorized();
     }
 
+    /** Logout yêu cầu access token kể cả khi client gửi cookie. */
+    @Test
+    void logout_returns401_whenBearerTokenIsMissing() {
+        client.post().uri("/api/v1/auth/logout").exchange().expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED")
+                .jsonPath("$.detail").isEqualTo("Thiếu hoặc sai access token");
+    }
+
+    /** Refresh phân biệt thiếu credential và body JSON không hợp lệ. */
     @Test
     void refresh_rejectsMissingTokenAndMalformedBody() {
         client.post().uri(REFRESH).exchange().expectStatus().isUnauthorized()
@@ -169,11 +263,13 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
     }
 
+    /** Đếm yêu cầu OAuth2 còn trong PostgreSQL theo state ban đầu. */
     private int pending(String state) {
         return jdbc.sql("SELECT count(*) FROM oauth_login_request WHERE state_hash = :state")
                 .param("state", TokenSecrets.hash(state)).query(Integer.class).single();
     }
 
+    /** Gọi handler với danh tính đã xác minh để tập trung kiểm tra nghiệp vụ tài khoản. */
     private MockHttpServletResponse callback(String subject, String email, boolean verified) throws Exception {
         var idToken = OidcIdToken.withTokenValue("test-token").subject(subject)
                 .claim("email", email).claim("email_verified", verified)
@@ -184,13 +280,43 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         return response;
     }
 
+    /** Lấy giá trị cookie trước các thuộc tính Set-Cookie. */
     private static String cookieValue(String header) {
         assertThat(header).isNotNull();
         return header.substring(header.indexOf('=') + 1, header.indexOf(';'));
     }
 
+    /** Lấy tên cookie từ Set-Cookie, gồm tiền tố __Host- nếu có. */
     private static String cookieName(String header) {
         assertThat(header).isNotNull();
         return header.substring(0, header.indexOf('='));
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TestOAuthConfig {
+
+        /** Redis riêng cho test rate limit để các test khác giữ nguyên cấu hình. */
+        @Bean
+        @ServiceConnection(name = "redis")
+        GenericContainer<?> googleLoginRedis() {
+            return new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+        }
+
+        /** Token endpoint giả và khóa công khai được dùng trong callback test. */
+        @Bean
+        GoogleTestProvider googleTestProvider() throws Exception {
+            return new GoogleTestProvider();
+        }
+
+        /** Giữ registration thật và chuyển bước trao đổi code, xác minh chữ ký về loopback. */
+        @Bean
+        @Primary
+        ClientRegistrationRepository testGoogleRegistration(
+                @Qualifier("googleClientRegistration") ClientRegistrationRepository registration,
+                GoogleTestProvider google) {
+            var client = ClientRegistration.withClientRegistration(registration.findByRegistrationId("google"))
+                    .tokenUri(google.endpoint("/token")).jwkSetUri(google.endpoint("/keys")).userInfoUri(null).build();
+            return new InMemoryClientRegistrationRepository(client);
+        }
     }
 }

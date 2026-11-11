@@ -24,12 +24,14 @@ public class GoogleLoginService {
     private final AuthProperties properties;
     private final Clock clock;
 
+    /** Nhận kho tài khoản và cấu hình thời hạn phiên Vingo. */
     GoogleLoginService(AuthRepository accounts, AuthProperties properties, Clock clock) {
         this.accounts = accounts;
         this.properties = properties;
         this.clock = clock;
     }
 
+    /** Tìm hoặc tạo user theo Google subject rồi lưu phiên trong cùng transaction. */
     @Transactional
     public GoogleLoginResult login(GoogleLoginRequest identity) {
         if (!StringUtils.hasText(identity.subject()) || !identity.emailVerified()

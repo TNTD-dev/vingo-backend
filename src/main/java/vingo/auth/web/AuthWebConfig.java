@@ -17,6 +17,7 @@ class AuthWebConfig implements WebMvcConfigurer {
 
     private final String frontendOrigin;
 
+    /** Suy ra origin hợp lệ từ URL frontend nhận kết quả đăng nhập. */
     AuthWebConfig(AuthProperties properties) {
         URI frontend = properties.frontendReturnUrl();
         Assert.isTrue(frontend.getHost() != null && frontend.getUserInfo() == null
@@ -30,10 +31,12 @@ class AuthWebConfig implements WebMvcConfigurer {
                 .host(frontend.getHost()).port(port).build().toUriString();
     }
 
+    /** Trả origin dùng để kiểm tra request refresh bằng cookie. */
     String frontendOrigin() {
         return frontendOrigin;
     }
 
+    /** Cho phép frontend đã cấu hình gửi credential tới refresh và logout. */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/v1/auth/refresh")

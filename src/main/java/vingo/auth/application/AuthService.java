@@ -31,6 +31,7 @@ public class AuthService {
     private final Clock clock;
     private final JwtEncoder encoder;
 
+    /** Dùng cùng cấu hình ký JWT mà resource server dùng để xác minh. */
     AuthService(AuthRepository accounts, JwtProperties jwt, Clock clock) {
         this.accounts = accounts;
         this.jwt = jwt;
@@ -38,6 +39,7 @@ public class AuthService {
         this.encoder = NimbusJwtEncoder.withSecretKey(SecurityConfig.secretKey(jwt)).build();
     }
 
+    /** Xoay vòng refresh token và ký access JWT trong một transaction. */
     @Transactional
     public AuthResponse refresh(String refreshToken) {
         if (!StringUtils.hasText(refreshToken) || refreshToken.length() > 512) {
@@ -61,11 +63,13 @@ public class AuthService {
                 Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account());
     }
 
+    /** Thu hồi phiên thuộc user hiện tại hoặc mọi phiên của user đó. */
     @Transactional
     public void logout(UUID userId, UUID sessionId, boolean allDevices) {
         accounts.revoke(userId, sessionId, allDevices, OffsetDateTime.now(clock));
     }
 
+    /** Dùng chung phản hồi cho refresh token sai, hết hạn hoặc đã thu hồi. */
     private static DomainException invalidRefresh() {
         return new DomainException(ErrorCode.UNAUTHORIZED, "Refresh token không hợp lệ hoặc đã hết hạn");
     }

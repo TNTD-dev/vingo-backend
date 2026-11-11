@@ -145,7 +145,21 @@ paths:
       security: []
       responses:
         '302': { description: Chuyển hướng tới Google }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '404': { $ref: '#/components/responses/GoogleLoginDisabled' }
+        '429':
+          description: Vượt giới hạn bắt đầu đăng nhập Google theo IP
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Gọi quá nhanh, status: 429, code: RATE_LIMITED, detail: Thử lại sau 20 giây }
+        '503':
+          description: Kho giới hạn tần suất tạm thời không khả dụng
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dịch vụ tạm thời không khả dụng, status: 503, code: SERVICE_UNAVAILABLE, detail: Tạm thời không thể bắt đầu đăng nhập Google }
   /auth/oauth2/callback/google:
     get:
       operationId: completeGoogleLogin
@@ -155,12 +169,12 @@ paths:
       security: []
       responses:
         '302': { description: Chuyển hướng về web }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '404': { $ref: '#/components/responses/GoogleLoginDisabled' }
   /auth/refresh:
     post:
       operationId: refreshToken
       tags: [Auth]
-      summary: Đổi refresh token lấy cặp token mới (token cũ bị thu hồi)
+      summary: Cấp access token và xoay vòng refresh token
       description: Trình duyệt gửi cookie refresh và Origin của web. Client khác có thể gửi refresh_token trong JSON. Với cookie, refresh token mới chỉ được gửi qua Set-Cookie.
       security: []
       requestBody:
@@ -178,9 +192,24 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RefreshResult' }
-        '400': { $ref: '#/components/responses/ValidationError' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '400':
+          description: Body JSON thiếu refresh_token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Có trường không hợp lệ }
+        '401':
+          description: Thiếu refresh token hoặc refresh token không hợp lệ
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Refresh token không hợp lệ hoặc đã hết hạn }
+        '403':
+          description: Origin gửi cookie refresh không được phép
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Không có quyền, status: 403, code: FORBIDDEN, detail: Origin không được phép làm mới phiên }
   /auth/logout:
     post:
       operationId: logout
@@ -196,7 +225,12 @@ paths:
                 all_devices: { type: boolean, default: false }
       responses:
         '204': { description: Đã thu hồi phiên }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '401':
+          description: Thiếu hoặc sai bearer access token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Thiếu hoặc sai access token }
   /auth/password/forgot:
     post:
       operationId: forgotPassword
@@ -1471,6 +1505,12 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+    GoogleLoginDisabled:
+      description: Đăng nhập Google chưa được bật
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example: { title: Không tìm thấy, status: 404, code: NOT_FOUND, detail: Đăng nhập Google chưa được bật }
     RateLimited:
       description: RATE_LIMITED (kèm header Retry-After)
       headers:
@@ -1492,7 +1532,7 @@ components:
           type: string
           enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
                  EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
-                 SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
+                 SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
                  VENUE_IN_USE, EVENT_LOCKED, EVENT_INCOMPLETE, SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
         errors:

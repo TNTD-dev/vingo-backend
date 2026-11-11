@@ -29,6 +29,7 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
     private final AuthCookies cookies;
     private final Clock clock;
 
+    /** Nối kho trạng thái dùng chung với định dạng yêu cầu của Spring Security. */
     GoogleAuthorizationRequests(GoogleAuthorizationRequestRepository requests, JsonMapper json,
                                 AuthCookies cookies, Clock clock) {
         this.requests = requests;
@@ -37,11 +38,13 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
         this.clock = clock;
     }
 
+    /** Đọc yêu cầu phù hợp với cookie tạm và state của request. */
     @Override
     public OAuth2AuthorizationRequest loadAuthorizationRequest(HttpServletRequest request) {
         return findRequest(request, false);
     }
 
+    /** Lưu yêu cầu OAuth2 kèm hash cookie tạm của trình duyệt. */
     @Override
     public void saveAuthorizationRequest(OAuth2AuthorizationRequest authorization,
                                          HttpServletRequest request, HttpServletResponse response) {
@@ -57,6 +60,7 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
         response.addHeader(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.OAUTH_BROWSER, browserSecret, TTL).toString());
     }
 
+    /** Tiêu thụ yêu cầu một lần rồi xoá cookie tạm. */
     @Override
     public OAuth2AuthorizationRequest removeAuthorizationRequest(HttpServletRequest request, HttpServletResponse response) {
         OAuth2AuthorizationRequest authorization = findRequest(request, true);
@@ -67,6 +71,7 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
         return authorization;
     }
 
+    /** Đối chiếu state và cookie rồi khôi phục yêu cầu OAuth2 từ dữ liệu lưu trữ. */
     private OAuth2AuthorizationRequest findRequest(HttpServletRequest request, boolean consume) {
         String state = request.getParameter(OAuth2ParameterNames.STATE);
         String browserSecret = cookies.read(request, AuthCookies.OAUTH_BROWSER).orElse("");
@@ -86,12 +91,14 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
                                 Set<String> scopes, String state, Map<String, Object> parameters,
                                 Map<String, Object> attributes, String requestUri) {
 
+        /** Giữ các tham số và thuộc tính, bao gồm nonce và PKCE verifier. */
         static SavedRequest from(OAuth2AuthorizationRequest request) {
             return new SavedRequest(request.getAuthorizationUri(), request.getClientId(), request.getRedirectUri(),
                     request.getScopes(), request.getState(), request.getAdditionalParameters(),
                     request.getAttributes(), request.getAuthorizationRequestUri());
         }
 
+        /** Khôi phục yêu cầu mà Spring dùng để xác thực callback. */
         OAuth2AuthorizationRequest toAuthorizationRequest() {
             return OAuth2AuthorizationRequest.authorizationCode()
                     .authorizationUri(authorizationUri).clientId(clientId).redirectUri(redirectUri)
