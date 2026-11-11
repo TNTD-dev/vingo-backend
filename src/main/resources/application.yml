@@ -18,6 +18,9 @@ spring:
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
+      # Redis chỉ là cache/rate limit, chậm thì bỏ qua để không làm chậm bán vé.
+      timeout: 200ms
+      connect-timeout: 200ms
   mvc:
     problemdetails:
       enabled: true
