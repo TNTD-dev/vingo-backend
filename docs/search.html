@@ -316,8 +316,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 │           SearchApiMapper, CursorCodec
 └── <span class="d">internal/</span> PgSearchService
             EventSearchRepository, SeatmapRepository
-            AvailabilityRepository, SearchQueryNormalizer
-            SearchCacheConfig, CatalogChangedListener</div>
+            EventDetailRepository, SearchQueryNormalizer
+            SearchReads (cache), SearchCacheConfig, CatalogChangedListener</div>
     <div class="decisions" style="grid-template-columns:1fr">
       <div class="panel"><h3>Chỉ JdbcClient</h3><p class="sub">Mọi truy vấn join bảng của module khác; entity JPA thuộc catalog.</p></div>
       <div class="panel"><h3>Giờ lấy từ Clock</h3><p class="sub">Truyền <code>:now</code> vào SQL, không dùng <code>now()</code> của Postgres trong query search.</p></div>
@@ -415,10 +415,10 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 <section id="cache">
   <div class="sec-head"><div class="eyebrow">Cache</div><h2>Redis chỉ cache đọc; sập thì đọc DB</h2></div>
   <div class="cache-grid">
-    <div class="panel"><span class="eyebrow">Event, suất</span><div class="ttl">10 phút</div><p class="sub">Lưu mốc giờ thô, status tính lại mỗi lần đọc.</p></div>
-    <div class="panel"><span class="eyebrow">Layout seatmap</span><div class="ttl">10 phút</div><p class="sub">Xoá cùng lúc với event.</p></div>
-    <div class="panel"><span class="eyebrow">Ghế, availability</span><div class="ttl">3 giây</div><p class="sub"><code>@Cacheable(sync = true)</code> chống dồn request lúc mở bán.</p></div>
-    <div class="panel"><span class="eyebrow">/events?q=</span><div class="ttl">—</div><p class="sub">Không cache.</p></div>
+    <div class="panel"><span class="eyebrow">search-event · search-showtimes</span><div class="ttl">10 phút</div><p class="sub">Khoá eventId. Lưu mốc giờ thô; status và <code>sold_out</code> tính lại mỗi lần đọc (<code>sold_out</code> là một câu SQL nhẹ, không cache).</p></div>
+    <div class="panel"><span class="eyebrow">search-seatmap-layout</span><div class="ttl">10 phút</div><p class="sub">Khoá showtimeId. Chỉ khu, ghế, toạ độ, hạng giá; trạng thái ghế đọc DB mỗi lần. Xoá cùng lúc với event.</p></div>
+    <div class="panel"><span class="eyebrow">search-availability</span><div class="ttl">3 giây</div><p class="sub">Khoá showtimeId. <code>@Cacheable(sync = true)</code>: request cùng miss trong một JVM chỉ truy vấn DB một lần. Status trong kết quả có thể trễ tới 3 giây.</p></div>
+    <div class="panel"><span class="eyebrow">/events?q=, suggestSeats</span><div class="ttl">—</div><p class="sub">Không cache.</p></div>
   </div>
   <div class="panel diagram scroll-x"><svg viewBox="0 0 900 400" role="img" aria-label="Trình tự xoá cache khi admin sửa sự kiện">
       <defs>
@@ -452,7 +452,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </svg></div>
   <div class="two">
     <div class="note"><b>Phải xoá sau commit.</b> Xoá trước commit thì request đọc chen vào sẽ ghi lại dữ liệu cũ vào cache. Rollback thì không có event, không xoá oan.</div>
-    <div class="note info"><b>TTL là lưới an toàn</b> khi mất event (app sập sau commit, Redis sập lúc xoá). Không thêm cache trong bộ nhớ: 2 instance api dùng chung Redis. Rate limit theo IP cho cả 5 endpoint, bộ đếm Redis.</div>
+    <div class="note info"><b>TTL là lưới an toàn</b> khi mất event (app sập sau commit, Redis sập lúc xoá). Không thêm cache trong bộ nhớ: 2 instance api dùng chung Redis. Cache chỉ bật ở profile <code>api</code>; lỗi Redis chỉ ghi WARN rồi đọc DB.</div>
+  </div>
+  <div class="two">
+    <div class="note"><b>Cách xoá.</b> Catalog phát <code>CatalogChanged(eventId, showtimeIds)</code> hoặc <code>VenueChanged(venueId)</code> (record ở gốc <code>vingo.catalog</code>) trong transaction ghi của admin. <code>CatalogChangedListener</code> dùng <code>@TransactionalEventListener(AFTER_COMMIT)</code> chạy đồng bộ, không dùng <code>@ApplicationModuleListener</code> vì nó chạy bất đồng bộ (cần <code>@EnableAsync</code>) nên admin vừa lưu xong vẫn có thể đọc dữ liệu cũ. <code>CatalogChanged</code> xoá <code>search-event</code>, <code>search-showtimes</code> theo eventId và <code>search-seatmap-layout</code> theo từng suất; <code>VenueChanged</code> xoá hết hai cache event và suất.</div>
+    <div class="note info"><b>Rate limit.</b> Interceptor ở <code>search/web</code> đếm theo IP (<code>getRemoteAddr</code>) bằng <code>RateLimiter</code> dùng chung, một bộ đếm cho cả 5 endpoint: <code>vingo.search.rate-limit.per-minute</code> (mặc định 120, env <code>SEARCH_RATE_LIMIT_PER_MINUTE</code>), cửa sổ cố định 1 phút. Vượt thì 429 <code>RATE_LIMITED</code> kèm <code>Retry-After</code>; Redis sập thì cho qua.</div>
   </div>
 </section>
 
