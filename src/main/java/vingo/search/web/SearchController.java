@@ -1,6 +1,7 @@
 package vingo.search.web;
 
 import java.time.OffsetDateTime;
+import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
@@ -8,6 +9,8 @@ import org.springframework.web.bind.annotation.RestController;
 import vingo.api.SearchApi;
 import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
+import vingo.api.model.EventDetail;
+import vingo.api.model.ListEventShowtimes200Response;
 import vingo.api.model.SearchEvents200Response;
 import vingo.search.EventSearchCriteria;
 import vingo.search.EventSearchCriteria.After;
@@ -17,7 +20,7 @@ import vingo.search.InvalidSearchRequestException;
 import vingo.search.Page;
 import vingo.search.SearchService;
 
-/** Endpoint tìm kiếm công khai. Các operation khác của tag Search chưa hiện thực nên giữ mặc định 501. */
+/** Endpoint tìm kiếm và xem chi tiết sự kiện công khai. Các operation khác của tag Search chưa hiện thực nên giữ mặc định 501. */
 @RestController
 class SearchController implements SearchApi {
 
@@ -66,5 +69,16 @@ class SearchController implements SearchApi {
         return ResponseEntity.ok(new SearchEvents200Response()
                 .data(page.items().stream().map(mapper::toEventSummary).toList())
                 .nextCursor(nextCursor));
+    }
+
+    @Override
+    public ResponseEntity<EventDetail> getEvent(UUID eventId) {
+        return ResponseEntity.ok(mapper.toEventDetail(searchService.getEvent(eventId)));
+    }
+
+    @Override
+    public ResponseEntity<ListEventShowtimes200Response> listEventShowtimes(UUID eventId) {
+        return ResponseEntity.ok(new ListEventShowtimes200Response()
+                .data(searchService.listEventShowtimes(eventId).stream().map(mapper::toShowtime).toList()));
     }
 }

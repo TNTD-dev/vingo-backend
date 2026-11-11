@@ -391,6 +391,18 @@ class SearchEventsTest extends IntegrationTest {
         assertThat(searchError("city", "SGN").path("code").asString()).isEqualTo("VALIDATION_ERROR");
     }
 
+    @Test
+    void searchEvents_omitsPoster_whenPosterUrlInvalid() {
+        UUID id = fixtures.event().title("Poster hỏng").create().id();
+        jdbc.sql("UPDATE event SET poster_url = 'http://bad url' WHERE id = :id").param("id", id).update();
+
+        JsonNode data = search("q", "poster hong").path("data");
+
+        assertThat(data).hasSize(1);
+        assertThat(data.get(0).path("id").asString()).isEqualTo(id.toString());
+        assertThat(data.get(0).has("poster_url")).isFalse();
+    }
+
     // ------------------------------------------------------------------ Helper
 
     private static String at(int daysFromNow) {

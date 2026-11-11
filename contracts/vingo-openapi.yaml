@@ -1803,6 +1803,7 @@ components:
             event_id: { type: string, format: uuid }
             status: { $ref: '#/components/schemas/ShowtimeStatus' }
             sold_out: { type: boolean }
+            venue: { $ref: '#/components/schemas/Venue' }
     SeatMap:
       type: object
       properties:
