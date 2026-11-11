@@ -1472,11 +1472,23 @@ paths:
       operationId: queryMetric
       tags: [Admin Reports]
       summary: Số liệu bán vé và check-in (dùng cho Admin Copilot)
+      description: |
+        Tính trên dữ liệu hiện tại; lọc thời gian theo [from,to), mỗi mốc có thể bỏ qua.
+        Nhóm day/hour theo UTC; tier/zone theo UUID hạng vé/khu vực.
+        tickets_sold là tổng quantity của đơn PAID, theo paid_at.
+        revenue là tổng quantity * unit_price của đơn PAID, theo paid_at, đơn vị VND.
+        checkins đếm các vé USED khác nhau của đơn PAID, theo lần quét OK đầu tiên.
+        fill_rate = 100 * tổng sold / tổng capacity, theo starts_at; mẫu bằng 0 trả 0.
+        group_by=none trả value; các nhóm khác trả series, nhóm không có dữ liệu trả [].
+        Ví dụ 400 khi from không trước to:
+        {"status":400,"code":"VALIDATION_ERROR","detail":"from must be earlier than to"}
+        Ví dụ 401 khi thiếu token: {"status":401,"code":"UNAUTHORIZED"}.
+        Ví dụ 403 khi người dùng không có vai trò ADMIN: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - name: metric
           in: query
           required: true
-          schema: { type: string, enum: [tickets_sold, revenue, fill_rate, sales_velocity, checkins] }
+          schema: { type: string, enum: [tickets_sold, revenue, fill_rate, checkins] }
         - { name: event_id, in: query, schema: { type: string, format: uuid } }
         - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
         - { name: price_tier_id, in: query, schema: { type: string, format: uuid } }
@@ -1488,7 +1500,10 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MetricResult' }
+                schema: { $ref: '#/components/schemas/MetricResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
 components:
   securitySchemes:
@@ -1964,7 +1979,7 @@ components:
       type: object
       properties:
         metric: { type: string }
-        unit: { type: string, enum: [tickets, VND, percent, tickets_per_day, checkins] }
+        unit: { type: string, enum: [tickets, VND, percent, checkins] }
         filters: { type: object, description: 'Bộ lọc đã áp dụng, để hiển thị cho admin' }
         computed_at: { type: string, format: date-time }
         value: { type: number, description: Khi group_by = none }

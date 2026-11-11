@@ -16,3 +16,7 @@ target/
 
 # Log
 *.log
+
+# Tài liệu Tiến chỉ giữ local, không đưa vào commit/push.
+/docs/tien/
+/scripts/tien-diagrams.mjs
