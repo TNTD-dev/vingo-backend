@@ -16,6 +16,7 @@ import org.springframework.stereotype.Repository;
 import vingo.booking.OrderForPayment;
 import vingo.booking.OrderLine;
 import vingo.booking.ReviewReason;
+import vingo.catalog.ShowtimeStatus;
 import vingo.shared.logging.LogKeys;
 
 /** Truy cập đơn và tồn kho bằng JdbcClient trong transaction của BookingService. */
@@ -161,13 +162,17 @@ public class BookingRepository {
     // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
     public Optional<Sale> findSale(UUID showtimeId, OffsetDateTime now) {
         return jdbc.sql("""
-                        SELECT s.status, e.max_tickets_per_order,
-                               s.status = 'SCHEDULED' AND e.status = 'PUBLISHED'
-                               AND :now >= s.sale_opens_at AND :now < s.sale_closes_at AS on_sale
+                        SELECT s.status, s.sale_opens_at, s.sale_closes_at, s.ends_at,
+                               e.status AS event_status, e.max_tickets_per_order
                         FROM showtime s JOIN event e ON e.id = s.event_id WHERE s.id = :showtime
                         """)
-                .param("showtime", showtimeId).param("now", now)
-                .query((rs, row) -> new Sale(rs.getString("status"), rs.getBoolean("on_sale"),
+                .param("showtime", showtimeId)
+                .query((rs, row) -> new Sale(rs.getString("status"),
+                        "PUBLISHED".equals(rs.getString("event_status"))
+                                && ShowtimeStatus.of(rs.getString("status"),
+                                        rs.getObject("sale_opens_at", OffsetDateTime.class),
+                                        rs.getObject("sale_closes_at", OffsetDateTime.class),
+                                        rs.getObject("ends_at", OffsetDateTime.class), now) == ShowtimeStatus.ON_SALE,
                         rs.getInt("max_tickets_per_order"))).optional();
     }
 
@@ -300,32 +305,6 @@ public class BookingRepository {
                         WHERE showtime_id = :showtime AND zone_id = :zone
                         """)
                 .param("showtime", showtimeId).param("zone", zoneId).query(Integer.class).single();
-    }
-
-    public List<UUID> suggestSeats(UUID showtimeId, List<UUID> seatIds, OffsetDateTime now) {
-        var suggested = jdbc.sql("""
-                        WITH requested AS (
-                            SELECT id, zone_id, row_label, number FROM seat WHERE id = ANY(:ids)
-                        ), ranked AS (
-                            SELECT s.id, s.zone_id,
-                                   row_number() OVER (PARTITION BY s.zone_id ORDER BY
-                                       near.distance NULLS LAST, s.row_label, s.number) AS position
-                            FROM showtime_seat ss JOIN seat s ON s.id = ss.seat_id
-                            CROSS JOIN LATERAL (
-                                SELECT min(abs(s.number - r.number)) AS distance FROM requested r
-                                WHERE r.zone_id = s.zone_id AND r.row_label = s.row_label
-                            ) near
-                            WHERE ss.showtime_id = :showtime AND s.zone_id IN (SELECT zone_id FROM requested)
-                              AND NOT (s.id = ANY(:ids))
-                              AND (ss.status = 'AVAILABLE' OR (ss.status = 'HELD' AND ss.held_until < :now))
-                        )
-                        SELECT id FROM ranked r
-                        WHERE position <= (SELECT count(*) FROM requested q WHERE q.zone_id = r.zone_id)
-                        ORDER BY zone_id, position
-                        """)
-                .param("showtime", showtimeId).param("ids", new SqlArrayValue("uuid", seatIds.toArray()))
-                .param("now", now).query(UUID.class).list();
-        return suggested.size() == seatIds.size() ? suggested : List.of();
     }
 
     public void insertItem(UUID orderId, HoldItem item) {
