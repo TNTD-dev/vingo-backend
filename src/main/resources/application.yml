@@ -42,6 +42,13 @@ vingo:
     access-token-ttl: PT15M
   hold:
     ttl: PT10M
+  realtime:
+    replay-window: PT5M
+    replay-overlap: PT10S
+    retention: PT10M
+    heartbeat: PT20S
+    max-connections-per-user: 5
+    queue-capacity: 1000
   search:
     rate-limit:
       # Số request mỗi phút cho mỗi IP, dùng chung cho cả 5 endpoint search.

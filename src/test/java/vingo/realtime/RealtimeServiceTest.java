@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import javax.sql.DataSource;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.postgresql.PGConnection;
@@ -39,6 +42,22 @@ class RealtimeServiceTest extends IntegrationTest {
     @BeforeEach
     void createUser() {
         userId = catalog.buyer();
+    }
+
+    @AfterEach
+    void resetClock() {
+        clock.reset();
+    }
+
+    @Test
+    void publish_usesInjectedClockForCreatedAt() {
+        Instant now = Instant.parse("2026-01-02T03:04:05Z");
+        clock.set(now);
+
+        UUID id = transactions.execute(status -> realtime.publish(userId, RealtimeEventType.ORDER_HELD, Map.of()));
+
+        assertThat(jdbc.sql("SELECT created_at FROM realtime_event WHERE id = :id")
+                .param("id", id).query(OffsetDateTime.class).single().toInstant()).isEqualTo(now);
     }
 
     @Test

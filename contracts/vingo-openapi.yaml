@@ -368,13 +368,31 @@ paths:
       summary: Server-Sent Events cho người dùng hiện tại
       description: |
         Sự kiện: order.held, order.paid, order.expired, order.needs_review, payment.failed,
-        ticket.issued, chat.delta, chat.block, chat.done. Client reconnect kèm header Last-Event-ID.
+        ticket.issued, chat.delta, chat.block, chat.done. Chỉ nhận sự kiện của chính người dùng đang đăng nhập.
+        Gửi header Authorization: Bearer <access_token>; trên trình duyệt dùng fetch vì EventSource
+        không gửi được header Authorization. Không đưa token lên query string.
+        Nối lại kèm header Last-Event-ID để phát lại sự kiện trong cửa sổ 5 phút, có độ lùi 10 giây:
+        sự kiện có thể trùng, client tự khử trùng theo id; không phát lại chính id đã gửi trong header.
+        Last-Event-ID hỏng, không phải UUID, không tồn tại, của người khác hoặc quá 5 phút
+        đều không gây lỗi: phát lại toàn bộ cửa sổ 5 phút của chính người dùng.
+        Không gửi Last-Event-ID thì không phát lại (sự kiện commit sát lúc kết nối vẫn có thể tới);
+        client mở stream trước rồi mới tải trạng thái hiện tại bằng REST.
+        Server gửi SSE comment ping khoảng mỗi 20 giây để giữ kết nối.
+        Stream đóng khi token hết hạn hoặc khi mở quá 5 kết nối cùng user (đóng kết nối cũ nhất);
+        client nối lại, dùng token mới nếu token đã hết hạn.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Id sự kiện cuối client đã nhận.
+          schema: { type: string }
       responses:
         '200':
           description: Luồng SSE
           content:
             text/event-stream:
               schema: { $ref: '#/components/schemas/StreamEvent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ------------------------------------------------------------------ Search
   /events:
@@ -1884,6 +1902,11 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            title: Chưa đăng nhập
+            status: 401
+            code: UNAUTHORIZED
+            detail: Thiếu hoặc sai access token
     Forbidden:
       description: FORBIDDEN
       content:
