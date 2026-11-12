@@ -1394,6 +1394,54 @@ paths:
               schema: { $ref: '#/components/schemas/SeatLayout' }
         '404': { $ref: '#/components/responses/NotFound' }
   /admin/events:
+    get:
+      operationId: listAdminEvents
+      tags: [Admin Catalog]
+      summary: Liệt kê sự kiện cho admin
+      description: >
+        Admin liệt kê sự kiện ở mọi trạng thái, gồm DRAFT.
+        Có thể lọc theo tên, trạng thái và loại sự kiện.
+        q tìm chuỗi con trong title, không phân biệt hoa thường.
+        Sắp xếp created_at giảm dần, sau đó id giảm dần.
+        Dùng next_cursor để đọc trang tiếp theo với cùng bộ lọc.
+        Không thay đổi dữ liệu.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/EventStatus'
+        - name: category
+          in: query
+          schema:
+            $ref: '#/components/schemas/EventCategory'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Danh sách sự kiện.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminEventPage'
+        '400':
+          description: Bộ lọc, cursor hoặc limit không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Cursor sự kiện không hợp lệ.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       operationId: createEvent
       tags: [Admin Catalog]
@@ -1434,22 +1482,79 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
   /admin/events/{event_id}:
+    get:
+      operationId: getAdminEvent
+      tags: [Admin Catalog]
+      summary: Đọc chi tiết sự kiện cho admin
+      description: >
+        Admin đọc thông tin sự kiện để xem và tiếp tục chỉnh sửa.
+        Trả cả sự kiện DRAFT, PUBLISHED, ENDED và CANCELLED.
+        Bao gồm thông tin chung, hai poster, hạng giá và các suất,
+        kể cả suất DRAFT.
+        Không thay đổi trạng thái hoặc dữ liệu sự kiện.
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: Chi tiết sự kiện.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Không tìm thấy sự kiện.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Không tìm thấy
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy sự kiện.
     patch:
       operationId: updateEvent
       tags: [Admin Catalog]
-      summary: Sửa thông tin chung (không đổi sơ đồ, khu, giá khi đã có suất ON_SALE)
+      summary: Sửa thông tin chung của sự kiện
+      description: >
+        Admin sửa thông tin chung của sự kiện DRAFT hoặc PUBLISHED.
+        Chỉ cập nhật trường có giá trị khác null; trường không gửi hoặc null giữ nguyên.
+        attributes khác null thay thế toàn bộ object thuộc tính.
+        Body rỗng là thao tác không thay đổi dữ liệu.
+        Không sửa trạng thái, sơ đồ, suất, hạng giá, giá khu hoặc tồn kho qua endpoint này.
+        Sự kiện ENDED hoặc CANCELLED bị khóa (EVENT_LOCKED).
+        Sau khi cập nhật thành công, Search làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EventInput' }
+            schema: { $ref: '#/components/schemas/EventPatchInput' }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
+        '400':
+          description: Tên, loại, poster, tuổi hoặc giới hạn vé không hợp lệ (VALIDATION_ERROR).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Tên sự kiện không được để trống. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Sự kiện đã kết thúc hoặc hủy (EVENT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện bị khóa, status: 409, code: EVENT_LOCKED, detail: Không thể sửa sự kiện đã kết thúc hoặc hủy. }
   /admin/events/{event_id}/price-tiers:
     put:
       operationId: putPriceTiers
@@ -2193,6 +2298,43 @@ components:
             data:
               type: array
               items: { $ref: '#/components/schemas/SeatLayout' }
+    AdminEventSummary:
+      type: object
+      required: [id, title, category, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        poster_mobile_url:
+          type: string
+          format: uri
+        poster_desktop_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdminEventPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminEventSummary'
+        next_cursor:
+          type: [string, 'null']
+          description: Cursor trang tiếp theo; null khi hết dữ liệu.
     EventInput:
       type: object
       properties:
@@ -2221,6 +2363,37 @@ components:
           description: Độ tuổi tối thiểu hiển thị trên thông tin sự kiện.
         max_tickets_per_order:
           type: integer
+          minimum: 1
+          maximum: 20
+    EventPatchInput:
+      type: object
+      description: Không có default. Thuộc tính không gửi hoặc null được giữ nguyên; không hỗ trợ xóa giá trị bằng null.
+      properties:
+        title:
+          type: [string, 'null']
+          minLength: 1
+          pattern: '(?s).*\S.*'
+        description:
+          type: [string, 'null']
+        category:
+          type: [string, 'null']
+          pattern: '^(FOOTBALL|CONCERT|THEATER|OTHER)$'
+          description: FOOTBALL, CONCERT, THEATER hoặc OTHER; null giữ nguyên.
+        attributes:
+          type: [object, 'null']
+        poster_mobile_url:
+          type: [string, 'null']
+          format: uri
+          description: URL tuyệt đối HTTP/HTTPS có host; null giữ nguyên.
+        poster_desktop_url:
+          type: [string, 'null']
+          format: uri
+          description: URL tuyệt đối HTTP/HTTPS có host; null giữ nguyên.
+        age_limit:
+          type: [integer, 'null']
+          minimum: 0
+        max_tickets_per_order:
+          type: [integer, 'null']
           minimum: 1
           maximum: 20
     EventCreateInput:

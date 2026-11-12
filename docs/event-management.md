@@ -68,13 +68,13 @@ Nhánh hiện tại đã tạo tồn kho khi tạo suất, kể cả suất `DRA
 | `poster_mobile_url` | URL ảnh cho mobile. Lưu trong cột riêng của `event`. |
 | `poster_desktop_url` | URL ảnh cho desktop. Lưu trong cột riêng của `event`. |
 | `poster_url` hiện có | Cột dữ liệu cũ, còn được Search và các luồng đơn/vé đọc. Giữ tương thích trong giai đoạn chuyển tiếp; không tự xóa hoặc tự chọn thứ tự fallback. |
-| `age_limit` | Thuộc sự kiện theo contract; hiện database chưa có. Cần bổ sung migration cùng mô tả validation/null rõ ràng trong PR. Không đặt vào `venue`. |
+| `age_limit` | Thuộc sự kiện; migration EV2 đã bổ sung cột nullable với constraint không âm. Đây là metadata, chưa kiểm tra tuổi người mua. Không đặt vào `venue`. |
 
-Chưa chốt ảnh fallback cho các response public vẫn có một `poster_url`, cách backfill dữ liệu cũ vào hai cột mới và việc bắt buộc poster khi công bố. Đây là các quyết định còn lại trước migration và mapping public; không coi việc giữ hai poster là đã thống nhất các quy tắc này.
+Migration EV2 đã backfill `poster_url` cũ vào cả hai cột mới. Ảnh fallback cho response public vẫn có một `poster_url` và việc bắt buộc poster khi công bố còn cần phối hợp trước các mốc sau; EV2 chưa thay mapping module Search.
 
 URL poster phải được kiểm tra tại luồng ghi: đúng cú pháp URI tuyệt đối, scheme `http`/`https`, có host; từ chối URL tương đối, thiếu host hoặc sai cú pháp bằng `400 VALIDATION_ERROR`. Việc định nghĩa validation và các trường bắt buộc phải thể hiện trong OpenAPI trước khi sinh model. Không tải nội dung URL trong transaction ghi sự kiện.
 
-**Gửi team Search khi cột đã triển khai:** tên migration, tên hai cột poster và `age_limit`, quy tắc backfill/fallback được duyệt, ví dụ response, hành vi `CatalogChanged` và kết quả kiểm tra cache. Hiện tài liệu này ghi quyết định; các cột chưa được thêm vào database.
+**Bàn giao team Search:** cột và migration đã được triển khai trong EV2; xem [bàn giao EV2](event-management-ev2.md) về tên cột, backfill, ví dụ response, hành vi `CatalogChanged`, kiểm tra cache và phần mapping public còn phải phối hợp.
 
 ## 3. Đối chiếu các lưu ý team Search với code hiện tại
 
@@ -82,12 +82,12 @@ Nguồn phối hợp: các lưu ý team gửi từ [PR #19 — Search cache](htt
 
 | Lưu ý từ team | Trạng thái trong nhánh `feat/ManageStadium-luannt`, nền `f648f76` | Việc phải làm |
 |---|---|---|
-| Phát `CatalogChanged` khi Catalog ghi dữ liệu | Record đã có ở gốc `vingo.catalog`; Search đã nghe sau commit. Đổi layout của suất đã phát event. Các API ghi sự kiện, giá và công bố vẫn chưa triển khai. | Bổ sung tại từng use case ghi; test cache được xóa sau commit, rollback không xóa oan. |
+| Phát `CatalogChanged` khi Catalog ghi dữ liệu | EV2 đã phát khi tạo nháp và PATCH có thay đổi; đổi layout suất đã phát từ CP6. Search xử lý sau commit. Giá và công bố ở các mốc sau. | Test EV2 xác nhận cache mới sau commit, rollback/no-op không invalidation. Tiếp tục bổ sung tại các use case giá/công bố. |
 | Sửa sân phát `VenueChanged` | Record/listener đã có, nhưng `VenueService.update` chưa phát event. | Bổ sung cho sửa sân và các thay đổi khác ảnh hưởng response Search, kiểm tra bằng API đã làm nóng cache. |
 | Publish suất gọi `bookingService.initInventory(showtimeId)` | `BookingService` trong checkout hiện tại **chưa có method này**. Catalog đang tạo/thay tồn kho trong `SeatLayoutRepository` từ bước tạo/sửa suất. | Chốt với Danh ai sở hữu thao tác, tính idempotent và transaction trước khi đổi đường gọi. Không gọi method chưa tồn tại. |
 | `venue.city` phải là mã `HCM`, `HN`, `DN` | Contract dùng enum; API ghi dùng enum. Database chưa có CHECK chỉ cho ba mã; seed còn cần rà/chuyển dữ liệu. | Chuẩn bị migration mới và sửa `scripts/seed.sql`; kiểm kê giá trị cũ trước khi chuyển. Không gán bừa thành phố không nhận diện được sang mã khác. |
-| Chặn URL poster sai ngay lúc ghi | API ghi sự kiện chưa triển khai; Search đang có cơ chế bỏ qua URL lỗi. | Validate cả hai poster ở API ghi; thêm test URI lỗi và response ProblemDetail. |
-| Thiếu `age_limit`, `district`, `lat`, `lng` | Migration `V20261111_1100__catalog_svg_seat_layout.sql` đã thêm `venue.district`, `venue.lat`, `venue.lng` và constraint tọa độ. `age_limit` là trường sự kiện và còn thiếu cột. | Không thêm lại ba cột sân. Migration sự kiện bổ sung hai poster và `age_limit` sau khi chốt các điểm dữ liệu còn mở. |
+| Chặn URL poster sai ngay lúc ghi | POST/PATCH EV2 đã validate cả hai poster: URI tuyệt đối HTTP/HTTPS có host. | Test 400 đã có; dữ liệu URL cũ sai không gây hỏng toàn bộ GET. |
+| Thiếu `age_limit`, `district`, `lat`, `lng` | Migration CP2 đã thêm ba cột sân. Migration `V20261112_1500__catalog_event_metadata.sql` bổ sung hai poster và `event.age_limit`, backfill ảnh cũ. | Không thêm lại cột; phối hợp chuyển mapping public với Đức. |
 
 Ghi chú quan trọng về module: `BookingService` hiện gọi `SearchService`, còn Search dùng API gốc của Catalog. Nếu Catalog gọi trực tiếp `BookingService` sẽ hình thành đường phụ thuộc `catalog → booking → search → catalog`. Phải thống nhất cách tổ chức để `ModularityTest` vẫn qua, không thêm dependency này chỉ để khớp tên method trong tin nhắn bàn giao.
 
@@ -107,7 +107,7 @@ Trước CHECK cho city cần cập nhật cả dữ liệu test: `CatalogFixtur
 | **EV6 — Kiểm tra và công bố** | `POST /admin/events/{id}/publish`; kiểm tra suất/giá/gán khu, bảo đảm tồn kho, event → `PUBLISHED`, suất `DRAFT` hợp lệ → `SCHEDULED`, phát `CatalogChanged` trong transaction. | Thiếu cấu hình trả `422 EVENT_INCOMPLETE`, không đổi trạng thái/tồn kho; gọi lại không nhân bản/reset inventory; giữ ghế BLOCKED; test đồng thời với cập nhật cấu hình và không phát event khi rollback. |
 | **EV7 — Nghiệm thu và bàn giao** | Luồng tạo nháp → suất → giá → khóa ghế tùy chọn → công bố → đọc public; case quay lại Quản lý sân, nhiều sân, phiên bản khác nhau; dữ liệu mẫu và tài liệu team. | `mvnw verify`/`ModularityTest` qua trên PostgreSQL thật; xác thực 401/403, 4xx, cache sau commit/rollback, tồn kho và giờ mở bán; PR/review và Swagger staging có bằng chứng riêng. |
 
-**Hiện tại:** luồng sản phẩm đã chốt; nhánh `feat/create_events-luannt` đã tạo. CP7 backend sân đã đạt. Phần sự kiện đang ở **EV1**, chưa triển khai API mới trong kế hoạch này.
+**Hiện tại:** EV2 đã đạt nghiệm thu backend local ngày 12/11/2026: `clean verify` qua **489 test**, gồm **70 ca EV2** và `ModularityTest`. Xem [bàn giao EV2](event-management-ev2.md) để biết hành vi, giới hạn và kết quả. Bước tiếp theo là EV3. Tên cấu hình sơ đồ, hạng giá, khóa ghế và công bố vẫn theo các mốc riêng, không được coi là hoàn thành từ EV2.
 
 ### Thứ tự commit/PR và điều kiện hoàn thành
 
@@ -119,20 +119,20 @@ Trước CHECK cho city cần cập nhật cả dữ liệu test: `CatalogFixtur
 
 **Định nghĩa hoàn thành đợt này:** admin tạo được event từ đầu, thêm các suất với sơ đồ đã chọn, khai báo/gán giá, khóa ghế tùy chọn và công bố thành công; các API public đọc được sự kiện và tồn kho đúng, mở bán theo giờ. Có migration, test, cache invalidation, tài liệu và PR đã review. UI admin, dashboard thống kê và các mở rộng cách cấp chỗ được nghiệm thu riêng.
 
-## 5. Đề xuất contract cho EV2
+## 5. Contract hồ sơ sự kiện EV2
 
-Mọi endpoint admin dùng Bearer JWT và quyền `ADMIN`. Hai API GET dưới đây chưa có trong contract, cần PR trước khi code controller.
+Mọi endpoint admin dùng Bearer JWT và quyền `ADMIN`. Hai API GET đã bổ sung vào contract và triển khai controller trong EV2; thay đổi local cần được đưa vào PR của team.
 
 | API | Hành vi dự kiến |
 |---|---|
 | `POST /api/v1/admin/events` | Tạo `DRAFT`. Bắt buộc `title` không trắng và `category`; các trường khác theo schema đã duyệt. Mặc định giới hạn 10 vé mỗi đơn tại luồng tạo. |
 | `GET /api/v1/admin/events?q=&status=&category=&cursor=&limit=20` **(mới)** | Danh sách admin, gồm sự kiện nháp. Đề xuất sắp xếp `created_at DESC, id DESC`, cursor ổn định, limit 1–100. Response có `data`, `next_cursor`; mỗi dòng có ID, tên, loại, trạng thái, hai poster và thời gian cập nhật. |
 | `GET /api/v1/admin/events/{event_id}` **(mới)** | Đọc chi tiết để chỉnh sửa, gồm sự kiện nháp và các suất nháp. Không dùng `SearchService.getEvent`, vì API public chỉ trả sự kiện `PUBLISHED`. |
-| `PATCH /api/v1/admin/events/{event_id}` | Chỉ sửa trường gửi lên; không cập nhật layout, giá hoặc tồn kho qua endpoint thông tin chung. Quy tắc sửa sự kiện đã hủy/kết thúc cần ghi rõ trong contract. |
+| `PATCH /api/v1/admin/events/{event_id}` | Sửa trường khác null trên event DRAFT/PUBLISHED; không cập nhật layout, giá hoặc tồn kho. ENDED/CANCELLED trả 409 EVENT_LOCKED. |
 
-`EventInput` hiện dùng chung cho POST và PATCH; model sinh ra tự đặt `max_tickets_per_order = 10`. Vì vậy một PATCH chỉ sửa tên có thể vô tình đổi giới hạn vé đang là 4 thành 10. **Phải tách schema tạo và schema patch, hoặc bỏ default khỏi schema patch**, trước khi viết logic cập nhật. Không xử lý bằng sửa file trong `target/generated-sources`.
+EV2 dùng `EventCreateInput` cho POST (default giới hạn 10), `EventPatchInput` cho PATCH (không default), còn `EventInput` chứa các trường chung cho response. Test xác nhận PATCH chỉ sửa tên vẫn giữ giới hạn 4. Không sửa file sinh trong `target/generated-sources`.
 
-Semantics `null` để xóa các trường tùy chọn như mô tả/poster cũng cần mô tả trong PR; phân biệt với trường không được gửi. Không tự coi `null` là lệnh xóa khi contract chưa cho phép.
+PATCH quy định trường không gửi hoặc null giữ nguyên; không hỗ trợ xóa giá trị bằng null. `attributes` khác null thay toàn bộ object; mô tả rỗng và object thuộc tính rỗng được phép. Body không có giá trị cập nhật là no-op, không đổi timestamp hoặc cache.
 
 Ví dụ body tạo nháp, với URL minh họa:
 
@@ -164,8 +164,8 @@ Luồng kiểm tra EV2 quan trọng: tạo nháp với giới hạn 4 → lấy 
 
 ## 7. Điểm dữ liệu/tích hợp còn cần chốt
 
-1. **Poster và dữ liệu cũ:** thứ tự fallback một poster trong response public; backfill hai cột mới từ cột cũ; thời điểm ngừng dùng `poster_url`. Phần giữ hai poster đã được Luân chốt.
-2. **`age_limit`:** giá trị cho mọi độ tuổi, null/missing và giới hạn hợp lệ; đây là metadata sự kiện hay có yêu cầu kiểm tra tuổi khi mua. Contract hiện chưa định nghĩa đủ để tự thêm quy tắc kiểm tra tuổi người mua.
+1. **Poster public:** backfill đã xong trong EV2; còn thứ tự fallback trong response một poster và thời điểm chuyển reader khỏi `poster_url`.
+2. **`age_limit`:** EV2 chỉ lưu metadata không âm, có thể chưa khai báo; xác minh tuổi khi mua là yêu cầu riêng, chưa thuộc EV2.
 3. **Tồn kho:** method của Danh, tính idempotent, xử lý tồn kho đã tạo lúc nháp và hướng phụ thuộc module.
 4. **CityCode:** ba mã đang có là HCM/HN/DN; quy tắc với địa điểm ngoài ba mã, đặc biệt SVG Thiên Trường. Mã `HN` trong bài CP7 chỉ là fixture, không phải quyết định địa lý.
 5. **Giá theo suất:** đợt hiện tại giữ `price_tier`/`zone_price` theo event như contract. Nếu mở rộng giá khác nhau giữa các suất dùng cùng layout, phải có thiết kế/schema/contract riêng.
@@ -186,8 +186,8 @@ Luồng kiểm tra EV2 quan trọng: tạo nháp với giới hạn 4 → lấy 
 
 Tài liệu bàn giao này không tự gửi tin nhắn cho Đức/Danh và không khẳng định các bên đã duyệt hoặc triển khai những đầu việc còn mở.
 
-## 9. Kiểm tra nền trước khi triển khai
+## 9. Kiểm tra nền trước khi triển khai (lịch sử)
 
 `mvnw verify` hoàn tất **14:04:33 ngày 12/11/2026 (UTC+07)**: `BUILD SUCCESS`, **419 test qua, 0 failure, 0 error, 0 skipped**, gồm `ModularityTest`. Log ở `target/event-management-baseline-verify.log`. Ví dụ JSON trong tài liệu đã được kiểm tra đọc được và dùng hai URL poster riêng. `git diff --check` không báo lỗi.
 
-Đây là kết quả của backend hiện tại và phần CP7 chưa commit, không phải bằng chứng API sự kiện EV2–EV7 đã triển khai. Trong bước lập kế hoạch EV1 này chưa sửa OpenAPI, thêm migration hoặc sửa code nghiệp vụ sự kiện; bản thiết kế là đầu vào cho PR contract và phối hợp module. Việc tạo nhánh và cập nhật kế hoạch không thay đổi source đã được kiểm tra trong lượt verify trên.
+Đây là kết quả ở thời điểm lập kế hoạch, không phải bằng chứng nghiệm thu các API EV2 mới. Kết quả triển khai hiện tại được ghi riêng tại [bàn giao EV2](event-management-ev2.md).
