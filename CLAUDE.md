@@ -2,6 +2,7 @@
 
 File này là quy tắc bắt buộc khi viết code trong repo. Đọc hết trước khi sửa bất kỳ file nào.
 Thiết kế hệ thống: đọc `docs/architecture.html` (C4, ERD, sequence 5a–5e, state machine, bảng mã lỗi, sự kiện SSE). Bản online mới nhất: https://claude.ai/artifact/5RTS81Ssp79nLF9DxVCUwj. Khi code và tài liệu mâu thuẫn, hỏi lại, không tự đoán.
+Thiết kế chi tiết theo module: `docs/search.html` (search).
 
 ## 1. Dự án
 
@@ -111,10 +112,14 @@ Quy tắc:
 | 409 | ORDER_STATE_INVALID | Sai trạng thái đơn |
 | 409 | HOLD_EXPIRED | Đơn quá hạn giữ ghế |
 | 409 | IDEMPOTENCY_CONFLICT | Trùng Idempotency-Key, khác body |
+| 409 | HALL_NAME_TAKEN | Tên hall đã tồn tại trong cùng sân |
+| 415 | UNSUPPORTED_MEDIA_TYPE | Tệp tải lên có định dạng không được hỗ trợ |
+| 422 | INVALID_SEAT_LAYOUT | SVG không đọc được, vi phạm quy ước nhập sơ đồ sân, hoặc sơ đồ chưa được publish hay không thuộc hall đã chọn |
 | 422 | PROFILE_REQUIRED | Chưa có hồ sơ người mua |
 | 422 | MAX_TICKETS_EXCEEDED | Vượt số vé tối đa mỗi đơn |
 | 423 | ACCOUNT_LOCKED | Sai mật khẩu quá số lần |
 | 429 | RATE_LIMITED | Gọi quá nhanh |
+| 503 | SERVICE_UNAVAILABLE | Dịch vụ phụ thuộc tạm thời không khả dụng |
 
 - `Idempotency-Key` bắt buộc cho: tạo hold, tạo payment, resolve-review. Cùng key + cùng body → trả kết quả cũ; khác body → 409.
 - Phân trang bằng cursor: `?cursor=&limit=20` → `{ data, next_cursor }`.

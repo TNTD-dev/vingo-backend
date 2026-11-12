@@ -47,6 +47,7 @@ public class SecurityConfig {
                                 API + "/auth/login", API + "/auth/google", API + "/auth/refresh",
                                 API + "/auth/password/forgot", API + "/auth/password/reset").permitAll()
                         .requestMatchers(HttpMethod.GET,
+                                API + "/auth/google", API + "/auth/oauth2/callback/google",
                                 API + "/events", API + "/events/*", API + "/events/*/showtimes",
                                 API + "/showtimes/*/seatmap", API + "/showtimes/*/availability",
                                 API + "/payments/vnpay/ipn", API + "/payments/vnpay/return").permitAll()
@@ -54,6 +55,8 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(API + "/admin/**").hasRole(Role.ADMIN.name())
+                        // soát vé: chỉ ADMIN; khi có vai trò nhân viên soát vé thì thêm vào đây
+                        .requestMatchers(HttpMethod.POST, API + "/checkins").hasRole(Role.ADMIN.name())
                         .requestMatchers(API + "/**").hasAnyRole(Role.BUYER.name(), Role.ADMIN.name())
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(o -> o

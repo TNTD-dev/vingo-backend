@@ -314,7 +314,13 @@ Lưu ý: trang return của VNPay **chỉ để hiển thị**. Trạng thái đ
 | `DB_USER`, `DB_PASSWORD` | `vingo` / `vingo` | |
 | `REDIS_URL` | `redis://localhost:6379` | Cache đọc + rate limit |
 | `JWT_SECRET` | (chuỗi ngẫu nhiên ≥ 32 byte) | Ký access token |
-| `GOOGLE_CLIENT_ID` | `xxx.apps.googleusercontent.com` | Xác thực đăng nhập Google |
+| `GOOGLE_LOGIN_ENABLED` | `false` | Bật luồng đăng nhập Google |
+| `GOOGLE_CLIENT_ID` | `xxx.apps.googleusercontent.com` | OAuth client loại Web application |
+| `GOOGLE_CLIENT_SECRET` | (biến môi trường) | Đổi authorization code tại backend |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:8080/api/v1/auth/oauth2/callback/google` | URI callback đăng ký trên Google Cloud |
+| `AUTH_FRONTEND_RETURN_URL` | `http://localhost:3000/auth/google` | Trang web nhận kết quả và origin được phép refresh |
+| `AUTH_SECURE_COOKIES` | `true` (`false` ở profile local) | Bật cờ Secure trên cookie phiên |
+| `AUTH_REFRESH_TOKEN_TTL` | `P30D` | Thời hạn tối đa của phiên |
 | `VNPAY_TMN_CODE` | (từ email sandbox) | Mã website VNPay |
 | `VNPAY_HASH_SECRET` | (từ email sandbox) | Khoá ký HMAC-SHA512 |
 | `VNPAY_PAY_URL` | `https://sandbox.vnpayment.vn/paymentv2/vpcpay.html` | Trang thanh toán |
@@ -327,6 +333,42 @@ Lưu ý: trang return của VNPay **chỉ để hiển thị**. Trạng thái đ
 Không commit `.env*` (trừ `.env.example`). Secret production lưu trong GitHub Secrets.
 
 ---
+
+### Đăng nhập Google trên máy local
+
+Xem [tài liệu triển khai và sơ đồ sequence Google OAuth2](docs/google-oauth2.md) để biết luồng callback, quy tắc tài khoản và cách Vingo cấp phiên.
+
+1. Thêm `GOOGLE_LOGIN_ENABLED=true`, `GOOGLE_CLIENT_ID` và `GOOGLE_CLIENT_SECRET` vào `.env.local`. Đăng ký `GOOGLE_REDIRECT_URI` trong **Authorized redirect URIs** của Google Cloud.
+2. Chạy backend với profile `api,local`. Mở `http://localhost:8080/api/v1/auth/google` để bắt đầu.
+3. Trang web cấu hình qua `AUTH_FRONTEND_RETURN_URL` nhận tham số `google_login`. Với `created` hoặc `success`, gọi `POST /api/v1/auth/refresh` không có body với `credentials: 'include'`. Hiển thị thông báo tạo tài khoản khi kết quả là `created`. Với `email_taken`, hướng dẫn người dùng đăng nhập bằng phương thức Vingo hiện có.
+
+Frontend và API cần cùng site để trình duyệt gửi cookie `SameSite=Lax`. Khi deploy, cấu hình URL HTTPS cho callback và trang web.
+
+#### Kiểm thử Google OAuth2
+
+Chạy từ PowerShell khi Docker Desktop đang hoạt động. Test tích hợp dùng PostgreSQL 18 qua Testcontainers và mô phỏng danh tính Google đã được Spring xác thực, nên không cần Client Secret thật.
+
+```powershell
+.\mvnw.cmd "-Dtest=GoogleLoginServiceTest" test
+.\mvnw.cmd "-Dtest=GoogleLoginIntegrationTest" test
+.\mvnw.cmd verify
+```
+
+Để thử với tài khoản Google thật, chạy PostgreSQL và Redis local rồi khởi động API:
+
+```powershell
+docker compose -f deploy/compose.dev.yaml up -d
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=api,local"
+```
+
+Mở `http://localhost:8080/api/v1/auth/google` và đăng nhập bằng một tài khoản Google có email chưa dùng trong Vingo. Lần đầu, trình duyệt về trang web với `google_login=created`. Mở lại URL bắt đầu với cùng tài khoản Google để kiểm tra `google_login=success`. Web gọi refresh để nhận `user.id`, `user.avatar_url` nếu có và access token. `user.id` phải giống nhau qua hai lần đăng nhập.
+
+| Triệu chứng | Kiểm tra |
+|---|---|
+| Google báo `redirect_uri_mismatch` | URI đăng ký trên Google Cloud phải trùng scheme, host, port và path trong `GOOGLE_REDIRECT_URI`. |
+| API trả `404` ở trang bắt đầu | Kiểm tra `GOOGLE_LOGIN_ENABLED=true` và profile `api,local`. |
+| Callback chuyển về với `google_login=failed` | Bắt đầu lại từ `/api/v1/auth/google`. Callback cần `code`, `state` và cookie do chính lượt đăng nhập đó tạo. |
+| Refresh trả `401` hoặc `403` | Kiểm tra cookie, `credentials: 'include'` và origin của web. Dùng nhất quán `localhost` cho API và web khi chạy local. |
 
 ## Deploy
 

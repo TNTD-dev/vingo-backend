@@ -14,9 +14,10 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # Chỉ review PR vào develop. PR develop → main chỉ đưa lại các commit đã review,
+    # review lại diff lớn đó chỉ sinh comment trùng.
     base_branches:
       - develop
-      - main
   path_filters:
     - "!target/**"
     - "!mvnw"

@@ -158,14 +158,48 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TokenPair' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      operationId: startGoogleLogin
+      tags: [Auth]
+      summary: Bắt đầu đăng nhập Google
+      description: Mở đường dẫn bằng trình duyệt để chuyển tới Google. Google sẽ gọi callback đã đăng ký.
+      security: []
+      responses:
+        '302': { description: Chuyển hướng tới Google }
+        '404': { $ref: '#/components/responses/GoogleLoginDisabled' }
+        '429':
+          description: Vượt giới hạn bắt đầu đăng nhập Google theo IP
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Gọi quá nhanh, status: 429, code: RATE_LIMITED, detail: Thử lại sau 20 giây }
+        '503':
+          description: Kho giới hạn tần suất tạm thời không khả dụng
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dịch vụ tạm thời không khả dụng, status: 503, code: SERVICE_UNAVAILABLE, detail: Tạm thời không thể bắt đầu đăng nhập Google }
+  /auth/oauth2/callback/google:
+    get:
+      operationId: completeGoogleLogin
+      tags: [Auth]
+      summary: Nhận callback từ Google
+      description: Spring Security xử lý callback. Thành công đặt cookie refresh HttpOnly và chuyển về web với google_login=created hoặc google_login=success. Thất bại chuyển về web với google_login=failed hoặc google_login=email_taken.
+      security: []
+      responses:
+        '302': { description: Chuyển hướng về web }
+        '404': { $ref: '#/components/responses/GoogleLoginDisabled' }
   /auth/refresh:
     post:
       operationId: refreshToken
       tags: [Auth]
-      summary: Đổi refresh token lấy cặp token mới (token cũ bị thu hồi)
+      summary: Cấp access token và xoay vòng refresh token
+      description: Trình duyệt gửi cookie refresh và Origin của web. Client khác có thể gửi refresh_token trong JSON. Với cookie, refresh token mới chỉ được gửi qua Set-Cookie.
       security: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -178,13 +212,31 @@ paths:
           description: Thành công
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: '#/components/schemas/RefreshResult' }
+        '400':
+          description: Body JSON thiếu refresh_token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Có trường không hợp lệ }
+        '401':
+          description: Thiếu refresh token hoặc refresh token không hợp lệ
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Refresh token không hợp lệ hoặc đã hết hạn }
+        '403':
+          description: Origin gửi cookie refresh không được phép
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Không có quyền, status: 403, code: FORBIDDEN, detail: Origin không được phép làm mới phiên }
   /auth/logout:
     post:
       operationId: logout
       tags: [Auth]
       summary: Đăng xuất phiên hiện tại hoặc tất cả thiết bị
+      description: Thu hồi refresh token của phiên trong access token, hoặc tất cả phiên của user. Xoá cookie refresh trên trình duyệt.
       requestBody:
         content:
           application/json:
@@ -194,6 +246,12 @@ paths:
                 all_devices: { type: boolean, default: false }
       responses:
         '204': { description: Đã thu hồi phiên }
+        '401':
+          description: Thiếu hoặc sai bearer access token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Thiếu hoặc sai access token }
   /auth/password/forgot:
     post:
       operationId: forgotPassword
@@ -324,16 +382,42 @@ paths:
       operationId: searchEvents
       tags: [Search]
       summary: Tìm kiếm sự kiện đã PUBLISHED
+      description: |
+        Gọi khi người dùng muốn tìm sự kiện theo từ khoá, loại, thành phố, khoảng thời gian hoặc khoảng giá. Trả danh sách `EventSummary` phân trang bằng cursor.
+
+        Phạm vi kết quả: chỉ sự kiện PUBLISHED còn ít nhất một suất SCHEDULED chưa diễn ra. Tìm theo `q` chịu được gõ không dấu và gõ sai chính tả. Nếu không sự kiện nào khớp đủ mọi từ trong `q`, trả các sự kiện khớp một phần, xếp theo độ khớp.
+        `venue_name`, `city`, `first_starts_at` lấy từ suất sớm nhất thoả bộ lọc. `price_from` là giá thấp nhất trong các hạng vé đã gán khu.
+
+        Sắp xếp (`sort`): không truyền thì có `q` dùng `relevance`, không có `q` dùng `starts_at`. `relevance` mà không có `q` trả 400.
+        `popularity` = tổng vé đã bán của các suất sắp tới.
+
+        Cursor gắn với bộ lọc và `sort` đã dùng khi sinh ra nó. Dùng cursor với bộ lọc hoặc sort khác trả 400 `VALIDATION_ERROR`.
+
+        `city` là mã thành phố (`CityCode`), không phải tên. Người dùng nói "Sài Gòn" thì agent tự đổi sang `HCM` theo mô tả của `CityCode`.
+
+        Ví dụ lỗi 400:
+        ```json
+        { "title": "Tham số không hợp lệ", "status": 400, "code": "VALIDATION_ERROR",
+          "detail": "sort=relevance cần có tham số q",
+          "errors": [ { "field": "sort", "message": "relevance chỉ dùng khi có q" } ] }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters:
-        - { name: q, in: query, schema: { type: string } }
+        - name: q
+          in: query
+          description: "Tên sự kiện, nghệ sĩ hoặc đội. Không đưa loại sự kiện (dùng `category`), thành phố (dùng `city`) hay thời gian (dùng `from`/`to`) vào đây. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`."
+          schema: { type: string }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
-        - { name: city, in: query, schema: { type: string } }
+        - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
-        - { name: price_min, in: query, schema: { type: integer } }
-        - { name: price_max, in: query, schema: { type: integer } }
-        - { name: sort, in: query, schema: { type: string, enum: [starts_at, price, popularity], default: starts_at } }
+        - { name: price_min, in: query, schema: { type: integer, format: int64 } }
+        - { name: price_max, in: query, schema: { type: integer, format: int64 } }
+        - { name: sort, in: query, schema: { type: string, enum: [relevance, starts_at, price, popularity] } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -349,11 +433,25 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/EventSummary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /events/{event_id}:
     get:
       operationId: getEvent
       tags: [Search]
       summary: Chi tiết sự kiện, địa điểm và bảng giá
+      description: |
+        Gọi khi đã biết `event_id` (lấy từ `searchEvents`) và cần mô tả, địa điểm, bảng giá các hạng vé và các suất. Trả `EventDetail`.
+        Sự kiện không tồn tại hoặc chưa PUBLISHED trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy sự kiện", "status": 404, "code": "NOT_FOUND", "detail": "Sự kiện không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
@@ -363,11 +461,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /events/{event_id}/showtimes:
     get:
       operationId: listEventShowtimes
       tags: [Search]
       summary: Danh sách suất của sự kiện
+      description: |
+        Gọi khi cần liệt kê các suất của một sự kiện để người dùng chọn ngày giờ. Trả `data` là danh sách `Showtime` kèm `status` tính theo thời điểm gọi.
+        Sự kiện không tồn tại trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy sự kiện", "status": 404, "code": "NOT_FOUND", "detail": "Sự kiện không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
@@ -381,14 +492,33 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Showtime' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/seatmap:
     get:
       operationId: getSeatmap
       tags: [Search]
       summary: Sơ đồ ghế theo suất kèm hạng, giá và trạng thái
-      description: Ghế HELD đã quá held_until được trả về là AVAILABLE. Có thể cache vài giây.
+      description: |
+        Gọi khi người dùng cần chọn ghế cụ thể. Trả sơ đồ ghế của suất kèm hạng vé, giá và trạng thái từng ghế. Có thể cache vài giây.
+
+        Không truyền `zone_id` thì trả mọi khu; truyền `zone_id` thì chỉ trả khu đó. `zone_id` không thuộc sơ đồ của suất trả 404.
+        Ghế HELD đã quá `held_until` được trả là AVAILABLE. Ghế thiếu dữ liệu trạng thái được trả là BLOCKED.
+
+        Gợi ý cho agent: gọi `getAvailability` trước để biết khu nào còn chỗ, rồi gọi seatmap theo từng khu bằng `zone_id` để giảm dữ liệu.
+
+        Ví dụ lỗi 404 (suất hoặc khu không tồn tại):
+        ```json
+        { "title": "Không tìm thấy khu", "status": 404, "code": "NOT_FOUND", "detail": "zone_id không thuộc sơ đồ của suất" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
-      parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - { name: zone_id, in: query, required: false, description: 'Chỉ trả khu này; bỏ trống để trả mọi khu', schema: { type: string, format: uuid } }
       responses:
         '200':
           description: OK
@@ -396,11 +526,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SeatMap' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/availability:
     get:
       operationId: getAvailability
       tags: [Search]
       summary: Số chỗ còn theo khu và hạng vé
+      description: |
+        Gọi khi cần biết suất còn chỗ không và khu/hạng nào còn bao nhiêu chỗ, trước khi chọn ghế hoặc tạo hold. Nhẹ hơn `getSeatmap`.
+        Trả `sold_out` và danh sách khu kèm hạng vé. Suất không tồn tại trả 404.
+
+        Ví dụ lỗi 404:
+        ```json
+        { "title": "Không tìm thấy suất", "status": 404, "code": "NOT_FOUND", "detail": "Suất không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
       security: []
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       responses:
@@ -423,6 +566,8 @@ paths:
                         name: { type: string }
                         tier: { $ref: '#/components/schemas/PriceTier' }
                         seats_left: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   # ------------------------------------------------------------------ Booking
   /showtimes/{showtime_id}/holds:
@@ -433,6 +578,9 @@ paths:
       description: |
         Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
         Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
+        Nếu khách đã có đơn PENDING còn hạn cho suất này → 409 ORDER_STATE_INVALID; muốn đổi ghế thì huỷ rồi giữ lại.
+        Vượt max_tickets_per_order của sự kiện (tính cả ghế cặp) → 422 MAX_TICKETS_EXCEEDED.
+        Suất không tồn tại hoặc DRAFT → 404 NOT_FOUND.
       parameters:
         - $ref: '#/components/parameters/ShowtimeId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -448,8 +596,13 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, IDEMPOTENCY_CONFLICT
+          description: |
+            SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, IDEMPOTENCY_CONFLICT.
+            taken_seat_ids: ghế vừa bị giữ/bán.
+            suggested_seat_ids: gợi ý ghế cùng khu, cùng số lượng, đang trống.
+            seats_left: số chỗ còn lại của khu đứng (integer).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -462,6 +615,13 @@ paths:
                     code: SEAT_TAKEN
                     taken_seat_ids: ['5b0d...']
                     suggested_seat_ids: ['9a1c...', '9a1d...']
+                notEnoughStock:
+                  value:
+                    type: https://vingo.example/errors/not-enough-stock
+                    title: Khu đứng không đủ chỗ
+                    status: 409
+                    code: NOT_ENOUGH_STOCK
+                    seats_left: 2
         '422':
           description: MAX_TICKETS_EXCEEDED
           content:
@@ -509,6 +669,7 @@ paths:
       operationId: cancelOrder
       tags: [Booking]
       summary: Huỷ đơn PENDING và nhả ghế (đổi ghế = huỷ + giữ lại)
+      description: Đơn không tồn tại hoặc của người khác → 404 NOT_FOUND.
       parameters: [ { $ref: '#/components/parameters/OrderId' } ]
       responses:
         '200':
@@ -516,6 +677,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: ORDER_STATE_INVALID (đơn đã PAID hoặc EXPIRED)
           content:
@@ -582,7 +744,7 @@ paths:
       security: []
       parameters:
         - { name: vnp_TxnRef, in: query, required: true, schema: { type: string } }
-        - { name: vnp_Amount, in: query, required: true, schema: { type: integer } }
+        - { name: vnp_Amount, in: query, required: true, schema: { type: integer, format: int64 } }
         - { name: vnp_ResponseCode, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionStatus, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionNo, in: query, schema: { type: string } }
@@ -679,7 +841,7 @@ paths:
       operationId: checkIn
       tags: [Check-in]
       summary: Quét QR tại cổng
-      description: Chỉ ADMIN. Khoá vé theo qr_token, ISSUED và đúng suất → USED. Mọi lần quét đều được ghi checkin.
+      description: Chỉ ADMIN (sau này có thể thêm vai trò nhân viên soát vé). Khoá vé theo qr_token; ISSUED và đúng suất → USED. Mọi lần quét đều ghi checkin; qr_token không tồn tại → 404, không ghi checkin.
       requestBody:
         required: true
         content:
@@ -698,10 +860,43 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
         '409':
-          description: ALREADY_USED, TICKET_VOID, WRONG_SHOWTIME
+          description: |
+            Từ chối quét, body là CheckinResult (không phải Problem):
+            ALREADY_USED: vé đã quét trước đó, first_used_at là lần quét đầu.
+            TICKET_VOID: vé đã huỷ.
+            WRONG_SHOWTIME: vé thuộc suất khác, trạng thái vé không đổi.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
+              examples:
+                alreadyUsed:
+                  value:
+                    result: ALREADY_USED
+                    ticket_code: K7M2QX9P
+                    zone: VIP
+                    row: B
+                    number: 12
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: '2026-12-20T12:05:41Z'
+                ticketVoid:
+                  value:
+                    result: TICKET_VOID
+                    ticket_code: H3WR8TNA
+                    zone: GA
+                    row: null
+                    number: null
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: null
+                wrongShowtime:
+                  value:
+                    result: WRONG_SHOWTIME
+                    ticket_code: P9DXE4LC
+                    zone: VIP
+                    row: C
+                    number: 3
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: null
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /admin/showtimes/{showtime_id}/checkins:
     get:
@@ -834,27 +1029,31 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Venue' }
+        '400': { $ref: '#/components/responses/ValidationError' }
     post:
       operationId: createVenue
       tags: [Admin Catalog]
       summary: Tạo sân
+      description: Admin tạo hồ sơ sân với tên, loại, địa chỉ và mã tỉnh hoặc thành phố.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/VenueInput' }
+            schema: { $ref: '#/components/schemas/VenueCreateInput' }
       responses:
         '201':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Venue' }
+        '400': { $ref: '#/components/responses/ValidationError' }
   /admin/venues/{venue_id}:
     parameters: [ { $ref: '#/components/parameters/VenueId' } ]
     patch:
       operationId: updateVenue
       tags: [Admin Catalog]
       summary: Sửa sân
+      description: Cập nhật các trường được gửi của sân đang hoạt động. Trả 400 VALIDATION_ERROR khi dữ liệu không hợp lệ, 404 NOT_FOUND khi sân không tồn tại hoặc đã ngừng sử dụng.
       requestBody:
         required: true
         content:
@@ -866,22 +1065,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Venue' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       operationId: deleteVenue
       tags: [Admin Catalog]
       summary: Ngừng sử dụng sân (soft-delete)
+      description: Ngừng sử dụng sân bằng xóa mềm. Trả 404 NOT_FOUND nếu sân không tồn tại hoặc đã bị xóa; trả 409 VENUE_IN_USE nếu còn suất DRAFT hoặc SCHEDULED chưa kết thúc.
       responses:
         '204': { description: Đã ẩn }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Sân còn suất chưa kết thúc (VENUE_IN_USE)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sân đang được sử dụng
+                status: 409
+                code: VENUE_IN_USE
+                detail: Sân còn suất diễn DRAFT hoặc SCHEDULED chưa kết thúc.
   /admin/venues/{venue_id}/halls:
     post:
       operationId: createHall
       tags: [Admin Catalog]
       summary: Thêm khu vực (hall) cho sân
+      description: Tạo hall trong sân đang hoạt động. Trả 400 VALIDATION_ERROR nếu tên không hợp lệ, 404 NOT_FOUND nếu sân không tồn tại hoặc đã ngừng sử dụng, 409 HALL_NAME_TAKEN nếu tên đã có trong sân.
       parameters: [ { $ref: '#/components/parameters/VenueId' } ]
       requestBody:
         required: true
@@ -898,7 +1107,57 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Hall' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Tên hall đã tồn tại trong cùng sân (HALL_NAME_TAKEN).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Tên đã bị trùng
+                status: 409
+                code: HALL_NAME_TAKEN
+                detail: Sân này đã có hall tên Sân chính.
   /admin/halls/{hall_id}/seat-layouts:
+    get:
+      operationId: listSeatLayouts
+      tags: [Admin Catalog]
+      summary: Liệt kê phiên bản sơ đồ của hall
+      description: Trả các phiên bản sơ đồ của hall, mới nhất trước.
+      parameters:
+        - name: hall_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Danh sách phiên bản
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayoutPage' }
+        '400':
+          description: Dữ liệu không hợp lệ
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Cursor sơ đồ không hợp lệ. Hãy tải lại trang đầu và dùng next_cursor do API trả về.
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy hall thuộc sân đang hoạt động. Hãy chọn lại hall.
     post:
       operationId: createSeatLayout
       tags: [Admin Catalog]
@@ -916,11 +1175,215 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SeatLayout' }
+  /admin/halls/{hall_id}/seat-layouts/import:
+    post:
+      operationId: importSeatLayoutSvg
+      tags: [Admin Catalog]
+      summary: Nhập sơ đồ sân từ SVG
+      description: >
+        Giới hạn file 10 MiB và tổng request 11 MiB, áp dụng cho mọi profile.
+        Nhập một SVG xuất từ Figma theo quy ước v1.
+        File hợp lệ tạo một phiên bản sơ đồ DRAFT thuộc hall.
+      parameters:
+        - name: hall_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+            encoding:
+              file: { contentType: image/svg+xml }
+      responses:
+        '201':
+          description: Đã tạo bản nháp
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayout' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413':
+          description: File vượt 10 MiB hoặc tổng request multipart vượt 11 MiB.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Content Too Large
+                status: 413
+                code: VALIDATION_ERROR
+                detail: Maximum upload size exceeded
+        '415':
+          description: Định dạng file không được hỗ trợ
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Định dạng file không được hỗ trợ
+                status: 415
+                code: UNSUPPORTED_MEDIA_TYPE
+        '422':
+          description: SVG không hợp lệ theo quy ước nhập sơ đồ
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/SeatLayoutImportProblem' }
+              examples:
+                duplicateSeat:
+                  summary: Trùng số ghế trong cùng hàng
+                  value:
+                    title: Sơ đồ sân không hợp lệ
+                    status: 422
+                    code: INVALID_SEAT_LAYOUT
+                    issues:
+                      - layer_id: SEAT__B15-T1__N__29
+                        reason: DUPLICATE_SEAT
+                        message: Ghế 29 bị trùng trong hàng N của khu B15-T1.
+                malformedXml:
+                  summary: SVG có XML bị lỗi
+                  value:
+                    title: Sơ đồ sân không hợp lệ
+                    status: 422
+                    code: INVALID_SEAT_LAYOUT
+                    issues:
+                      - reason: MALFORMED_XML
+                        message: Không đọc được cấu trúc XML. Hãy xuất lại SVG từ Figma.
+
+  /admin/seat-layouts/{layout_id}:
+    parameters:
+      - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getSeatLayout
+      tags: [Admin Catalog]
+      summary: Đọc tổng quan sơ đồ sân
+      description: Trả thông tin phiên bản, hệ tọa độ và danh sách khu để dựng bản đồ và mini map.
+      responses:
+        '200':
+          description: Tổng quan sơ đồ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayoutOverview' }
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy phiên bản sơ đồ sân. Hãy tải lại danh sách sơ đồ của hall.
+
+  /admin/seat-layouts/{layout_id}/svg:
+    parameters:
+      - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getSeatLayoutSvg
+      tags: [Admin Catalog]
+      summary: Đọc SVG toàn sân
+      description: Trả SVG đã chuẩn hóa của phiên bản. Layout không có SVG trả 404.
+      responses:
+        '200':
+          description: Nội dung SVG
+          content:
+            image/svg+xml:
+              schema: { type: string, format: binary }
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy SVG của phiên bản sơ đồ. Hãy chọn phiên bản đã nhập từ SVG.
+
+  /admin/seat-layouts/{layout_id}/zones/{zone_id}:
+    parameters:
+      - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: zone_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getSeatLayoutZone
+      tags: [Admin Catalog]
+      summary: Đọc chi tiết khu
+      description: Trả hàng ghế hoặc sức chứa. Khu phải thuộc đúng phiên bản trong URL.
+      responses:
+        '200':
+          description: Chi tiết khu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayoutZoneDetail' }
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy khu trong phiên bản sơ đồ đã chọn. Hãy lấy zone_id từ tổng quan của layout này.
+
+  /admin/seat-layouts/{layout_id}/zones.csv:
+    parameters:
+      - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: exportSeatLayoutZones
+      tags: [Admin Catalog]
+      summary: Tải danh sách khu dưới dạng CSV
+      description: Xuất CSV UTF-8 với các cột zone_code, label, stand_code, level, kind, capacity, svg_id.
+      responses:
+        '200':
+          description: Danh sách khu
+          content:
+            text/csv:
+              schema: { type: string }
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy sơ đồ để xuất danh sách khu. Hãy chọn lại layout_id từ danh sách phiên bản.
+
+  /admin/seat-layouts/{layout_id}/seats.csv:
+    parameters:
+      - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: exportSeatLayoutSeats
+      tags: [Admin Catalog]
+      summary: Tải danh sách ghế dưới dạng CSV
+      description: Xuất CSV UTF-8 với các cột zone_code, row_label, seat_number, x, y. Chỉ khu SEATED có dòng ghế.
+      responses:
+        '200':
+          description: Danh sách ghế
+          content:
+            text/csv:
+              schema: { type: string }
+        '404':
+          description: Không tìm thấy dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Không tìm thấy dữ liệu
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy sơ đồ để xuất danh sách ghế. Hãy chọn lại layout_id từ danh sách phiên bản.
   /admin/seat-layouts/{layout_id}/publish:
     post:
       operationId: publishSeatLayout
       tags: [Admin Catalog]
       summary: Khoá sơ đồ ghế (PUBLISHED, không sửa được nữa)
+      description: Chuyển phiên bản sơ đồ từ DRAFT sang PUBLISHED và ghi nhận thời điểm công bố. Gọi lại trên phiên bản đã PUBLISHED sẽ trả về cùng phiên bản và giữ nguyên published_at.
       parameters:
         - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -929,6 +1392,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SeatLayout' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /admin/events:
     post:
       operationId: createEvent
@@ -1038,6 +1502,7 @@ paths:
       operationId: createShowtime
       tags: [Admin Catalog]
       summary: Tạo suất
+      description: Tạo suất diễn gắn với hall_id và seat_layout_id đã PUBLISHED thuộc đúng hall đó.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
@@ -1050,11 +1515,24 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Showtime' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Sơ đồ sân chưa công bố hoặc không thuộc hall được chọn (INVALID_SEAT_LAYOUT)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sơ đồ sân không hợp lệ
+                status: 422
+                code: INVALID_SEAT_LAYOUT
+                detail: Sơ đồ sân phải ở trạng thái PUBLISHED và thuộc đúng hall đã chọn.
   /admin/showtimes/{showtime_id}:
     patch:
       operationId: updateShowtime
       tags: [Admin Catalog]
       summary: Sửa suất (chỉ trước sale_opens_at)
+      description: Cập nhật thông tin suất diễn trước thời điểm mở bán. Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1067,11 +1545,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Showtime' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: SHOWTIME_LOCKED
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Suất đã mở bán, không sửa được
+                status: 409
+                code: SHOWTIME_LOCKED
+                detail: Suất diễn đã mở bán, không thể chỉnh sửa.
+        '422':
+          description: Sơ đồ sân chưa công bố hoặc không thuộc hall được chọn (INVALID_SEAT_LAYOUT)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sơ đồ sân không hợp lệ
+                status: 422
+                code: INVALID_SEAT_LAYOUT
+                detail: Sơ đồ sân phải ở trạng thái PUBLISHED và thuộc đúng hall đã chọn.
   /admin/showtimes/{showtime_id}/cancel:
     post:
       operationId: cancelShowtime
@@ -1310,11 +1805,23 @@ paths:
       operationId: queryMetric
       tags: [Admin Reports]
       summary: Số liệu bán vé và check-in (dùng cho Admin Copilot)
+      description: |
+        Tính trên dữ liệu hiện tại; lọc thời gian theo [from,to), mỗi mốc có thể bỏ qua.
+        Nhóm day/hour theo UTC; tier/zone theo UUID hạng vé/khu vực.
+        tickets_sold là tổng quantity của đơn PAID, theo paid_at.
+        revenue là tổng quantity * unit_price của đơn PAID, theo paid_at, đơn vị VND.
+        checkins đếm các vé USED khác nhau của đơn PAID, theo lần quét OK đầu tiên.
+        fill_rate = 100 * tổng sold / tổng capacity, theo starts_at; mẫu bằng 0 trả 0.
+        group_by=none trả value; các nhóm khác trả series, nhóm không có dữ liệu trả [].
+        Ví dụ 400 khi from không trước to:
+        {"status":400,"code":"VALIDATION_ERROR","detail":"from must be earlier than to"}
+        Ví dụ 401 khi thiếu token: {"status":401,"code":"UNAUTHORIZED"}.
+        Ví dụ 403 khi người dùng không có vai trò ADMIN: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - name: metric
           in: query
           required: true
-          schema: { type: string, enum: [tickets_sold, revenue, fill_rate, sales_velocity, checkins] }
+          schema: { type: string, enum: [tickets_sold, revenue, fill_rate, checkins] }
         - { name: event_id, in: query, schema: { type: string, format: uuid } }
         - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
         - { name: price_tier_id, in: query, schema: { type: string, format: uuid } }
@@ -1326,7 +1833,10 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MetricResult' }
+                schema: { $ref: '#/components/schemas/MetricResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
 components:
   securitySchemes:
@@ -1384,6 +1894,12 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+    GoogleLoginDisabled:
+      description: Đăng nhập Google chưa được bật
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example: { title: Không tìm thấy, status: 404, code: NOT_FOUND, detail: Đăng nhập Google chưa được bật }
     RateLimited:
       description: RATE_LIMITED (kèm header Retry-After)
       headers:
@@ -1405,9 +1921,10 @@ components:
           type: string
           enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
                  EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
-                 SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
+                 SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
-                 VENUE_IN_USE, EVENT_LOCKED, EVENT_INCOMPLETE, SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
+                 VENUE_IN_USE, HALL_NAME_TAKEN, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, EVENT_LOCKED, EVENT_INCOMPLETE,
+                 SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
         errors:
           type: array
           description: Lỗi theo field (VALIDATION_ERROR)
@@ -1417,6 +1934,28 @@ components:
               field: { type: string }
               message: { type: string }
       additionalProperties: true
+    SeatLayoutImportProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [issues]
+          properties:
+            issues:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                required: [reason, message]
+                properties:
+                  layer_id:
+                    type: string
+                    description: ID layer trong SVG nếu xác định được.
+                  reason:
+                    type: string
+                    description: Mã nguyên nhân của lỗi, ví dụ DUPLICATE_SEAT.
+                  message:
+                    type: string
+                    description: Thông báo để admin biết cần sửa gì trong Figma.
     Page:
       type: object
       properties:
@@ -1444,6 +1983,14 @@ components:
         refresh_token: { type: string }
         expires_in: { type: integer, description: Giây }
         user: { $ref: '#/components/schemas/User' }
+    RefreshResult:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string, description: Chỉ có khi refresh token được gửi trong JSON }
+        expires_in: { type: integer, description: Giây }
+        user: { $ref: '#/components/schemas/User' }
     User:
       type: object
       properties:
@@ -1451,6 +1998,7 @@ components:
         email: { type: string, format: email }
         phone: { type: string }
         full_name: { type: string }
+        avatar_url: { type: string, format: uri }
         role: { type: string, enum: [BUYER, ADMIN] }
         status: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED] }
     BuyerProfile:
@@ -1461,6 +2009,14 @@ components:
         phone: { type: string }
         email: { type: string, format: email, description: Email nhận vé }
 
+    CityCode:
+      type: string
+      enum: [HCM, HN, DN]
+      description: |
+        Mã thành phố (danh sách tạm, catalog sẽ chốt). Backend không tự đổi tên sang mã; agent tự map tên người dùng nói sang mã:
+        HCM: TP. Hồ Chí Minh, Sài Gòn, HCMC;
+        HN: Hà Nội, Hanoi;
+        DN: Đà Nẵng, Da Nang.
     EventCategory: { type: string, enum: [FOOTBALL, CONCERT, THEATER, OTHER] }
     EventStatus: { type: string, enum: [DRAFT, PUBLISHED, ENDED, CANCELLED] }
     ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
@@ -1476,7 +2032,8 @@ components:
         name: { type: string }
         type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
         address: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
+        city_name: { type: string, description: Tên hiển thị của thành phố }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
@@ -1495,11 +2052,16 @@ components:
         name: { type: string }
         type: { type: string, enum: [STADIUM, THEATER, OUTDOOR] }
         address: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
         info: { type: object }
+    VenueCreateInput:
+      allOf:
+        - $ref: '#/components/schemas/VenueInput'
+        - type: object
+          required: [name, type, address, city]
     Hall:
       type: object
       properties:
@@ -1550,7 +2112,78 @@ components:
         status: { type: string, enum: [DRAFT, PUBLISHED] }
         zone_count: { type: integer }
         seat_count: { type: integer }
+        version: { type: integer, format: int64, minimum: 1 }
+        schema_version: { type: integer, minimum: 1 }
+        published_at: { type: string, format: date-time }
+    SeatLayoutBounds:
+      type: object
+      required: [x, y, width, height]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        width: { type: number, exclusiveMinimum: 0 }
+        height: { type: number, exclusiveMinimum: 0 }
 
+    SeatLayoutZone:
+      type: object
+      required: [id, code, label, kind, capacity]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        label: { type: string }
+        stand_code: { type: string }
+        level: { type: integer, minimum: 1 }
+        kind: { type: string, enum: [SEATED, STANDING] }
+        capacity: { type: integer, minimum: 0 }
+        svg_id: { type: string }
+        content_svg_id: { type: string }
+        pitch_side_svg_id: { type: string }
+        bounds: { $ref: '#/components/schemas/SeatLayoutBounds' }
+
+    SeatLayoutZoneDetail:
+      allOf:
+        - $ref: '#/components/schemas/SeatLayoutZone'
+        - type: object
+          properties:
+            rows:
+              type: array
+              description: Danh sách hàng của khu SEATED. Bỏ trường này với khu STANDING.
+              items:
+                type: object
+                required: [row_label, seats]
+                properties:
+                  row_label: { type: string }
+                  seats:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, number, x, y]
+                      properties:
+                        id: { type: string, format: uuid }
+                        number: { type: integer, minimum: 1 }
+                        x: { type: number }
+                        y: { type: number }
+
+    SeatLayoutOverview:
+      allOf:
+        - $ref: '#/components/schemas/SeatLayout'
+        - type: object
+          required: [zones]
+          properties:
+            view_box: { $ref: '#/components/schemas/SeatLayoutBounds' }
+            zones:
+              type: array
+              items: { $ref: '#/components/schemas/SeatLayoutZone' }
+
+    SeatLayoutPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/SeatLayout' }
     EventInput:
       type: object
       properties:
@@ -1572,9 +2205,10 @@ components:
         category: { $ref: '#/components/schemas/EventCategory' }
         poster_url: { type: string, format: uri }
         venue_name: { type: string }
-        city: { type: string }
+        city: { $ref: '#/components/schemas/CityCode' }
+        city_name: { type: string, description: Tên hiển thị của thành phố }
         first_starts_at: { type: string, format: date-time }
-        price_from: { type: integer }
+        price_from: { type: integer, format: int64 }
         on_sale: { type: boolean }
     EventDetail:
       allOf:
@@ -1596,7 +2230,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        price: { type: integer, minimum: 0 }
+        price: { type: integer, format: int64, minimum: 0 }
         color: { type: string, example: '#C8A2C8' }
     ShowtimeInput:
       type: object
@@ -1616,6 +2250,7 @@ components:
             event_id: { type: string, format: uuid }
             status: { $ref: '#/components/schemas/ShowtimeStatus' }
             sold_out: { type: boolean }
+            venue: { $ref: '#/components/schemas/Venue' }
     SeatMap:
       type: object
       properties:
@@ -1646,22 +2281,21 @@ components:
                     y: { type: number }
 
     HoldRequest:
-      oneOf:
-        - type: object
-          title: SeatedHold
-          required: [seat_ids]
-          properties:
-            seat_ids:
-              type: array
-              minItems: 1
-              maxItems: 20
-              items: { type: string, format: uuid }
-        - type: object
-          title: StandingHold
-          required: [zone_id, quantity]
-          properties:
-            zone_id: { type: string, format: uuid }
-            quantity: { type: integer, minimum: 1, maximum: 20 }
+      type: object
+      description: |
+        Gửi đúng một trong hai dạng: seat_ids cho khu ngồi hoặc zone_id + quantity cho khu đứng.
+        Gửi cả hai dạng, không gửi dạng nào, zone_id thiếu quantity hoặc quantity thiếu zone_id → 400 VALIDATION_ERROR.
+        seat_ids nếu gửi thì không được rỗng; service kiểm tra, rỗng → 400 VALIDATION_ERROR.
+        Ghế đôi tự giữ kèm ghế cặp.
+      properties:
+        seat_ids:
+          type: array
+          maxItems: 20
+          items: { type: string, format: uuid }
+        zone_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 20 }
+      example:
+        seat_ids: ['019a71b0-0000-7000-8000-000000000001']
     OrderItem:
       type: object
       properties:
@@ -1671,7 +2305,8 @@ components:
         number: { type: [integer, 'null'] }
         seat_id: { type: [string, 'null'], format: uuid }
         tier: { type: string }
-        unit_price: { type: integer }
+        unit_price: { type: integer, format: int64 }
+        quantity: { type: integer, minimum: 1, description: 'Số vé của dòng: ghế ngồi luôn 1, khu đứng là số chỗ đã giữ' }
     Order:
       type: object
       properties:
@@ -1683,7 +2318,7 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/OrderItem' }
-        total_amount: { type: integer }
+        total_amount: { type: integer, format: int64 }
         currency: { type: string, const: VND }
         expires_at: { type: string, format: date-time, description: Hạn giữ ghế khi PENDING }
         paid_at: { type: [string, 'null'], format: date-time }
@@ -1696,7 +2331,7 @@ components:
         id: { type: string, format: uuid }
         order_id: { type: string, format: uuid }
         txn_ref: { type: string, example: 8F3K2Q-1 }
-        amount: { type: integer }
+        amount: { type: integer, format: int64 }
         status: { $ref: '#/components/schemas/PaymentStatus' }
         payment_url: { type: string, format: uri }
         expires_at: { type: string, format: date-time }
@@ -1776,7 +2411,7 @@ components:
       type: object
       properties:
         metric: { type: string }
-        unit: { type: string, enum: [tickets, VND, percent, tickets_per_day, checkins] }
+        unit: { type: string, enum: [tickets, VND, percent, checkins] }
         filters: { type: object, description: 'Bộ lọc đã áp dụng, để hiển thị cho admin' }
         computed_at: { type: string, format: date-time }
         value: { type: number, description: Khi group_by = none }
