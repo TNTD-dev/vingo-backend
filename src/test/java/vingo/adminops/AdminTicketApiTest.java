@@ -236,6 +236,22 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     }
 
     @Test
+    void buyerResend_countsFailedRequestsTowardHourlyLimit() {
+        UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
+        var tickets = ticketIds(order);
+        jdbc.sql("UPDATE ticket SET status = 'USED', used_at = :now WHERE id = :id")
+                .param("now", catalog.now()).param("id", tickets.getLast()).update();
+
+        // Lần gọi lỗi (404, 409) vẫn bị tính để không ai dò id vé hay spam bằng request sai được vô hạn.
+        problem(buyerResend(buyerToken, UUID.randomUUID()), 404, "NOT_FOUND");
+        problem(buyerResend(buyerToken, UUID.randomUUID()), 404, "NOT_FOUND");
+        problem(buyerResend(buyerToken, tickets.getLast()), 409, "TICKET_USED");
+
+        problem(buyerResend(buyerToken, tickets.getFirst()).expectHeader().exists("Retry-After"), 429, "RATE_LIMITED");
+        assertThat(outbox()).isEmpty();
+    }
+
+    @Test
     void buyerResend_fourthRequestPerUserWithinHourReturns429EvenAcrossTickets() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
         var tickets = ticketIds(order);
