@@ -6,22 +6,35 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.jayway.jsonpath.JsonPath;
 
 import vingo.shared.security.Role;
+import vingo.catalog.VenueService;
 import vingo.support.IntegrationTest;
 
 class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private VenueService venues;
 
     private static final String IMPORT =
             "/api/v1/admin/halls/{hall_id}/seat-layouts/import";
@@ -365,6 +378,22 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .jsonPath("$.id").isEqualTo(layoutV2.toString())
                 .jsonPath("$.status").isEqualTo("PUBLISHED");
 
+        assertInventory(showtimeA, layoutV1);
+        assertInventory(showtimeB, layoutV2);
+        client.patch().uri(UPDATE_SHOWTIME, showtimeA)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("seat_layout_id", layoutV2))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.seat_layout_id").isEqualTo(layoutV2.toString());
+        assertInventory(showtimeA, layoutV2);
+        assertInventory(showtimeB, layoutV2);
+        assertThat(jdbc.sql("""
+                SELECT count(*) FROM seat s JOIN zone z ON z.id = s.zone_id
+                WHERE z.seat_layout_id = :layout
+                """).param("layout", layoutV1).query(Integer.class).single()).isEqualTo(6699);
+
         clock.set(saleOpens.toInstant());
         client.patch().uri(UPDATE_SHOWTIME, showtimeA)
                 .headers(headers -> headers.setBearerAuth(token))
@@ -375,6 +404,190 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .expectBody()
                 .jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
     }
+
+    @Test
+    void createShowtime_returns400ForMissingFieldsAndInvalidTimeWindows() {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        var body = showtimeBody(event.hallId(), event.layoutId());
+        var missing = new HashMap<>(body);
+        missing.remove("hall_id");
+        var invalidEnd = new HashMap<>(body);
+        invalidEnd.put("ends_at", body.get("starts_at"));
+        var invalidSale = new HashMap<>(body);
+        invalidSale.put("sale_closes_at", body.get("sale_opens_at"));
+        for (var request : List.of(missing, invalidEnd, invalidSale)) {
+            client.post().uri(CREATE_SHOWTIME, event.id())
+                    .headers(headers -> headers.setBearerAuth(token))
+                    .contentType(MediaType.APPLICATION_JSON).body(request)
+                    .exchange().expectStatus().isBadRequest()
+                    .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+        }
+    }
+
+    @Test
+    void createShowtime_returns404ForMissingEventHallLayoutAndDeletedVenue() {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        var missingHall = showtimeBody(UUID.randomUUID(), event.layoutId());
+        var missingLayout = showtimeBody(event.hallId(), UUID.randomUUID());
+        for (var request : List.of(missingHall, missingLayout)) {
+            client.post().uri(CREATE_SHOWTIME, event.id())
+                    .headers(headers -> headers.setBearerAuth(token))
+                    .contentType(MediaType.APPLICATION_JSON).body(request)
+                    .exchange().expectStatus().isNotFound()
+                    .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+        }
+        var valid = showtimeBody(event.hallId(), event.layoutId());
+        client.post().uri(CREATE_SHOWTIME, UUID.randomUUID())
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(valid)
+                .exchange().expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+        client.delete().uri("/api/v1/admin/venues/{id}", event.venueId())
+                .headers(headers -> headers.setBearerAuth(token))
+                .exchange().expectStatus().isNoContent();
+        client.post().uri(CREATE_SHOWTIME, event.id())
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(valid)
+                .exchange().expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    }
+
+    @Test
+    void updateShowtime_returns400ForInvalidTimeAnd404ForMissingReferences() {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
+        var body = showtimeBody(event.hallId(), event.layoutId());
+        client.patch().uri(UPDATE_SHOWTIME, showtime)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("ends_at", body.get("sale_opens_at")))
+                .exchange().expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+        client.patch().uri(UPDATE_SHOWTIME, UUID.randomUUID())
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                .exchange().expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+        for (var patch : List.of(Map.of("hall_id", UUID.randomUUID()),
+                Map.of("seat_layout_id", UUID.randomUUID()))) {
+            client.patch().uri(UPDATE_SHOWTIME, showtime)
+                    .headers(headers -> headers.setBearerAuth(token))
+                    .contentType(MediaType.APPLICATION_JSON).body(patch)
+                    .exchange().expectStatus().isNotFound()
+                    .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+        }
+        assertInventory(showtime, event.layoutId());
+    }
+
+    @Test
+    void updateShowtime_returns422ForDraftOrWrongHallAndPreservesInventory() {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
+        UUID draft = importThienTruong(token, event.hallId());
+        UUID wrongHallLayout = catalog.event().layoutId();
+        for (UUID layout : List.of(draft, wrongHallLayout)) {
+            client.patch().uri(UPDATE_SHOWTIME, showtime)
+                    .headers(headers -> headers.setBearerAuth(token))
+                    .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layout))
+                    .exchange().expectStatus().isEqualTo(422)
+                    .expectBody().jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT");
+        }
+        assertInventory(showtime, event.layoutId());
+        assertThat(jdbc.sql("SELECT seat_layout_id FROM showtime WHERE id = :id")
+                .param("id", showtime).query(UUID.class).single()).isEqualTo(event.layoutId());
+    }
+
+    private Map<String, Object> showtimeBody(UUID hallId, UUID layoutId) {
+        OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        return Map.of("hall_id", hallId, "seat_layout_id", layoutId,
+                "sale_opens_at", now.plusDays(2).toString(),
+                "sale_closes_at", now.plusDays(6).toString(),
+                "starts_at", now.plusDays(7).toString(), "ends_at", now.plusDays(7).plusHours(2).toString());
+    }
+
+    @Test
+    void createShowtime_waitsForVenueDeletionAndReturns404AfterCommit() throws Exception {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        var body = showtimeBody(event.hallId(), event.layoutId());
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var request = new TransactionTemplate(transactionManager).execute(status -> {
+                venues.delete(event.venueId());
+                var pending = executor.submit(() -> client.post().uri(CREATE_SHOWTIME, event.id())
+                        .headers(headers -> headers.setBearerAuth(token))
+                        .contentType(MediaType.APPLICATION_JSON).body(body)
+                        .exchange().expectStatus().isNotFound()
+                        .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND"));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                boolean waiting = false;
+                while (!pending.isDone() && System.nanoTime() < deadline) {
+                    // PostgreSQL giữ snapshot thống kê trong transaction; đọc lại trạng thái chờ khóa.
+                    jdbc.sql("SELECT pg_stat_clear_snapshot()").query((rs, row) -> true).single();
+                    waiting = jdbc.sql("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM pg_stat_activity
+                                WHERE wait_event_type = 'Lock'
+                                  AND query LIKE '%FOR UPDATE OF v%'
+                            )
+                            """).query(Boolean.class).single();
+                    if (waiting) {
+                        break;
+                    }
+                    try {
+                        Thread.sleep(25);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(ex);
+                    }
+                }
+                assertThat(waiting).as("Create must wait for the venue deletion transaction").isTrue();
+                return pending;
+            });
+            assertThat(request).isNotNull();
+            request.get(10, TimeUnit.SECONDS);
+        }
+        assertThat(jdbc.sql("SELECT count(*) FROM showtime WHERE event_id = :id")
+                .param("id", event.id()).query(Integer.class).single()).isZero();
+    }
+
+    private UUID createShowtime(String token, UUID eventId, Map<String, Object> body) {
+        String response = client.post().uri(CREATE_SHOWTIME, eventId)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(body)
+                .exchange().expectStatus().isCreated()
+                .expectBody(String.class).returnResult().getResponseBody();
+        return UUID.fromString(JsonPath.read(response, "$.id"));
+    }
+
+    private void assertInventory(UUID showtimeId, UUID layoutId) {
+        var expectedSeats = jdbc.sql("""
+                SELECT s.id FROM seat s JOIN zone z ON z.id = s.zone_id
+                WHERE z.seat_layout_id = :layout AND z.kind = 'SEATED'
+                """).param("layout", layoutId).query(UUID.class).list();
+        var actualSeats = jdbc.sql("SELECT seat_id FROM showtime_seat WHERE showtime_id = :id")
+                .param("id", showtimeId).query(UUID.class).list();
+        assertThat(actualSeats).containsExactlyInAnyOrderElementsOf(expectedSeats);
+        assertThat(jdbc.sql("""
+                SELECT count(*) FROM showtime_seat WHERE showtime_id = :id AND status <> 'AVAILABLE'
+                """).param("id", showtimeId).query(Integer.class).single()).isZero();
+        var expectedStocks = jdbc.sql("""
+                SELECT id, capacity FROM zone WHERE seat_layout_id = :layout AND kind = 'STANDING'
+                """).param("layout", layoutId)
+                .query((rs, row) -> new StandingStock(rs.getObject("id", UUID.class), rs.getInt("capacity"), 0, 0))
+                .list();
+        var actualStocks = jdbc.sql("""
+                SELECT zone_id, capacity, sold, held FROM showtime_zone_stock WHERE showtime_id = :id
+                """).param("id", showtimeId)
+                .query((rs, row) -> new StandingStock(rs.getObject("zone_id", UUID.class),
+                        rs.getInt("capacity"), rs.getInt("sold"), rs.getInt("held"))).list();
+        assertThat(actualStocks).containsExactlyInAnyOrderElementsOf(expectedStocks);
+    }
+
+    private record StandingStock(UUID zoneId, int capacity, int sold, int held) {}
 
     private UUID importThienTruong(String token, UUID hallId) {
         var parts = new MultipartBodyBuilder();
@@ -409,4 +622,4 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .returnResult()
                 .getResponseBody();
     }
-}  
+}

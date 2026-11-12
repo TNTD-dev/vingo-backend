@@ -14,7 +14,8 @@ Các đường dẫn bên dưới có tiền tố `/api/v1` và yêu cầu vai t
 | `DELETE /admin/venues/{venue_id}` | Ngừng sử dụng sân. Trả `204` hoặc `409 VENUE_IN_USE` nếu còn suất chưa kết thúc. |
 | `POST /admin/venues/{venue_id}/halls` | Tạo hall. Sân bóng thông thường dùng một hall tên Sân chính. |
 | `GET /admin/halls/{hall_id}/seat-layouts` | Liệt kê phiên bản theo cursor, mới nhất trước. |
-| `POST /admin/halls/{hall_id}/seat-layouts` | Giữ `application/json` hiện có. Bổ sung `multipart/form-data` với trường `file` bắt buộc chứa SVG. Import hợp lệ trả `201` với phiên bản `DRAFT` và số khu, ghế. |
+| `POST /admin/halls/{hall_id}/seat-layouts` | Giữ `application/json` hiện có để tạo sơ đồ. |
+| `POST /admin/halls/{hall_id}/seat-layouts/import` | Nhận `multipart/form-data` với trường `file` bắt buộc chứa SVG. Import hợp lệ trả `201` với phiên bản `DRAFT` và số khu, ghế. |
 | `GET /admin/seat-layouts/{layout_id}` | Trả metadata phiên bản, `view_box` và danh sách khu gồm mã, loại, sức chứa, khung zoom và SVG ID tương ứng. |
 | `GET /admin/seat-layouts/{layout_id}/svg` | Trả SVG đã chuẩn hóa với kiểu `image/svg+xml`. |
 | `GET /admin/seat-layouts/{layout_id}/zones/{zone_id}` | Trả thông tin khu. Với `SEATED` có hàng và ghế. Với `STANDING` có sức chứa. |
@@ -25,6 +26,8 @@ Các đường dẫn bên dưới có tiền tố `/api/v1` và yêu cầu vai t
 Upload thiếu file hoặc sai multipart trả `400`. Kiểu file không được hỗ trợ trả `415`. SVG đúng kiểu nhưng vi phạm quy ước trả `422` với ProblemDetail và danh sách lỗi gồm `layer_id`, `reason` và thông báo. Tài nguyên không tồn tại hoặc zone không thuộc layout trong URL trả `404`. Chốt mã lỗi nghiệp vụ trong PR cùng ví dụ phản hồi.
 
 Hai điểm cần đưa vào PR là tách schema tạo và sửa sân, và bổ sung nguồn mã tỉnh/thành cho sân Thiên Trường. `CityCode` hiện chỉ khai báo `HCM`, `HN` và `DN`.
+
+`city_name` của API admin dùng tên được mô tả trong `CityCode` của contract hiện hành: HCM → TP. Hồ Chí Minh, HN → Hà Nội, DN → Đà Nẵng. Mã cũ ngoài danh sách giữ nguyên giá trị đã lưu làm tên dự phòng. Danh mục này còn chờ catalog chốt; bảng ánh xạ tạm trong search chưa được xác nhận làm nguồn dùng chung.
 
 ## Schema đề xuất
 

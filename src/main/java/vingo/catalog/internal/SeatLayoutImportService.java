@@ -241,7 +241,7 @@ public class SeatLayoutImportService {
     }
 
     private void requirePublishedLayoutForHall(UUID hallId, UUID layoutId) {
-        if (!repository.activeHallExists(hallId)) {
+        if (!repository.lockActiveVenueForHall(hallId)) {
             throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy hall thuộc sân đang hoạt động.");
         }
         var layout = repository.findLayoutForAttach(layoutId)

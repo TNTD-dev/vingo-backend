@@ -98,6 +98,14 @@ public class SeatLayoutSvgParser {
         for (var entry : elements.entrySet()) {
             if (entry.getKey().startsWith("ZONE__")) {
                 ZoneDraft zone = readZone(entry.getKey(), entry.getValue(), geometry);
+                Bounds bounds = zone.bounds();
+                if (bounds.x().compareTo(viewBox.x().add(viewBox.width())) >= 0
+                        || bounds.y().compareTo(viewBox.y().add(viewBox.height())) >= 0
+                        || bounds.x().add(bounds.width()).compareTo(viewBox.x()) <= 0
+                        || bounds.y().add(bounds.height()).compareTo(viewBox.y()) <= 0) {
+                    throw invalid(entry.getKey(), "ZONE_OUTSIDE_VIEW_BOX",
+                            "Khung bao của khu phải giao với vùng hiển thị viewBox.");
+                }
                 if (zones.putIfAbsent(zone.code(), zone) != null) {
                     throw invalid(entry.getKey(), "DUPLICATE_ZONE", "Mã khu đã được khai báo.");
                 }

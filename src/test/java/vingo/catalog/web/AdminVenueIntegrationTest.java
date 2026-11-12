@@ -187,6 +187,44 @@ class AdminVenueIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void updateVenue_returns400_whenNameIsBlank() {
+        UUID id = createVenue(uniqueName(), "HN");
+        client.patch().uri(VENUE, id)
+                .headers(headers -> headers.setBearerAuth(adminToken))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("name", "   "))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+    }
+
+    @Test
+    void deleteVenue_returns404_whenVenueDoesNotExist() {
+        client.delete().uri(VENUE, UUID.randomUUID())
+                .headers(headers -> headers.setBearerAuth(adminToken))
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    }
+
+    @Test
+    void createVenue_returnsDisplayNameForEachSupportedCity() {
+        Map<String, String> cities = Map.of("HN", "Hà Nội", "HCM", "TP. Hồ Chí Minh", "DN", "Đà Nẵng");
+        for (var city : cities.entrySet()) {
+            client.post().uri(VENUES)
+                    .headers(headers -> headers.setBearerAuth(adminToken))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("name", uniqueName(), "type", "STADIUM",
+                            "address", ADDRESS, "city", city.getKey()))
+                    .exchange()
+                    .expectStatus().isCreated()
+                    .expectBody()
+                    .jsonPath("$.city").isEqualTo(city.getKey())
+                    .jsonPath("$.city_name").isEqualTo(city.getValue());
+        }
+    }
+
+    @Test
     void deleteVenue_softDeletesAndRemovesVenueFromList() {
         String name = uniqueName();
         UUID id = createVenue(name, "HN");

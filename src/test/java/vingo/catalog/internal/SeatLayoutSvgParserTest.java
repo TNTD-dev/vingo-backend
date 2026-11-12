@@ -101,6 +101,42 @@ class SeatLayoutSvgParserTest {
         assertThat(assertInstanceOf(String.class, issue.get("message"))).isNotBlank();
     }
 
+    @Test
+    void parse_rejectsZoneOutsideViewBoxAfterTransform() {
+        DomainException error = assertThrows(DomainException.class, () -> parser.parse(bytes("""
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -10 100 100">
+                  <g transform="translate(200 0)">
+                    <rect id="ZONE__A-T1__STANDING__10" width="20" height="20"/>
+                  </g>
+                </svg>
+                """)));
+        assertThat(error.code()).isEqualTo(ErrorCode.INVALID_SEAT_LAYOUT);
+        List<?> issues = assertInstanceOf(List.class, error.properties().get("issues"));
+        Map<?, ?> issue = assertInstanceOf(Map.class, issues.getFirst());
+        assertThat(issue.get("reason")).isEqualTo("ZONE_OUTSIDE_VIEW_BOX");
+        assertThat(issue.get("layer_id")).isEqualTo("ZONE__A-T1__STANDING__10");
+    }
+
+    @Test
+    void parse_acceptsZonePartiallyInsideViewBox() {
+        var parsed = parser.parse(bytes("""
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -10 100 100">
+                  <rect id="ZONE__A-T1__STANDING__10" x="-20" y="-20" width="20" height="20"/>
+                </svg>
+                """));
+        assertThat(parsed.zones()).hasSize(1);
+        assertThat(parsed.zones().getFirst().capacity()).isEqualTo(10);
+    }
+
+    @Test
+    void parse_rejectsZoneOnlyTouchingViewBoxEdge() {
+        assertThat(assertThrows(DomainException.class, () -> parser.parse(bytes("""
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                  <rect id="ZONE__A-T1__STANDING__10" x="100" width="20" height="20"/>
+                </svg>
+                """))).code()).isEqualTo(ErrorCode.INVALID_SEAT_LAYOUT);
+    }
+
     private static byte[] svg(String viewBox) {
         return bytes("""
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="%s"/>

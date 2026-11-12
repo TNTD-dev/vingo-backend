@@ -181,14 +181,21 @@ class AdminVenueController implements AdminCatalogApi {
 
     private Venue toApi(VenueRow row) {
         VenueData data = row.data();
+        CityCode city = toCityCode(data.city());
+        // Tên hiển thị theo CityCode trong contract hiện hành; danh mục còn chờ catalog chốt.
+        String cityName = city == null ? data.city() : switch (city) {
+            case HCM -> "TP. Hồ Chí Minh";
+            case HN -> "Hà Nội";
+            case DN -> "Đà Nẵng";
+        };
 
         return new Venue()
                 .id(row.id())
                 .name(data.name())
                 .type(Venue.TypeEnum.fromValue(data.type()))
                 .address(data.address())
-                .city(toCityCode(data.city()))
-                .cityName(data.city())
+                .city(city)
+                .cityName(cityName)
                 .district(data.district())
                 .lat(data.lat())
                 .lng(data.lng())
