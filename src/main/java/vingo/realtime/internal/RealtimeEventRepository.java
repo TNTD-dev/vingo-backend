@@ -57,7 +57,9 @@ public class RealtimeEventRepository {
     /** Bắt kịp từ lúc đăng ký nếu kết nối chưa gửi được sự kiện nào. */
     public List<Event> replaySince(UUID userId, OffsetDateTime connectedAt) {
         OffsetDateTime cutoff = cutoff();
-        return readWindow(userId, connectedAt.isAfter(cutoff) ? connectedAt : cutoff, Optional.empty());
+        // Lùi overlap như replay có cursor: transaction bắt đầu trước lúc mở stream có created_at sớm hơn lúc commit.
+        OffsetDateTime from = connectedAt.minus(properties.replayOverlap());
+        return readWindow(userId, from.isAfter(cutoff) ? from : cutoff, Optional.empty());
     }
 
     /** Đọc một lô thông báo, chỉ lấy user đang có kết nối được xác thực trên instance này. */

@@ -54,6 +54,7 @@ public class RealtimeGcJob {
                             DELETE FROM realtime_event WHERE id IN (
                                 SELECT id FROM realtime_event WHERE created_at < :cutoff
                                 ORDER BY created_at, id LIMIT :batch
+                                FOR UPDATE SKIP LOCKED
                             )
                             """)
                     .param("cutoff", cutoff).param("batch", batchSize).update();

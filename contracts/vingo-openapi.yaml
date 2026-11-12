@@ -1587,6 +1587,11 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            title: Chưa đăng nhập
+            status: 401
+            code: UNAUTHORIZED
+            detail: Thiếu hoặc sai access token
     Forbidden:
       description: FORBIDDEN
       content:

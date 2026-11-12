@@ -85,7 +85,7 @@ class RealtimeStreamTest extends IntegrationTest {
         assertThat(event.event()).isEqualTo("order.held");
         assertThat(json.readTree(event.data())).isEqualTo(json.readTree(json.writeValueAsString(payload)));
         assertThat(stream.headers().firstValue("Content-Type").orElseThrow()).startsWith("text/event-stream");
-        assertThat(stream.headers().firstValue("Cache-Control")).contains("no-cache");
+        assertThat(stream.headers().firstValue("Cache-Control")).contains("no-store");
         assertThat(stream.headers().firstValue("X-Accel-Buffering")).contains("no");
         stream.awaitNoEvent(QUIET);
     }
@@ -291,6 +291,31 @@ class RealtimeStreamTest extends IntegrationTest {
 
         assertThat(stream.awaitEvent(WAIT).id()).isEqualTo(missed);
         stream.awaitNoEvent(QUIET);
+    }
+
+    @Test
+    void stream_catchUpWithoutSentEventsIncludesTransactionStartedJustBeforeConnect() throws Exception {
+        UUID user = catalog.buyer();
+        Instant connectedAt = clock.instant();
+        clock.set(connectedAt);
+        var stream = connect(user, null);
+
+        terminateListener();
+        // Transaction bắt đầu 5s trước khi mở stream (created_at sớm) nhưng commit khi listener đang mất kết nối.
+        clock.set(connectedAt.minusSeconds(5));
+        UUID lateCommit = publish(user);
+        clock.set(connectedAt);
+
+        assertThat(stream.awaitEvent(WAIT).id()).isEqualTo(lateCommit);
+        stream.awaitNoEvent(QUIET);
+    }
+
+    private void terminateListener() {
+        List<Boolean> terminated = jdbc.sql("""
+                        SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                        WHERE application_name = 'vingo-realtime-listener'
+                        """).query(Boolean.class).list();
+        assertThat(terminated).isNotEmpty().allMatch(Boolean.TRUE::equals);
     }
 
     private void assertFallbackReplay(String cursor) throws Exception {

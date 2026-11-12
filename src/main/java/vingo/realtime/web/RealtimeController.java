@@ -45,7 +45,7 @@ public class RealtimeController implements RealtimeApi {
         Instant expiresAt = principal instanceof Jwt jwt && jwt.getExpiresAt() != null
                 ? jwt.getExpiresAt() : clock.instant().plus(jwtProperties.accessTokenTtl());
         return ResponseEntity.ok().contentType(new MediaType(MediaType.TEXT_EVENT_STREAM, StandardCharsets.UTF_8))
-                .cacheControl(CacheControl.noCache()).header("X-Accel-Buffering", "no")
+                .cacheControl(CacheControl.noStore()).header("X-Accel-Buffering", "no")
                 .body(streams.open(user.id(), expiresAt, lastEventId));
     }
 }
