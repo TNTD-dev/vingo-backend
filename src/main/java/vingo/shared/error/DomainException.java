@@ -1,5 +1,6 @@
 package vingo.shared.error;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -29,4 +30,24 @@ public class DomainException extends RuntimeException {
     public Map<String, Object> properties() {
         return properties;
     }
+    
+    private static DomainException layoutError(String reason, String message) {
+        return new DomainException(ErrorCode.INVALID_SEAT_LAYOUT, "Sơ đồ sân không hợp lệ", Map.of("issues", List.of(Map.of(
+                    "reason", reason,
+                    "message", message
+            )))
+        );
+    }
+
+    private static DomainException layerError(String layerId, String reason, String message) {
+    return new DomainException(
+            ErrorCode.INVALID_SEAT_LAYOUT,
+            "Sơ đồ sân không hợp lệ.",
+            Map.of("issues", List.of(Map.of(
+                    "layer_id", layerId,
+                    "reason", reason,
+                    "message", message
+            )))
+    );
+}
 }
