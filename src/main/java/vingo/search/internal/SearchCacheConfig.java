@@ -160,6 +160,13 @@ class SearchCacheConfig implements CachingConfigurer {
                 return (T) await(key, valueLoader, running);
             }
             try {
+                // Request khác có thể đã nạp xong và nhả inFlight sau lần đọc cache miss phía trên.
+                hit = get(key);
+                if (hit != null) {
+                    T value = (T) hit.get();
+                    mine.complete(value);
+                    return value;
+                }
                 T value;
                 try {
                     value = valueLoader.call();
