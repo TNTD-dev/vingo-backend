@@ -1588,27 +1588,76 @@ paths:
     put:
       operationId: putPriceTiers
       tags: [Admin Catalog]
-      summary: Đặt toàn bộ hạng vé và giá của sự kiện
-      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      summary: Đặt toàn bộ hạng giá của sự kiện
+      description: >
+        Admin đặt toàn bộ danh sách hạng giá.
+        Event phải là DRAFT hoặc PUBLISHED, không có đơn
+        và không có suất chưa hủy đã tới giờ mở bán.
+        Nếu có id, hạng phải thuộc đúng sự kiện.
+        Nếu không có id, dùng lại hạng cùng tên đã bỏ khoảng trắng,
+        hoặc tạo mới nếu chưa có.
+        Không chấp nhận trùng id hoặc tên.
+        Hạng bị bỏ khỏi danh sách chỉ được xóa nếu không còn
+        được gán khu hoặc tham chiếu bởi dòng đơn hàng.
+        Mọi thay đổi trong cùng transaction; lỗi thì rollback toàn bộ.
+        Search làm mới cache sau commit.
+      parameters:
+        - $ref: '#/components/parameters/EventId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: array
-              items: { $ref: '#/components/schemas/PriceTier' }
+              items:
+                $ref: '#/components/schemas/PriceTierInput'
       responses:
-        '200': { description: OK }
-        '409':
-          description: Đã có suất ON_SALE (EVENT_LOCKED)
+        '200':
+          description: Đã lưu danh sách hạng giá.
+        '400':
+          description: Dữ liệu hạng giá hoặc tham chiếu không hợp lệ.
           content:
             application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Hạng giá không thuộc sự kiện hoặc tên bị trùng.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cấu hình giá đã bị khóa.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Sự kiện không cho phép chỉnh sửa
+                status: 409
+                code: EVENT_LOCKED
+                detail: Sự kiện đã bắt đầu bán, có đơn hoặc không còn cho chỉnh sửa.
   /admin/events/{event_id}/zone-prices:
     put:
       operationId: putZonePrices
       tags: [Admin Catalog]
       summary: Gán hạng vé cho từng khu (mỗi khu một hạng)
+      description: >
+        Admin thay toàn bộ danh sách gán hạng giá cho khu.
+        Áp dụng cùng quy tắc khóa như PUT price-tiers:
+        event DRAFT hoặc PUBLISHED, chưa có đơn và không có
+        suất chưa hủy đã tới giờ mở bán.
+        Mỗi zone_id chỉ xuất hiện một lần.
+        Khu phải thuộc layout đang được suất chưa hủy của sự kiện sử dụng.
+        Hạng giá phải thuộc đúng sự kiện.
+        Cho phép cấu hình chưa đủ khu trước bước công bố.
+        Toàn bộ thay đổi trong cùng transaction; lỗi thì rollback.
+        Search làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
@@ -1617,18 +1666,49 @@ paths:
             schema:
               type: array
               items:
-                type: object
-                required: [zone_id, price_tier_id]
-                properties:
-                  zone_id: { type: string, format: uuid }
-                  price_tier_id: { type: string, format: uuid }
+                $ref: '#/components/schemas/ZonePriceInput'
       responses:
         '200': { description: OK }
+        '400':
+          description: Dữ liệu khu hoặc tham chiếu hạng giá không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Khu hoặc hạng giá không thuộc cấu hình của sự kiện.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cấu hình giá đã bị khóa.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Sự kiện không cho phép chỉnh sửa
+                status: 409
+                code: EVENT_LOCKED
+                detail: Sự kiện đã bắt đầu bán, có đơn hoặc không còn cho chỉnh sửa.
   /admin/events/{event_id}/publish:
     post:
       operationId: publishEvent
       tags: [Admin Catalog]
       summary: DRAFT → PUBLISHED; các suất chuyển SCHEDULED
+      description: >
+        Công bố nguyên tử sự kiện DRAFT khi có ít nhất một suất chưa hủy, layout đã công bố,
+        sân còn hoạt động, thời gian suất hợp lệ và mọi khu có hạng giá thuộc sự kiện.
+        Thiếu cấu hình trả 422 EVENT_INCOMPLETE. Suất DRAFT chuyển SCHEDULED;
+        giữ nguyên tồn kho hiện có, kể cả BLOCKED, chỉ bổ sung dòng thiếu.
+        Gửi lại sự kiện PUBLISHED trả dữ liệu hiện tại. ENDED/CANCELLED trả EVENT_LOCKED.
+        Cache làm mới sau commit. Hệ thống tính ON_SALE khi tới giờ, không lưu trạng thái đó.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
         '200':
@@ -1636,6 +1716,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: EVENT_LOCKED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện đã khóa, status: 409, code: EVENT_LOCKED, detail: Sự kiện đã kết thúc hoặc hủy. }
         '422':
           description: Thiếu suất, thiếu giá hoặc khu chưa có hạng (EVENT_INCOMPLETE)
           content:
@@ -1704,7 +1793,7 @@ paths:
         Cập nhật thông tin suất diễn trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
         Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc đã tới giờ mở bán trả SHOWTIME_LOCKED.
         Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
-        Đổi sơ đồ chỉ được khi chưa có đơn hoặc tồn kho HELD/SOLD.
+        Đổi sơ đồ chỉ được khi chưa có đơn hoặc tồn kho HELD/SOLD/BLOCKED.
         Metadata, tồn kho và sự kiện làm mới cache được xử lý trong cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
@@ -1758,7 +1847,14 @@ paths:
     post:
       operationId: blockSeats
       tags: [Admin Catalog]
-      summary: Khoá ghế (AVAILABLE → BLOCKED)
+      summary: block seats
+      description: >
+        ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
+        AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
+        Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
+        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Event ENDED/CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
+        Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1768,20 +1864,40 @@ paths:
               type: object
               required: [seat_ids, reason]
               properties:
-                seat_ids: { type: array, items: { type: string, format: uuid } }
-                reason: { type: string }
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { type: string, format: uuid }
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+                  pattern: '(?s).*\S.*'
       responses:
         '200': { description: OK }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Có ghế đang HELD hoặc SOLD (SEAT_TAKEN)
+          description: SEAT_TAKEN, EVENT_LOCKED hoặc SHOWTIME_LOCKED.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Ghế đang giữ hoặc đã bán, status: 409, code: SEAT_TAKEN, detail: Danh sách chưa được thay đổi. }
   /admin/showtimes/{showtime_id}/seats/unblock:
     post:
       operationId: unblockSeats
       tags: [Admin Catalog]
-      summary: Mở khoá ghế (BLOCKED → AVAILABLE)
+      summary: unblock seats
+      description: >
+        ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
+        AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
+        Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
+        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Event ENDED/CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
+        Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1791,9 +1907,23 @@ paths:
               type: object
               required: [seat_ids]
               properties:
-                seat_ids: { type: array, items: { type: string, format: uuid } }
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { type: string, format: uuid }
       responses:
         '200': { description: OK }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: SEAT_TAKEN, EVENT_LOCKED hoặc SHOWTIME_LOCKED.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Ghế đang giữ hoặc đã bán, status: 409, code: SEAT_TAKEN, detail: Danh sách chưa được thay đổi. }
 
   # ------------------------------------------------------------------ Admin Operations
   /admin/orders:
@@ -2486,6 +2616,46 @@ components:
             showtimes:
               type: array
               items: { $ref: '#/components/schemas/Showtime' }
+    PriceTierInput:
+      type: object
+      required: [name, price]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: >
+            ID hạng giá hiện có của sự kiện khi cập nhật.
+            Nếu không gửi, dùng lại hạng cùng tên sau khi bỏ
+            khoảng trắng hoặc tạo mới nếu chưa có.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '(?s).*\S.*'
+          example: VIP
+        price:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Giá một vé, đơn vị VND.
+          example: 500000
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          example: '#C8A2C8'
+
+    ZonePriceInput:
+      type: object
+      required: [zone_id, price_tier_id]
+      properties:
+        zone_id:
+          type: string
+          format: uuid
+          description: Khu thuộc layout đang được suất chưa hủy của sự kiện sử dụng.
+        price_tier_id:
+          type: string
+          format: uuid
+          description: Hạng giá thuộc đúng sự kiện.
     PriceTier:
       type: object
       required: [name, price]

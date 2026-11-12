@@ -7,6 +7,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.springframework.core.io.ByteArrayResource;
@@ -34,9 +35,10 @@ import vingo.api.model.EventStatus;
 import vingo.api.model.Hall;
 import vingo.api.model.ListVenues200Response;
 import vingo.api.model.PriceTier;
+import vingo.api.model.PriceTierInput;
 import vingo.api.model.SeatLayout;
-import vingo.api.model.SeatLayoutNameInput;
 import vingo.api.model.SeatLayoutBounds;
+import vingo.api.model.SeatLayoutNameInput;
 import vingo.api.model.SeatLayoutOverview;
 import vingo.api.model.SeatLayoutPage;
 import vingo.api.model.SeatLayoutZone;
@@ -50,9 +52,17 @@ import vingo.api.model.Venue;
 import vingo.api.model.VenueCreateInput;
 import vingo.api.model.VenueInfo;
 import vingo.api.model.VenueInput;
+import vingo.api.model.ZonePriceInput;
 import vingo.catalog.EventDetails;
+import vingo.catalog.EventPublishingService;
+import vingo.catalog.SeatBlockingService;
+import vingo.api.model.BlockSeatsRequest;
+import vingo.api.model.UnblockSeatsRequest;
+import vingo.catalog.EventPricingService;
 import vingo.catalog.EventService;
+import vingo.catalog.PriceTierChange;
 import vingo.catalog.VenueService;
+import vingo.catalog.ZonePriceChange;
 import vingo.catalog.internal.SeatLayoutImportService;
 import vingo.catalog.internal.SeatLayoutRepository.LayoutHeaderRow;
 import vingo.catalog.internal.SeatLayoutRepository.ShowtimeData;
@@ -75,13 +85,28 @@ class AdminVenueController implements AdminCatalogApi {
     private final JsonMapper json;
     private final Clock clock;
     private final EventService eventService;
+    private final EventPricingService eventPricing;
+    private final SeatBlockingService seatBlocking;
+    private final EventPublishingService publishing;
 
-    AdminVenueController(VenueService venues, SeatLayoutImportService layouts, JsonMapper json, Clock clock, EventService eventService) {
+    AdminVenueController(
+            VenueService venues,
+            SeatLayoutImportService layouts,
+            JsonMapper json,
+            Clock clock,
+            EventService eventService,
+            EventPricingService eventPricing,
+            SeatBlockingService seatBlocking,
+            EventPublishingService publishing
+    ) {
         this.venues = venues;
         this.layouts = layouts;
         this.json = json;
         this.clock = clock;
         this.eventService = eventService;
+        this.eventPricing = eventPricing;
+        this.seatBlocking = seatBlocking;
+        this.publishing = publishing;
     }
 
     @Override
@@ -577,5 +602,72 @@ class AdminVenueController implements AdminCatalogApi {
                 .nextCursor(page.nextCursor());
 
         return ResponseEntity.ok(response);
+    }
+
+    @Override
+    public ResponseEntity<Void> putPriceTiers(
+            UUID eventId,
+            List<PriceTierInput> input
+    ) {
+        if (input == null
+                || input.stream().anyMatch(Objects::isNull)) {
+            throw new DomainException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Danh sách hạng giá không hợp lệ."
+            );
+        }
+
+        var changes = input.stream()
+                .map(item -> new PriceTierChange(
+                        item.getId(),
+                        item.getName(),
+                        item.getPrice(),
+                        item.getColor()
+                ))
+                .toList();
+
+        eventPricing.putPriceTiers(eventId, changes);
+
+        return ResponseEntity.ok().build();
+    }
+
+    @Override
+    public ResponseEntity<Void> putZonePrices(
+            UUID eventId,
+            List<ZonePriceInput> input
+    ) {
+        if (input == null
+                || input.stream().anyMatch(Objects::isNull)) {
+            throw new DomainException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Danh sách giá khu không hợp lệ."
+            );
+        }
+
+        var changes = input.stream()
+                .map(item -> new ZonePriceChange(
+                        item.getZoneId(),
+                        item.getPriceTierId()
+                ))
+                .toList();
+
+        eventPricing.putZonePrices(eventId, changes);
+
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<Void> blockSeats(UUID id, BlockSeatsRequest input) {
+        seatBlocking.block(id, input.getSeatIds(), input.getReason());
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<Void> unblockSeats(UUID id, UnblockSeatsRequest input) {
+        seatBlocking.unblock(id, input.getSeatIds());
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<EventDetail> publishEvent(UUID eventId) {
+        publishing.publish(eventId);
+        return ResponseEntity.ok(toAdminEventDetail(eventService.getDetails(eventId)));
     }
 }

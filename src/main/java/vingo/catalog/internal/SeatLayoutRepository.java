@@ -419,7 +419,7 @@ public class SeatLayoutRepository {
         return jdbc.sql("""
                 SELECT EXISTS (SELECT 1 FROM orders WHERE showtime_id = :id)
                     OR EXISTS (SELECT 1 FROM showtime_seat
-                               WHERE showtime_id = :id AND status IN ('HELD', 'SOLD'))
+                               WHERE showtime_id = :id AND status IN ('HELD', 'SOLD', 'BLOCKED'))
                     OR EXISTS (SELECT 1 FROM showtime_zone_stock
                                WHERE showtime_id = :id AND (held > 0 OR sold > 0))
                 """).param("id", showtimeId).query(Boolean.class).single();
