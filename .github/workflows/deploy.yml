@@ -51,5 +51,21 @@ jobs:
         run: |
           if [ -z "$HOST" ]; then echo "Chưa cấu hình DEPLOY_HOST cho environment này, bỏ qua deploy."; exit 0; fi
           install -m 600 /dev/null key && echo "$SSH_KEY" > key
-          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
-            "cd ~/vingo && IMAGE_TAG=$TAG docker compose pull && IMAGE_TAG=$TAG docker compose up -d && sleep 20 && curl -fsS https://\$(grep ^DOMAIN= .env | cut -d= -f2)/actuator/health"
+          # api khởi động mất ~60s trên máy 2 GB, nên thử health tới khi UP (tối đa 3 phút)
+          # thay vì đợi một khoảng cố định.
+          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" "TAG=$TAG bash -s" <<'EOF'
+          set -e
+          cd ~/vingo
+          export IMAGE_TAG="$TAG"
+          docker compose pull
+          docker compose up -d
+          DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)
+          for i in $(seq 1 36); do
+            if curl -fsS "https://$DOMAIN/actuator/health"; then echo; echo "api UP sau ~$((i * 5))s"; exit 0; fi
+            sleep 5
+          done
+          echo "api chưa UP sau 3 phút"
+          docker compose ps
+          docker compose logs --tail 50 api
+          exit 1
+          EOF
