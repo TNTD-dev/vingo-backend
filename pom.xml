@@ -92,7 +92,6 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -191,6 +190,8 @@
                             <generatorName>spring</generatorName>
                             <apiPackage>vingo.api</apiPackage>
                             <modelPackage>vingo.api.model</modelPackage>
+                            <!-- Ánh xạ luồng SSE sang SseEmitter để interface trả đúng kiểu streaming của Spring MVC. -->
+                            <schemaMappings>StreamEvent=org.springframework.web.servlet.mvc.method.annotation.SseEmitter</schemaMappings>
                             <generateSupportingFiles>true</generateSupportingFiles>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <generateApiTests>false</generateApiTests>

@@ -16,6 +16,8 @@
 		reverse_proxy api:8080 {
 			lb_policy round_robin
 			health_uri /actuator/health/readiness
+			# Mặc định 30s: sau mỗi lần deploy, /api/* trả 503 thêm tới 30s dù api đã lên.
+			health_interval 5s
 		}
 	}
 

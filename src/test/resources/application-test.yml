@@ -1,6 +1,8 @@
 vingo:
   jwt:
     secret: test-secret-for-integration-tests-only-32b
+  realtime:
+    heartbeat: PT1S
   search:
     rate-limit:
       # Đủ lớn để test thường không chạm giới hạn; test rate limit tự đặt giá trị nhỏ.
