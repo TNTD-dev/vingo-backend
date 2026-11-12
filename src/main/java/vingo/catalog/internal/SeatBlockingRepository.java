@@ -15,7 +15,7 @@ public class SeatBlockingRepository {
         return jdbc.sql("SELECT event_id FROM showtime WHERE id=:id").param("id",id).query(UUID.class).optional();
     }
     public Optional<Session> lockSession(UUID id) {
-        return jdbc.sql("SELECT seat_layout_id,status,ends_at FROM showtime WHERE id=:id FOR UPDATE")
+        return jdbc.sql("SELECT seat_layout_id,status,ends_at FROM showtime WHERE id=:id FOR NO KEY UPDATE")
             .param("id",id).query((rs,n)->new Session(rs.getObject("seat_layout_id",UUID.class),rs.getString("status"),rs.getObject("ends_at",OffsetDateTime.class))).optional();
     }
     public List<SeatState> lockSeats(UUID id, UUID layout, List<UUID> ids) {

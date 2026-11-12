@@ -344,4 +344,14 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
                 .query()
                 .listOfRows();
     }
+    @Test
+    void putPriceTiers_returns404_whenEventDoesNotExist() {
+        put(UUID.randomUUID(), "price-tiers", List.of()).expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    }
+    @Test
+    void putZonePrices_returns404_whenEventDoesNotExist() {
+        put(UUID.randomUUID(), "zone-prices", List.of()).expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    }
 }

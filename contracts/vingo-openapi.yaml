@@ -1200,7 +1200,7 @@ paths:
               required: [file, name]
               properties:
                 file: { type: string, format: binary }
-                name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*', example: 'Concert – sân khấu đầu B' }
+                name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*', example: 'Concert – sân khấu đầu B' }
             encoding:
               file: { contentType: image/svg+xml }
       responses:
@@ -1873,7 +1873,7 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 1000
-                  pattern: '(?s).*\S.*'
+                  pattern: '[\s\S]*\S[\s\S]*'
       responses:
         '200': { description: OK }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -2360,7 +2360,7 @@ components:
       type: object
       required: [name, zones]
       properties:
-        name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*' }
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*' }
         zones:
           type: array
           items:
@@ -2397,7 +2397,7 @@ components:
       type: object
       required: [name]
       properties:
-        name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*', example: 'Bóng đá' }
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*', example: 'Bóng đá' }
     SeatLayout:
       type: object
       required: [name]
@@ -2523,7 +2523,7 @@ components:
         title:
           type: string
           minLength: 1
-          pattern: '(?s).*\S.*'
+          pattern: '[\s\S]*\S[\s\S]*'
         description:
           type: string
         category:
@@ -2554,7 +2554,7 @@ components:
         title:
           type: [string, 'null']
           minLength: 1
-          pattern: '(?s).*\S.*'
+          pattern: '[\s\S]*\S[\s\S]*'
         description:
           type: [string, 'null']
         category:
@@ -2631,7 +2631,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
-          pattern: '(?s).*\S.*'
+          pattern: '[\s\S]*\S[\s\S]*'
           example: VIP
         price:
           type: integer

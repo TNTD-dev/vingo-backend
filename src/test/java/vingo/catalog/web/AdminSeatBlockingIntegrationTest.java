@@ -19,9 +19,11 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
     private final SeatBlockingService service;
     private final PlatformTransactionManager transactions;
     private String token;
+    private final vingo.booking.BookingService booking;
+    private final vingo.ticketing.TicketingService ticketing;
     @Autowired
-    AdminSeatBlockingIntegrationTest(SeatBlockingService service,PlatformTransactionManager transactions) {
-        this.service=service; this.transactions=transactions;
+    AdminSeatBlockingIntegrationTest(SeatBlockingService service,PlatformTransactionManager transactions, vingo.booking.BookingService booking, vingo.ticketing.TicketingService ticketing) {
+        this.service=service; this.transactions=transactions; this.booking=booking; this.ticketing=ticketing;
     }
     @BeforeEach void prepare() { clock.set(Instant.parse("2026-11-12T09:00:00Z"));token=tokenFor(Role.ADMIN); }
     @AfterEach void reset() {clock.reset();}
@@ -46,7 +48,7 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
     @Test void heldAndSoldSeats_rejectWholeBatchForBothOperations() {
         for(String action:List.of("block","unblock")) for(String status:List.of("HELD","SOLD")) {
             var s=catalog.onSaleShowtime();var e=s.event();
-            if(action.equals("unblock")) service.block(s.id(),List.of(e.seat(1)),"Bảo trì");
+            if(action.equals("unblock")) service.block(s.id(),List.of(e.seat(1)),"Bảo trì", UUID.randomUUID());
             UUID order=catalog.order(catalog.buyer(),s.id(),"PENDING",catalog.now().plusMinutes(10));
             catalog.setSeat(s.id(),e.seat(2),status,order,status.equals("HELD")?catalog.now().plusMinutes(10):null);
             long before=logs(s.id());
@@ -83,7 +85,7 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
     }
     @Test void rollback_restoresInventoryAndAudit() {
         var s=catalog.onSaleShowtime();UUID seat=s.event().seat(1);
-        new TransactionTemplate(transactions).executeWithoutResult(tx->{service.block(s.id(),List.of(seat),"Bảo trì");tx.setRollbackOnly();});
+        new TransactionTemplate(transactions).executeWithoutResult(tx->{service.block(s.id(),List.of(seat),"Bảo trì", UUID.randomUUID());tx.setRollbackOnly();});
         assertThat(state(s.id(),seat)).isEqualTo("AVAILABLE");assertThat(logs(s.id())).isZero();
     }
     @Test void endpoints_requireAdmin() {
@@ -177,5 +179,44 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
         post(session.id(), "block", Map.of("seat_ids", List.of(session.event().seat(1)), "reason", "x".repeat(1001)))
                 .expectStatus().isBadRequest();
         assertThat(logs(session.id())).isZero();
+    }
+    @Test
+    @Timeout(30)
+    void blockDoesNotDeadlockWithIpnSaleAndTicketForeignKey() throws Exception {
+        var session = catalog.onSaleShowtime();
+        UUID seat = session.event().seat(1);
+        String held = client.post().uri("/api/v1/showtimes/{id}/holds", session.id())
+                .headers(h -> { h.setBearerAuth(tokenFor(Role.BUYER)); h.set("Idempotency-Key", UUID.randomUUID().toString()); })
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_ids", List.of(seat))).exchange()
+                .expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
+        UUID order = UUID.fromString(tools.jackson.databind.json.JsonMapper.builder().build()
+                .readTree(held).path("id").asString());
+        var locked = new java.util.concurrent.CountDownLatch(1);
+        var proceed = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var ipn = pool.submit(() -> new TransactionTemplate(transactions).execute(tx -> {
+                jdbc.sql("SELECT seat_id FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat FOR UPDATE")
+                        .param("id", session.id()).param("seat", seat).query(UUID.class).single();
+                locked.countDown();
+                try { if (!proceed.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Block did not reach inventory lock"); }
+                catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException(ex); }
+                assertThat(booking.markSold(order)).isEqualTo(vingo.booking.SaleOutcome.SOLD);
+                return ticketing.issueForOrder(order);
+            }));
+            assertThat(locked.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            var block = pool.submit(() -> {
+                try { service.block(session.id(), List.of(seat), "Maintenance", UUID.randomUUID()); return "unexpected"; }
+                catch (vingo.shared.error.DomainException ex) { return ex.code().name(); }
+            });
+            try {
+                org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5)).until(() ->
+                    jdbc.sql("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%SELECT ss.seat_id%')")
+                            .query(Boolean.class).single());
+            } finally { proceed.countDown(); }
+            assertThat(ipn.get(10, java.util.concurrent.TimeUnit.SECONDS)).hasSize(1);
+            assertThat(block.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo("SEAT_TAKEN");
+            assertThat(state(session.id(), seat)).isEqualTo("SOLD");
+            assertThat(logs(session.id())).isZero();
+        }
     }
 }

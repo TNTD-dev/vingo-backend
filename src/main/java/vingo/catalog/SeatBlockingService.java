@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vingo.catalog.internal.EventRepository;
 import vingo.catalog.internal.SeatBlockingRepository;
 import vingo.shared.error.*;
+import vingo.shared.logging.LogKeys;
 
 @Service
 public class SeatBlockingService {
@@ -21,13 +22,13 @@ public class SeatBlockingService {
         this.events=events; this.seats=seats; this.publisher=publisher; this.clock=clock;
     }
     @Transactional
-    public void block(UUID id,List<UUID> ids,String reason) {
+    public void block(UUID id,List<UUID> ids,String reason,UUID actorId) {
         if(reason==null || reason.isBlank() || reason.length()>1000) throw error(ErrorCode.VALIDATION_ERROR,"Lý do khóa không hợp lệ.");
-        change(id,ids,true,reason.strip());
+        change(id,ids,true,reason.strip(),actorId);
     }
     @Transactional
-    public void unblock(UUID id,List<UUID> ids) { change(id,ids,false,null); }
-    private void change(UUID id,List<UUID> ids,boolean block,String reason) {
+    public void unblock(UUID id,List<UUID> ids,UUID actorId) { change(id,ids,false,null,actorId); }
+    private void change(UUID id,List<UUID> ids,boolean block,String reason,UUID actorId) {
         if(ids==null || ids.isEmpty() || ids.size()>200 || ids.stream().anyMatch(Objects::isNull) || new HashSet<>(ids).size()!=ids.size())
             throw error(ErrorCode.VALIDATION_ERROR,"Danh sách ghế không hợp lệ.");
         UUID eventId=seats.eventId(id).orElseThrow(()->error(ErrorCode.NOT_FOUND,"Không tìm thấy suất."));
@@ -49,7 +50,8 @@ public class SeatBlockingService {
         seats.update(id,changed,block,reason,now);
         publisher.publishEvent(new CatalogChanged(eventId,Set.of(id)));
         try(var e=MDC.putCloseable("event_id",eventId.toString());var s=MDC.putCloseable("showtime_id",id.toString())) {
-            log.info("Đã cập nhật khóa ghế action={} count={}",block?"BLOCK":"UNBLOCK",changed.size());
+            log.atInfo().addKeyValue(LogKeys.USER_ID, actorId)
+                    .log("Đã cập nhật khóa ghế action={} count={}",block?"BLOCK":"UNBLOCK",changed.size());
         }
     }
     private static DomainException error(ErrorCode code,String detail) { return new DomainException(code,detail); }

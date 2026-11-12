@@ -25,10 +25,12 @@ class AdminEventAcceptanceTest extends IntegrationTest {
     @Test void draftToPublished_preservesBlockedSeatsAndOpensSalesByClock() {
         var layout=catalog.event(EventSpec.defaults().withCity("HN"));
         String created=client.post().uri("/api/v1/admin/events").headers(h->h.setBearerAuth(token))
-                .contentType(MediaType.APPLICATION_JSON).body(Map.of("title","EV7 acceptance","category","CONCERT"))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("title","EV7 acceptance","category","CONCERT", "poster_mobile_url","https://example.com/mobile.jpg", "poster_desktop_url","https://example.com/desktop.jpg"))
                 .exchange().expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
         UUID event=UUID.fromString(json(created).path("id").asString());
         assertThat(json(created).path("status").asString()).isEqualTo("DRAFT");
+        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",event).query(String.class).single())
+                .isEqualTo("https://example.com/desktop.jpg");
         publish(event).expectStatus().isEqualTo(422);
         String session=client.post().uri("/api/v1/admin/events/{id}/showtimes",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of(
@@ -57,6 +59,8 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         assertThat(jdbc.sql("SELECT status FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat").param("id",showtime).param("seat",layout.seat(1)).query(String.class).single()).isEqualTo("BLOCKED");
         assertThat(jdbc.sql("SELECT count(*) FROM showtime_seat WHERE showtime_id=:id").param("id",showtime).query(Long.class).single()).isEqualTo(10);
         client.get().uri("/api/v1/events/{id}",event).exchange().expectStatus().isOk();
+        client.get().uri("/api/v1/showtimes/{id}/seatmap",showtime).exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.status").isEqualTo("SCHEDULED");
         clock.set(Instant.parse("2026-11-13T09:00:00Z"));
         client.get().uri("/api/v1/showtimes/{id}/seatmap",showtime).exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.status").isEqualTo("ON_SALE");

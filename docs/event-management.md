@@ -1,10 +1,10 @@
 # Quản lý sự kiện · Thiết kế và bàn giao giữa các module
 
-Ngày cập nhật: **12/11/2026**. Tiếp nối [CP7 quản lý sân](venue-management-cp7.md).
+Ngày cập nhật: **13/11/2026**. Tiếp nối [CP7 quản lý sân](venue-management-cp7.md).
 
-Nhánh triển khai: **`feat/create_events-luannt`**, tách từ `feat/ManageStadium-luannt` tại `f648f76`. Các file CP7 và tài liệu còn chưa commit được giữ nguyên khi chuyển nhánh. Chưa push hoặc tạo PR cho nhánh sự kiện.
+Nhánh triển khai: **`feat/create_events-luannt`**, tách từ `feat/ManageStadium-luannt` tại `f648f76`. Các file CP7 và tài liệu còn chưa commit được giữ nguyên khi chuyển nhánh. Đã push và mở [PR #40](https://github.com/TNTD-dev/vingo-backend/pull/40), bao gồm EV4–EV7; chờ review và nghiệm thu staging.
 
-Tài liệu này chốt phạm vi, ghi quyết định của Luân và các điểm tích hợp do team Search gửi. Trạng thái triển khai EV2/EV3 được ghi trong các biên bản riêng; các phần còn đề xuất phải đi qua PR OpenAPI theo quy tắc repo. Tài liệu không thay thế `contracts/vingo-openapi.yaml`.
+Tài liệu này chốt phạm vi, ghi quyết định của Luân và các điểm tích hợp do team Search gửi. Trạng thái triển khai EV2–EV7 được ghi trong các biên bản riêng; các phần còn đề xuất phải đi qua PR OpenAPI theo quy tắc repo. Tài liệu không thay thế `contracts/vingo-openapi.yaml`.
 
 ## 1. Luồng admin
 
@@ -67,10 +67,10 @@ Nhánh hiện tại đã tạo tồn kho khi tạo suất, kể cả suất `DRA
 |---|---|
 | `poster_mobile_url` | URL ảnh cho mobile. Lưu trong cột riêng của `event`. |
 | `poster_desktop_url` | URL ảnh cho desktop. Lưu trong cột riêng của `event`. |
-| `poster_url` hiện có | Cột dữ liệu cũ, còn được Search và các luồng đơn/vé đọc. Giữ tương thích trong giai đoạn chuyển tiếp; không tự xóa hoặc tự chọn thứ tự fallback. |
+| `poster_url` hiện có | Cột dữ liệu cũ, còn được Search và các luồng đơn/vé đọc. Giữ tương thích trong giai đoạn chuyển tiếp; không xóa cột; đồng bộ desktop trước, fallback mobile khi ghi mới hoặc sửa poster. |
 | `age_limit` | Thuộc sự kiện; migration EV2 đã bổ sung cột nullable với constraint không âm. Đây là metadata, chưa kiểm tra tuổi người mua. Không đặt vào `venue`. |
 
-Migration EV2 đã backfill `poster_url` cũ vào cả hai cột mới. Ảnh fallback cho response public vẫn có một `poster_url` và việc bắt buộc poster khi công bố còn cần phối hợp trước các mốc sau; EV2 chưa thay mapping module Search.
+Migration EV2 đã backfill `poster_url` cũ vào cả hai cột mới. Response public vẫn đọc `poster_url`: luồng ghi đồng bộ desktop trước, fallback mobile. Việc bắt buộc poster khi công bố còn cần phối hợp; không thay mapping module Search.
 
 URL poster phải được kiểm tra tại luồng ghi: đúng cú pháp URI tuyệt đối, scheme `http`/`https`, có host; từ chối URL tương đối, thiếu host hoặc sai cú pháp bằng `400 VALIDATION_ERROR`. Việc định nghĩa validation và các trường bắt buộc phải thể hiện trong OpenAPI trước khi sinh model. Không tải nội dung URL trong transaction ghi sự kiện.
 
@@ -107,7 +107,7 @@ Trước CHECK cho city cần cập nhật cả dữ liệu test: `CatalogFixtur
 | **EV6 — Kiểm tra và công bố** | `POST /admin/events/{id}/publish`; kiểm tra suất/giá/gán khu, bảo đảm tồn kho, event → `PUBLISHED`, suất `DRAFT` hợp lệ → `SCHEDULED`, phát `CatalogChanged` trong transaction. | Thiếu cấu hình trả `422 EVENT_INCOMPLETE`, không đổi trạng thái/tồn kho; gọi lại không nhân bản/reset inventory; giữ ghế BLOCKED; test đồng thời với cập nhật cấu hình và không phát event khi rollback. |
 | **EV7 — Nghiệm thu và bàn giao** | Luồng tạo nháp → suất → giá → khóa ghế tùy chọn → công bố → đọc public; case quay lại Quản lý sân, nhiều sân, phiên bản khác nhau; dữ liệu mẫu và tài liệu team. | `mvnw verify`/`ModularityTest` qua trên PostgreSQL thật; xác thực 401/403, 4xx, cache sau commit/rollback, tồn kho và giờ mở bán; PR/review và Swagger staging có bằng chứng riêng. |
 
-**Hiện tại:** EV3.1–EV3.5 đã đạt nghiệm thu backend local ngày 12/11/2026: `clean verify` qua **510 test**, không lỗi/bỏ qua, gồm `ModularityTest`. Xem [bàn giao EV3](event-management-ev3.md). Tên cấu hình sơ đồ đã được bổ sung; bước tiếp theo là EV4 — hạng giá và gán giá khu. Khóa/mở ghế và công bố sự kiện thuộc EV5–EV6; staging và UI nghiệm thu riêng.
+**Hiện tại:** Backend đã triển khai tới EV7 trong PR #40, gồm hạng giá/gán khu (EV4), khóa/mở ghế (EV5), công bố (EV6) và nghiệm thu xuyên suốt (EV7). `clean verify` trước review qua 531 test, không lỗi/bỏ qua, gồm `ModularityTest`. Xem [bàn giao EV3](event-management-ev3.md), [EV5](event-management-ev5.md) và [EV7](event-management-ev7.md). Staging và UI nghiệm thu riêng.
 
 ### Thứ tự commit/PR và điều kiện hoàn thành
 
@@ -164,7 +164,7 @@ Luồng kiểm tra EV2 quan trọng: tạo nháp với giới hạn 4 → lấy 
 
 ## 7. Điểm dữ liệu/tích hợp còn cần chốt
 
-1. **Poster public:** backfill đã xong trong EV2; còn thứ tự fallback trong response một poster và thời điểm chuyển reader khỏi `poster_url`.
+1. **Poster public:** backfill đã xong trong EV2; đã đồng bộ `poster_url` theo desktop trước, fallback mobile; hai cột riêng vẫn giữ nguyên.
 2. **`age_limit`:** EV2 chỉ lưu metadata không âm, có thể chưa khai báo; xác minh tuổi khi mua là yêu cầu riêng, chưa thuộc EV2.
 3. **Tồn kho:** method của Danh, tính idempotent, xử lý tồn kho đã tạo lúc nháp và hướng phụ thuộc module.
 4. **CityCode:** ba mã đang có là HCM/HN/DN; quy tắc với địa điểm ngoài ba mã, đặc biệt SVG Thiên Trường. Mã `HN` trong bài CP7 chỉ là fixture, không phải quyết định địa lý.

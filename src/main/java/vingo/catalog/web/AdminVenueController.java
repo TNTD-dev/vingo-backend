@@ -54,6 +54,7 @@ import vingo.api.model.VenueInfo;
 import vingo.api.model.VenueInput;
 import vingo.api.model.ZonePriceInput;
 import vingo.catalog.EventDetails;
+import vingo.shared.security.CurrentUser;
 import vingo.catalog.EventPublishingService;
 import vingo.catalog.SeatBlockingService;
 import vingo.api.model.BlockSeatsRequest;
@@ -88,6 +89,7 @@ class AdminVenueController implements AdminCatalogApi {
     private final EventPricingService eventPricing;
     private final SeatBlockingService seatBlocking;
     private final EventPublishingService publishing;
+    private final CurrentUser currentUser;
 
     AdminVenueController(
             VenueService venues,
@@ -97,7 +99,8 @@ class AdminVenueController implements AdminCatalogApi {
             EventService eventService,
             EventPricingService eventPricing,
             SeatBlockingService seatBlocking,
-            EventPublishingService publishing
+            EventPublishingService publishing,
+            CurrentUser currentUser
     ) {
         this.venues = venues;
         this.layouts = layouts;
@@ -107,6 +110,7 @@ class AdminVenueController implements AdminCatalogApi {
         this.eventPricing = eventPricing;
         this.seatBlocking = seatBlocking;
         this.publishing = publishing;
+        this.currentUser = currentUser;
     }
 
     @Override
@@ -657,12 +661,12 @@ class AdminVenueController implements AdminCatalogApi {
     }
     @Override
     public ResponseEntity<Void> blockSeats(UUID id, BlockSeatsRequest input) {
-        seatBlocking.block(id, input.getSeatIds(), input.getReason());
+        seatBlocking.block(id, input.getSeatIds(), input.getReason(), currentUser.require().id());
         return ResponseEntity.ok().build();
     }
     @Override
     public ResponseEntity<Void> unblockSeats(UUID id, UnblockSeatsRequest input) {
-        seatBlocking.unblock(id, input.getSeatIds());
+        seatBlocking.unblock(id, input.getSeatIds(), currentUser.require().id());
         return ResponseEntity.ok().build();
     }
     @Override

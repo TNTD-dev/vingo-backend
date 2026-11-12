@@ -333,4 +333,23 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
     private static EventService.UpdateEvent titlePatch(String title) {
         return new EventService.UpdateEvent(title, null, null, null, null, null, null, null);
     }
+    @Test
+    void updatePoster_keepsLegacyReaderUrlConsistentWithDesktopThenMobile() {
+        UUID id = createDraft();
+        patch(id, "{\"poster_desktop_url\":\"https://example.com/new-desktop.jpg\"}")
+                .expectStatus().isOk();
+        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",id).query(String.class).single())
+                .isEqualTo("https://example.com/new-desktop.jpg");
+        patch(id, "{\"poster_mobile_url\":\"https://example.com/new-mobile.jpg\"}")
+                .expectStatus().isOk();
+        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",id).query(String.class).single())
+                .isEqualTo("https://example.com/new-desktop.jpg");
+        String created = client.post().uri("/api/v1/admin/events").headers(h->h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("title","Mobile only", "category","CONCERT", "poster_mobile_url","https://example.com/only-mobile.jpg"))
+                .exchange().expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
+        UUID mobileOnly = UUID.fromString(JsonPath.read(created,"$.id"));
+        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",mobileOnly).query(String.class).single())
+                .isEqualTo("https://example.com/only-mobile.jpg");
+    }
 }

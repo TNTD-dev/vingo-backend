@@ -43,13 +43,13 @@ public class EventRepository {
         return jdbc.sql("""
                 INSERT INTO event (
                     title, description, category, attributes,
-                    poster_mobile_url, poster_desktop_url, age_limit,
+                    poster_mobile_url, poster_desktop_url, poster_url, age_limit,
                     max_tickets_per_order, status,
                     created_at, updated_at
                 )
                 VALUES (
                     :title, :description, :category, CAST(:attributes AS jsonb),
-                    :mobile, :desktop, :ageLimit,
+                    :mobile, :desktop, COALESCE(:desktop, :mobile), :ageLimit,
                     :maxTickets, 'DRAFT',
                     :now, :now
                 )
@@ -134,6 +134,13 @@ public class EventRepository {
                 patch.posterMobileUrl() == null ? null : patch.posterMobileUrl().toString());
         addField(assignments, params, "poster_desktop_url",
                 patch.posterDesktopUrl() == null ? null : patch.posterDesktopUrl().toString());
+        if (patch.posterMobileUrl() != null || patch.posterDesktopUrl() != null) {
+            assignments.add("poster_url = COALESCE("
+                    + (patch.posterDesktopUrl() != null ? ":poster_desktop_url" : "poster_desktop_url")
+                    + ", "
+                    + (patch.posterMobileUrl() != null ? ":poster_mobile_url" : "poster_mobile_url")
+                    + ")");
+        }
         addField(assignments, params, "age_limit", patch.ageLimit());
         addField(assignments, params, "max_tickets_per_order", patch.maxTicketsPerOrder());
         if (assignments.isEmpty()) {
