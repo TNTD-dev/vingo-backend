@@ -10,7 +10,9 @@ import vingo.api.SearchApi;
 import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventDetail;
+import vingo.api.model.GetAvailability200Response;
 import vingo.api.model.ListEventShowtimes200Response;
+import vingo.api.model.SeatMap;
 import vingo.api.model.SearchEvents200Response;
 import vingo.search.EventSearchCriteria;
 import vingo.search.EventSearchCriteria.After;
@@ -20,7 +22,7 @@ import vingo.search.InvalidSearchRequestException;
 import vingo.search.Page;
 import vingo.search.SearchService;
 
-/** Endpoint tìm kiếm và xem chi tiết sự kiện công khai. Các operation khác của tag Search chưa hiện thực nên giữ mặc định 501. */
+/** Endpoint tìm kiếm và xem chi tiết sự kiện, sơ đồ ghế, số chỗ còn công khai. Các operation khác của tag Search chưa hiện thực nên giữ mặc định 501. */
 @RestController
 class SearchController implements SearchApi {
 
@@ -80,5 +82,15 @@ class SearchController implements SearchApi {
     public ResponseEntity<ListEventShowtimes200Response> listEventShowtimes(UUID eventId) {
         return ResponseEntity.ok(new ListEventShowtimes200Response()
                 .data(searchService.listEventShowtimes(eventId).stream().map(mapper::toShowtime).toList()));
+    }
+
+    @Override
+    public ResponseEntity<SeatMap> getSeatmap(UUID showtimeId, UUID zoneId) {
+        return ResponseEntity.ok(mapper.toSeatMap(searchService.getSeatmap(showtimeId, zoneId)));
+    }
+
+    @Override
+    public ResponseEntity<GetAvailability200Response> getAvailability(UUID showtimeId) {
+        return ResponseEntity.ok(mapper.toAvailability(searchService.getAvailability(showtimeId)));
     }
 }

@@ -1,5 +1,6 @@
 package vingo.search.web;
 
+import java.math.BigDecimal;
 import java.net.URI;
 import java.util.Map;
 import java.util.UUID;
@@ -13,15 +14,27 @@ import vingo.api.model.EventCategory;
 import vingo.api.model.EventDetail;
 import vingo.api.model.EventStatus;
 import vingo.api.model.EventSummary;
+import vingo.api.model.GetAvailability200Response;
+import vingo.api.model.GetAvailability200ResponseZonesInner;
 import vingo.api.model.PriceTier;
+import vingo.api.model.SeatMap;
+import vingo.api.model.SeatMapZonesInner;
+import vingo.api.model.SeatMapZonesInnerSeatsInner;
+import vingo.api.model.SeatStatus;
 import vingo.api.model.Showtime;
 import vingo.api.model.ShowtimeStatus;
 import vingo.api.model.Venue;
+import vingo.search.AvailabilityResult;
 import vingo.search.EventDetailResult;
 import vingo.search.EventSummaryResult;
 import vingo.search.PriceTierResult;
+import vingo.search.SeatResult;
+import vingo.search.SeatmapResult;
+import vingo.search.SeatmapZoneResult;
 import vingo.search.ShowtimeResult;
 import vingo.search.VenueResult;
+import vingo.search.ZoneAvailabilityResult;
+import vingo.search.ZoneKind;
 
 /** Chuyển kết quả của {@code SearchService} sang model sinh từ contract. */
 @Component
@@ -95,6 +108,56 @@ class SearchApiMapper {
                 .status(ShowtimeStatus.fromValue(r.status().name()))
                 .soldOut(r.soldOut())
                 .venue(toVenue(r.venue()));
+    }
+
+    SeatMap toSeatMap(SeatmapResult r) {
+        return new SeatMap()
+                .showtimeId(r.showtimeId())
+                .status(ShowtimeStatus.fromValue(r.status().name()))
+                .zones(r.zones().stream().map(this::toSeatMapZone).toList());
+    }
+
+    GetAvailability200Response toAvailability(AvailabilityResult r) {
+        return new GetAvailability200Response()
+                .showtimeId(r.showtimeId())
+                .status(ShowtimeStatus.fromValue(r.status().name()))
+                .soldOut(r.soldOut())
+                .zones(r.zones().stream().map(this::toZoneAvailability).toList());
+    }
+
+    private SeatMapZonesInner toSeatMapZone(SeatmapZoneResult z) {
+        SeatMapZonesInner zone = new SeatMapZonesInner()
+                .zoneId(z.zoneId())
+                .name(z.name())
+                .kind(SeatMapZonesInner.KindEnum.fromValue(z.kind().name()));
+        z.tier().ifPresent(t -> zone.tier(toPriceTier(t)));
+        if (z.kind() == ZoneKind.STANDING) {
+            zone.seatsLeft(z.seatsLeft());
+        } else {
+            zone.seats(z.seats().stream().map(this::toSeat).toList());
+        }
+        return zone;
+    }
+
+    private SeatMapZonesInnerSeatsInner toSeat(SeatResult s) {
+        return new SeatMapZonesInnerSeatsInner()
+                .seatId(s.seatId())
+                .row(s.row())
+                .number(s.number())
+                .seatType(SeatMapZonesInnerSeatsInner.SeatTypeEnum.fromValue(s.seatType()))
+                .pairSeatId(s.pairSeatId().orElse(null))
+                .status(SeatStatus.fromValue(s.status().name()))
+                .x(BigDecimal.valueOf(s.x()))
+                .y(BigDecimal.valueOf(s.y()));
+    }
+
+    private GetAvailability200ResponseZonesInner toZoneAvailability(ZoneAvailabilityResult z) {
+        GetAvailability200ResponseZonesInner zone = new GetAvailability200ResponseZonesInner()
+                .zoneId(z.zoneId())
+                .name(z.name())
+                .seatsLeft(z.seatsLeft());
+        z.tier().ifPresent(t -> zone.tier(toPriceTier(t)));
+        return zone;
     }
 
     /** Đọc URI poster; sai cú pháp thì bỏ trống poster và ghi WARN, không làm hỏng cả response. */
