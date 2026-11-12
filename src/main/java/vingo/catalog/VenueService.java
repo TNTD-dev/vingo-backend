@@ -6,16 +6,19 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.internal.VenueRepository;
+import vingo.catalog.internal.VenueRepository.HallRow;
 import vingo.catalog.internal.VenueRepository.VenueData;
 import vingo.catalog.internal.VenueRepository.VenuePosition;
 import vingo.catalog.internal.VenueRepository.VenueRow;
-import vingo.catalog.internal.VenueRepository.HallRow;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 
@@ -25,10 +28,12 @@ public class VenueService {
 
     private final VenueRepository repository;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
-    public VenueService(VenueRepository repository, Clock clock) {
+    public VenueService(VenueRepository repository, Clock clock, ApplicationEventPublisher events) {
         this.repository = repository;
         this.clock = clock;
+        this.events = events;
     }
 
     public record VenuePage(List<VenueRow> data, String nextCursor) {}
@@ -53,6 +58,13 @@ public class VenueService {
                         ErrorCode.HALL_NAME_TAKEN,
                         "Sân này đã có hall tên " + normalizedName + "."
                 ));
+    }
+    @Transactional(readOnly = true)
+    public Map<UUID, List<HallRow>> listHallsForVenues(
+            List<UUID> venueIds
+    ) {
+        return repository.findHallsForVenues(venueIds).stream()
+                .collect(Collectors.groupingBy(HallRow::venueId));
     }
 
     @Transactional(readOnly = true)
@@ -97,8 +109,10 @@ public class VenueService {
         );
 
         validateCoordinates(merged);
-        return repository.update(venueId, merged, now())
+        var updated = repository.update(venueId, merged, now())
                 .orElseThrow(VenueService::notFound);
+        events.publishEvent(new VenueChanged(venueId));
+        return updated;
     }
 
     @Transactional
@@ -116,6 +130,7 @@ public class VenueService {
         if (!repository.markDeleted(venueId, timestamp)) {
             throw notFound();
         }
+        events.publishEvent(new VenueChanged(venueId));
     }
 
     private VenueRow lockActiveVenue(UUID venueId) {
@@ -178,4 +193,4 @@ public class VenueService {
     private static DomainException notFound() {
         return new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sân đang hoạt động.");
     }
-}  
+}

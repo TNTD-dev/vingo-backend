@@ -1124,7 +1124,7 @@ paths:
       operationId: listSeatLayouts
       tags: [Admin Catalog]
       summary: Liệt kê phiên bản sơ đồ của hall
-      description: Trả các phiên bản sơ đồ của hall, mới nhất trước.
+      description: Trả tên và phiên bản sơ đồ của hall, mới nhất trước. Chọn bằng id cụ thể khi tạo suất, không tự lấy bản mới nhất.
       parameters:
         - name: hall_id
           in: path
@@ -1184,6 +1184,8 @@ paths:
         Giới hạn file 10 MiB và tổng request 11 MiB, áp dụng cho mọi profile.
         Nhập một SVG xuất từ Figma theo quy ước v1.
         File hợp lệ tạo một phiên bản sơ đồ DRAFT thuộc hall.
+        Bắt buộc nhập name không trắng, tối đa 200 ký tự. Tên được bỏ khoảng trắng hai đầu.
+        Các phiên bản được phép dùng cùng tên.
       parameters:
         - name: hall_id
           in: path
@@ -1195,9 +1197,10 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required: [file, name]
               properties:
                 file: { type: string, format: binary }
+                name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*', example: 'Concert – sân khấu đầu B' }
             encoding:
               file: { contentType: image/svg+xml }
       responses:
@@ -1256,11 +1259,37 @@ paths:
   /admin/seat-layouts/{layout_id}:
     parameters:
       - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: renameSeatLayout
+      tags: [Admin Catalog]
+      summary: Đổi tên cấu hình sơ đồ nháp
+      description: Chỉ đổi tên phiên bản DRAFT thuộc sân đang hoạt động. Không đổi khu, ghế, số phiên bản hoặc liên kết của suất. Bản PUBLISHED bị khóa tên.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeatLayoutNameInput' }
+      responses:
+        '200':
+          description: Cấu hình sơ đồ với tên mới.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayout' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Phiên bản đã công bố (SEAT_LAYOUT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sơ đồ đã công bố, status: 409, code: SEAT_LAYOUT_LOCKED, detail: Chỉ được đổi tên sơ đồ DRAFT. }
     get:
       operationId: getSeatLayout
       tags: [Admin Catalog]
       summary: Đọc tổng quan sơ đồ sân
-      description: Trả thông tin phiên bản, hệ tọa độ và danh sách khu để dựng bản đồ và mini map.
+      description: Trả tên cấu hình, thông tin phiên bản, hệ tọa độ và danh sách khu để dựng bản đồ và mini map.
       responses:
         '200':
           description: Tổng quan sơ đồ
@@ -1631,7 +1660,11 @@ paths:
       operationId: createShowtime
       tags: [Admin Catalog]
       summary: Tạo suất
-      description: Tạo suất diễn gắn với hall_id và seat_layout_id đã PUBLISHED thuộc đúng hall đó.
+      description: >
+        Tạo suất diễn gắn với hall_id và seat_layout_id đã PUBLISHED thuộc đúng hall đó.
+        Chọn địa điểm riêng cho từng suất, có thể dùng nhiều sân trong cùng sự kiện.
+        Sự kiện phải là DRAFT hoặc PUBLISHED; trạng thái ENDED/CANCELLED trả EVENT_LOCKED.
+        Tạo tồn kho của phiên bản đã chọn trong cùng transaction và làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
@@ -1646,6 +1679,12 @@ paths:
               schema: { $ref: '#/components/schemas/Showtime' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Sự kiện đã kết thúc hoặc hủy (EVENT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện không cho phép chỉnh sửa, status: 409, code: EVENT_LOCKED, detail: Không thể thêm suất vào sự kiện đã kết thúc hoặc hủy. }
         '422':
           description: Sơ đồ sân chưa công bố hoặc không thuộc hall được chọn (INVALID_SEAT_LAYOUT)
           content:
@@ -1661,7 +1700,12 @@ paths:
       operationId: updateShowtime
       tags: [Admin Catalog]
       summary: Sửa suất (chỉ trước sale_opens_at)
-      description: Cập nhật thông tin suất diễn trước thời điểm mở bán. Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
+      description: >
+        Cập nhật thông tin suất diễn trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
+        Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc đã tới giờ mở bán trả SHOWTIME_LOCKED.
+        Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
+        Đổi sơ đồ chỉ được khi chưa có đơn hoặc tồn kho HELD/SOLD.
+        Metadata, tồn kho và sự kiện làm mới cache được xử lý trong cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1677,7 +1721,7 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: SHOWTIME_LOCKED
+          description: SHOWTIME_LOCKED hoặc EVENT_LOCKED
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -2037,7 +2081,7 @@ components:
                  EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
                  SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
-                 VENUE_IN_USE, HALL_NAME_TAKEN, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, EVENT_LOCKED, EVENT_INCOMPLETE,
+                 VENUE_IN_USE, HALL_NAME_TAKEN, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
                  SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
         errors:
           type: array
@@ -2184,8 +2228,9 @@ components:
         name: { type: string }
     SeatLayoutInput:
       type: object
-      required: [zones]
+      required: [name, zones]
       properties:
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*' }
         zones:
           type: array
           items:
@@ -2218,10 +2263,17 @@ components:
             minItems: 2
             maxItems: 2
             items: { type: string, description: 'Mã ghế, ví dụ "A-F9"' }
+    SeatLayoutNameInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '(?s).*\S.*', example: 'Bóng đá' }
     SeatLayout:
       type: object
+      required: [name]
       properties:
         id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 200, description: Tên cấu hình; các phiên bản được phép trùng tên. }
         hall_id: { type: string, format: uuid }
         status: { type: string, enum: [DRAFT, PUBLISHED] }
         zone_count: { type: integer }

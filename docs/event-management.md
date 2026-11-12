@@ -4,7 +4,7 @@ Ngày cập nhật: **12/11/2026**. Tiếp nối [CP7 quản lý sân](venue-man
 
 Nhánh triển khai: **`feat/create_events-luannt`**, tách từ `feat/ManageStadium-luannt` tại `f648f76`. Các file CP7 và tài liệu còn chưa commit được giữ nguyên khi chuyển nhánh. Chưa push hoặc tạo PR cho nhánh sự kiện.
 
-Tài liệu này chốt phạm vi, ghi quyết định của Luân và các điểm tích hợp do team Search gửi. Các API/schema ghi là **đề xuất** phải đưa vào PR OpenAPI để Đức duyệt trước khi triển khai; tài liệu không thay thế `contracts/vingo-openapi.yaml`.
+Tài liệu này chốt phạm vi, ghi quyết định của Luân và các điểm tích hợp do team Search gửi. Trạng thái triển khai EV2/EV3 được ghi trong các biên bản riêng; các phần còn đề xuất phải đi qua PR OpenAPI theo quy tắc repo. Tài liệu không thay thế `contracts/vingo-openapi.yaml`.
 
 ## 1. Luồng admin
 
@@ -23,7 +23,7 @@ Admin tạo sự kiện `DRAFT`, lưu thông tin chung và poster, thêm suất 
 
 **Nhánh rẽ:** sơ đồ chưa phù hợp → chuyển sang Quản lý sân → import và công bố cấu hình mới → quay lại chọn cho suất. Không sửa khu hoặc ghế vật lý ngay trong sự kiện; suất cũ giữ nguyên phiên bản đã gắn.
 
-**Tên cấu hình sơ đồ:** thêm `seat_layout.name`, nhập khi import; hiện khi liệt kê và xem trước. Tên bắt buộc, không trắng; cho phép trùng tên giữa các phiên bản. Đề xuất hiển thị `Concert – sân khấu đầu B · v3 · Đã công bố`. Chỉ cho chọn bản `PUBLISHED` và lưu chính xác `seat_layout_id`, không tự chọn bản mới nhất. Trong đợt đầu chỉ đổi tên khi còn `DRAFT`; cần bổ sung contract/migration trước khi triển khai hành vi này. API đổi tên bản nháp, nếu cần, phải có trong PR contract; endpoint import hiện chỉ tạo bản mới.
+**Tên cấu hình sơ đồ:** EV3 đã bổ sung `seat_layout.name` vào import, danh sách và xem trước; migration giữ ID và liên kết cũ. Tên bắt buộc, không trắng, tối đa 200 ký tự; cho phép trùng giữa các phiên bản. Hiển thị tên cùng phiên bản/trạng thái, chọn đúng `seat_layout_id` đã PUBLISHED thay vì tự lấy bản mới nhất. `PATCH /admin/seat-layouts/{layout_id}` chỉ đổi tên DRAFT, PUBLISHED trả `SEAT_LAYOUT_LOCKED`. Xem [bàn giao EV3](event-management-ev3.md).
 
 Giá trong đợt này theo mô hình **sự kiện × khu** hiện có. Giá riêng cho từng suất, `allocation_mode`, mẫu cấu hình bán vé và SKU là phần mở rộng cần thiết kế riêng; không đưa ngầm vào đợt tạo sự kiện này. Hủy sự kiện là luồng vận hành tiếp theo, không phải điều kiện kết thúc luồng tạo.
 
@@ -83,7 +83,7 @@ Nguồn phối hợp: các lưu ý team gửi từ [PR #19 — Search cache](htt
 | Lưu ý từ team | Trạng thái trong nhánh `feat/ManageStadium-luannt`, nền `f648f76` | Việc phải làm |
 |---|---|---|
 | Phát `CatalogChanged` khi Catalog ghi dữ liệu | EV2 đã phát khi tạo nháp và PATCH có thay đổi; đổi layout suất đã phát từ CP6. Search xử lý sau commit. Giá và công bố ở các mốc sau. | Test EV2 xác nhận cache mới sau commit, rollback/no-op không invalidation. Tiếp tục bổ sung tại các use case giá/công bố. |
-| Sửa sân phát `VenueChanged` | Record/listener đã có, nhưng `VenueService.update` chưa phát event. | Bổ sung cho sửa sân và các thay đổi khác ảnh hưởng response Search, kiểm tra bằng API đã làm nóng cache. |
+| Sửa sân phát `VenueChanged` | EV3 đã phát khi sửa/ngừng sử dụng sân. | Test làm nóng Search xác nhận địa điểm mới sau commit; rollback không tăng thế hệ cache. |
 | Publish suất gọi `bookingService.initInventory(showtimeId)` | `BookingService` trong checkout hiện tại **chưa có method này**. Catalog đang tạo/thay tồn kho trong `SeatLayoutRepository` từ bước tạo/sửa suất. | Chốt với Danh ai sở hữu thao tác, tính idempotent và transaction trước khi đổi đường gọi. Không gọi method chưa tồn tại. |
 | `venue.city` phải là mã `HCM`, `HN`, `DN` | Contract dùng enum; API ghi dùng enum. Database chưa có CHECK chỉ cho ba mã; seed còn cần rà/chuyển dữ liệu. | Chuẩn bị migration mới và sửa `scripts/seed.sql`; kiểm kê giá trị cũ trước khi chuyển. Không gán bừa thành phố không nhận diện được sang mã khác. |
 | Chặn URL poster sai ngay lúc ghi | POST/PATCH EV2 đã validate cả hai poster: URI tuyệt đối HTTP/HTTPS có host. | Test 400 đã có; dữ liệu URL cũ sai không gây hỏng toàn bộ GET. |
@@ -107,7 +107,7 @@ Trước CHECK cho city cần cập nhật cả dữ liệu test: `CatalogFixtur
 | **EV6 — Kiểm tra và công bố** | `POST /admin/events/{id}/publish`; kiểm tra suất/giá/gán khu, bảo đảm tồn kho, event → `PUBLISHED`, suất `DRAFT` hợp lệ → `SCHEDULED`, phát `CatalogChanged` trong transaction. | Thiếu cấu hình trả `422 EVENT_INCOMPLETE`, không đổi trạng thái/tồn kho; gọi lại không nhân bản/reset inventory; giữ ghế BLOCKED; test đồng thời với cập nhật cấu hình và không phát event khi rollback. |
 | **EV7 — Nghiệm thu và bàn giao** | Luồng tạo nháp → suất → giá → khóa ghế tùy chọn → công bố → đọc public; case quay lại Quản lý sân, nhiều sân, phiên bản khác nhau; dữ liệu mẫu và tài liệu team. | `mvnw verify`/`ModularityTest` qua trên PostgreSQL thật; xác thực 401/403, 4xx, cache sau commit/rollback, tồn kho và giờ mở bán; PR/review và Swagger staging có bằng chứng riêng. |
 
-**Hiện tại:** EV2 đã đạt nghiệm thu backend local ngày 12/11/2026: `clean verify` qua **489 test**, gồm **70 ca EV2** và `ModularityTest`. Xem [bàn giao EV2](event-management-ev2.md) để biết hành vi, giới hạn và kết quả. Bước tiếp theo là EV3. Tên cấu hình sơ đồ, hạng giá, khóa ghế và công bố vẫn theo các mốc riêng, không được coi là hoàn thành từ EV2.
+**Hiện tại:** EV3.1–EV3.5 đã đạt nghiệm thu backend local ngày 12/11/2026: `clean verify` qua **510 test**, không lỗi/bỏ qua, gồm `ModularityTest`. Xem [bàn giao EV3](event-management-ev3.md). Tên cấu hình sơ đồ đã được bổ sung; bước tiếp theo là EV4 — hạng giá và gán giá khu. Khóa/mở ghế và công bố sự kiện thuộc EV5–EV6; staging và UI nghiệm thu riêng.
 
 ### Thứ tự commit/PR và điều kiện hoàn thành
 

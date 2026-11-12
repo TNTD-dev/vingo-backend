@@ -35,6 +35,7 @@ import vingo.api.model.Hall;
 import vingo.api.model.ListVenues200Response;
 import vingo.api.model.PriceTier;
 import vingo.api.model.SeatLayout;
+import vingo.api.model.SeatLayoutNameInput;
 import vingo.api.model.SeatLayoutBounds;
 import vingo.api.model.SeatLayoutOverview;
 import vingo.api.model.SeatLayoutPage;
@@ -65,6 +66,7 @@ import vingo.shared.error.ErrorCode;
 
 @RestController
 class AdminVenueController implements AdminCatalogApi {
+
     private static final MediaType SVG = MediaType.parseMediaType("image/svg+xml");
     private static final MediaType CSV = new MediaType("text", "csv", StandardCharsets.UTF_8);
 
@@ -104,7 +106,7 @@ class AdminVenueController implements AdminCatalogApi {
                 input.getTitle(),
                 input.getDescription(),
                 input.getCategory() == null
-                        ? null : input.getCategory().getValue(),
+                ? null : input.getCategory().getValue(),
                 input.getAttributes(),
                 input.getPosterMobileUrl(),
                 input.getPosterDesktopUrl(),
@@ -133,11 +135,37 @@ class AdminVenueController implements AdminCatalogApi {
 
     @Override
     public ResponseEntity<ListVenues200Response> listVenues(
-            String q, String city, String cursor, Integer limit
+            String q,
+            String city,
+            String cursor,
+            Integer limit
     ) {
-        VenueService.VenuePage page = venues.list(q, city, cursor, limit);
+        VenueService.VenuePage page
+                = venues.list(q, city, cursor, limit);
+
+        var venueIds = page.data().stream()
+                .map(VenueRow::id)
+                .toList();
+
+        var hallsByVenue = venues.listHallsForVenues(venueIds);
+
+        var data = page.data().stream()
+                .map(row -> {
+                    var halls = hallsByVenue
+                            .getOrDefault(row.id(), List.of())
+                            .stream()
+                            .map(hall -> new Hall()
+                                    .id(hall.id())
+                                    .venueId(hall.venueId())
+                                    .name(hall.name()))
+                            .toList();
+
+                    return toApi(row).halls(halls);
+                })
+                .toList();
+
         return ResponseEntity.ok(new ListVenues200Response()
-                .data(page.data().stream().map(this::toApi).toList())
+                .data(data)
                 .nextCursor(page.nextCursor()));
     }
 
@@ -175,7 +203,7 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
-    public ResponseEntity<SeatLayout> importSeatLayoutSvg(UUID hallId, MultipartFile file) {
+    public ResponseEntity<SeatLayout> importSeatLayoutSvg(UUID hallId, MultipartFile file, String name) {
         if (file.isEmpty()) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "File SVG không được để trống.");
         }
@@ -190,10 +218,11 @@ class AdminVenueController implements AdminCatalogApi {
         } catch (IOException ex) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "Không đọc được file đã tải lên.");
         }
-        var created = layouts.importSvg(hallId, input);
+        var created = layouts.importSvg(hallId, name, input);
         return ResponseEntity.status(HttpStatus.CREATED).body(new SeatLayout()
                 .id(created.id())
                 .hallId(created.hallId())
+                .name(created.name())
                 .version(created.version())
                 .schemaVersion(created.schemaVersion())
                 .status(SeatLayout.StatusEnum.DRAFT)
@@ -230,7 +259,7 @@ class AdminVenueController implements AdminCatalogApi {
     private String toJson(Object value) {
         return value == null ? null : json.writeValueAsString(value);
     }
-    
+
     private static CityCode toCityCode(String storedCity) {
         for (CityCode code : CityCode.values()) {
             if (code.getValue().equals(storedCity)) {
@@ -245,9 +274,12 @@ class AdminVenueController implements AdminCatalogApi {
         CityCode city = toCityCode(data.city());
         // Tên hiển thị theo CityCode trong contract hiện hành; danh mục còn chờ catalog chốt.
         String cityName = city == null ? data.city() : switch (city) {
-            case HCM -> "TP. Hồ Chí Minh";
-            case HN -> "Hà Nội";
-            case DN -> "Đà Nẵng";
+            case HCM ->
+                "TP. Hồ Chí Minh";
+            case HN ->
+                "Hà Nội";
+            case DN ->
+                "Đà Nẵng";
         };
 
         return new Venue()
@@ -262,7 +294,7 @@ class AdminVenueController implements AdminCatalogApi {
                 .lng(data.lng())
                 .info(json.readValue(data.infoJson(), VenueInfo.class));
     }
-    
+
     @Override
     public ResponseEntity<SeatLayoutOverview> getSeatLayout(UUID layoutId) {
         var overview = layouts.getOverview(layoutId);
@@ -270,6 +302,7 @@ class AdminVenueController implements AdminCatalogApi {
         return ResponseEntity.ok(new SeatLayoutOverview()
                 .id(header.id())
                 .hallId(header.hallId())
+                .name(header.name())
                 .status(SeatLayoutOverview.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
                 .seatCount(header.seatCount())
@@ -347,6 +380,11 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
+    public ResponseEntity<SeatLayout> renameSeatLayout(UUID layoutId, SeatLayoutNameInput input) {
+        return ResponseEntity.ok(toSeatLayout(layouts.rename(layoutId, input.getName())));
+    }
+
+    @Override
     public ResponseEntity<SeatLayoutPage> listSeatLayouts(UUID hallId, String cursor, Integer limit) {
         var page = layouts.listByHall(hallId, cursor, limit);
         return ResponseEntity.ok(new SeatLayoutPage()
@@ -385,8 +423,8 @@ class AdminVenueController implements AdminCatalogApi {
         var header = result.header();
         var data = header.data();
 
-        OffsetDateTime now =
-                clock.instant().atOffset(ZoneOffset.UTC);
+        OffsetDateTime now
+                = clock.instant().atOffset(ZoneOffset.UTC);
 
         var response = new EventDetail()
                 .id(header.id())
@@ -417,6 +455,7 @@ class AdminVenueController implements AdminCatalogApi {
         return new SeatLayout()
                 .id(header.id())
                 .hallId(header.hallId())
+                .name(header.name())
                 .status(SeatLayout.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
                 .seatCount(header.seatCount())
@@ -451,6 +490,7 @@ class AdminVenueController implements AdminCatalogApi {
                 .saleOpensAt(data.saleOpensAt())
                 .saleClosesAt(data.saleClosesAt());
     }
+
     private Showtime toAdminShowtime(
             EventDetails.Session session,
             OffsetDateTime now
@@ -485,10 +525,13 @@ class AdminVenueController implements AdminCatalogApi {
         String cityName = city == null
                 ? source.city()
                 : switch (city) {
-                    case HCM -> "TP. Hồ Chí Minh";
-                    case HN -> "Hà Nội";
-                    case DN -> "Đà Nẵng";
-                };
+            case HCM ->
+                "TP. Hồ Chí Minh";
+            case HN ->
+                "Hà Nội";
+            case DN ->
+                "Đà Nẵng";
+        };
 
         return new Venue()
                 .id(source.id())
@@ -498,6 +541,7 @@ class AdminVenueController implements AdminCatalogApi {
                 .city(city)
                 .cityName(cityName);
     }
+
     @Override
     public ResponseEntity<AdminEventPage> listAdminEvents(
             String q,

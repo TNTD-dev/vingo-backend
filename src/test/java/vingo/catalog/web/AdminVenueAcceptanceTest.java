@@ -152,6 +152,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         return Stream.of(
                 Arguments.of("POST", hall + "/import"), Arguments.of("GET", hall),
                 Arguments.of("GET", layout), Arguments.of("GET", layout + "/svg"),
+                Arguments.of("PATCH", layout),
                 Arguments.of("GET", layout + "/zones/" + UUID.randomUUID()),
                 Arguments.of("GET", layout + "/zones.csv"), Arguments.of("GET", layout + "/seats.csv"),
                 Arguments.of("POST", layout + "/publish"),
@@ -180,7 +181,8 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
 
     private UUID importSvg(String token, UUID hall, String svg) throws Exception {
         String boundary = "CP7-" + UUID.randomUUID();
-        String body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\"\r\n"
+        String body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nCP7\r\n"
+                + "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\"\r\n"
                 + "Content-Type: image/svg+xml\r\n\r\n" + svg + "\r\n--" + boundary + "--\r\n";
         return id(exchange("POST", ADMIN + "/halls/" + hall + "/seat-layouts/import", token,
                 body, "multipart/form-data; boundary=" + boundary, 201));

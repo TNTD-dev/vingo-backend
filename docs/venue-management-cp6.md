@@ -10,12 +10,12 @@ Các đường dẫn bên dưới có tiền tố `/api/v1` và yêu cầu quy�
 
 | Bước | API | Kết quả |
 |---|---|---|
-| Nạp bản nháp | `POST /admin/halls/{hall_id}/seat-layouts/import` | Gửi SVG trong trường multipart `file`. Response `201` trả ID bản `DRAFT`. |
+| Nạp bản nháp | `POST /admin/halls/{hall_id}/seat-layouts/import` | Gửi multipart `file` chứa SVG và `name` chứa tên cấu hình (bổ sung từ EV3). Response `201` trả ID, tên và bản `DRAFT`. |
 | Xem các phiên bản | `GET /admin/halls/{hall_id}/seat-layouts?limit=20` | Trả `data` và `next_cursor`, phiên bản mới nhất trước. Trang tiếp theo gửi lại cursor cho cùng hall. Danh sách có cả `DRAFT` và `PUBLISHED`. |
 | Duyệt bản nháp | `GET /admin/seat-layouts/{layout_id}` và `GET /admin/seat-layouts/{layout_id}/svg` | Trả tổng quan khu và SVG của cùng phiên bản. Dùng `GET /admin/seat-layouts/{layout_id}/zones/{zone_id}` để đọc chi tiết một khu. |
 | Công bố | `POST /admin/seat-layouts/{layout_id}/publish` | Response `200` trả phiên bản `PUBLISHED` và `published_at`. Gọi lại trả cùng ID và giữ thời điểm công bố lần đầu. |
 | Tạo suất | `POST /admin/events/{event_id}/showtimes` | Response `201` trả suất và phiên bản sơ đồ đã gắn. Backend khởi tạo tồn kho cho suất từ chính phiên bản này. |
-| Sửa suất | `PATCH /admin/showtimes/{showtime_id}` | Response `200` trả thông tin đã cập nhật. Có thể đổi phiên bản trước `sale_opens_at`. Nếu đổi phiên bản, backend dựng lại tồn kho của suất trong cùng transaction. |
+| Sửa suất | `PATCH /admin/showtimes/{showtime_id}` | Response `200` trả thông tin đã cập nhật. Có thể đổi phiên bản trước `sale_opens_at` khi chưa có đơn hoặc tồn kho đang giữ/đã bán. Nếu đổi phiên bản, backend dựng lại tồn kho của suất trong cùng transaction. |
 
 Ví dụ body tạo suất. Hai UUID là giá trị minh họa. Thay chúng bằng ID hall và ID phiên bản đã công bố thuộc hall đó.
 

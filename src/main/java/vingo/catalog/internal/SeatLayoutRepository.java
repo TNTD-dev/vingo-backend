@@ -41,9 +41,10 @@ public class SeatLayoutRepository {
                 .isPresent();
     }
 
-    LayoutVersion insertDraft(UUID hallId) {
-        return jdbc.sql("INSERT INTO seat_layout (hall_id) VALUES (:hallId) RETURNING id, version")
+    LayoutVersion insertDraft(UUID hallId, String name) {
+        return jdbc.sql("INSERT INTO seat_layout (hall_id, name) VALUES (:hallId, :name) RETURNING id, version")
                 .param("hallId", hallId)
+                .param("name", name)
                 .query((rs, row) -> new LayoutVersion(rs.getObject("id", UUID.class), rs.getLong("version")))
                 .single();
     }
@@ -154,6 +155,7 @@ public class SeatLayoutRepository {
     public record LayoutHeaderRow(
             UUID id,
             UUID hallId,
+            String name,
             String status,
             long version,
             Integer schemaVersion,
@@ -201,7 +203,7 @@ public class SeatLayoutRepository {
 
     Optional<LayoutHeaderRow> findLayoutHeader(UUID layoutId) {
         return jdbc.sql("""
-                SELECT sl.id, sl.hall_id, sl.status, sl.version, sl.published_at,
+                SELECT sl.id, sl.hall_id, sl.name, sl.status, sl.version, sl.published_at,
                        svg.schema_version,
                        svg.view_box_x, svg.view_box_y, svg.view_box_width, svg.view_box_height,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_layout_id = sl.id) AS zone_count,
@@ -214,6 +216,7 @@ public class SeatLayoutRepository {
                 .query((rs, row) -> new LayoutHeaderRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("hall_id", UUID.class),
+                        rs.getString("name"),
                         rs.getString("status"),
                         rs.getLong("version"),
                         rs.getObject("schema_version", Integer.class),
@@ -312,7 +315,7 @@ public class SeatLayoutRepository {
                 JOIN hall h ON h.id = sl.hall_id
                 JOIN venue v ON v.id = h.venue_id
                 WHERE sl.id = :id AND v.deleted_at IS NULL
-                FOR UPDATE OF sl
+                FOR UPDATE OF v, sl
                 """)
                 .param("id", layoutId)
                 .query(UUID.class)
@@ -331,6 +334,20 @@ public class SeatLayoutRepository {
                 .update();
     }
 
+    void rename(UUID layoutId, String name) {
+        jdbc.sql("UPDATE seat_layout SET name = :name WHERE id = :id")
+                .param("id", layoutId).param("name", name).update();
+    }
+
+    record LayoutReference(UUID eventId, UUID showtimeId) {}
+
+    List<LayoutReference> findLayoutReferences(UUID layoutId) {
+        return jdbc.sql("SELECT event_id, id FROM showtime WHERE seat_layout_id = :id")
+                .param("id", layoutId)
+                .query((rs, row) -> new LayoutReference(rs.getObject("event_id", UUID.class),
+                        rs.getObject("id", UUID.class))).list();
+    }
+
     boolean activeHallExists(UUID hallId) {
         return jdbc.sql("""
                 SELECT EXISTS (
@@ -347,7 +364,7 @@ public class SeatLayoutRepository {
     
     List<LayoutHeaderRow> findByHall(UUID hallId, LayoutPosition after, int fetchSize) {
         return jdbc.sql("""
-                SELECT sl.id, sl.hall_id, sl.status, sl.version, sl.published_at,
+                SELECT sl.id, sl.hall_id, sl.name, sl.status, sl.version, sl.published_at,
                        svg.schema_version,
                        svg.view_box_x, svg.view_box_y, svg.view_box_width, svg.view_box_height,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_layout_id = sl.id) AS zone_count,
@@ -369,6 +386,7 @@ public class SeatLayoutRepository {
                 .query((rs, row) -> new LayoutHeaderRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("hall_id", UUID.class),
+                        rs.getString("name"),
                         rs.getString("status"),
                         rs.getLong("version"),
                         rs.getObject("schema_version", Integer.class),
@@ -380,11 +398,31 @@ public class SeatLayoutRepository {
                 .list();
     }
 
-    Optional<String> findEventStatus(UUID eventId) {
-        return jdbc.sql("SELECT status FROM event WHERE id = :id")
+    Optional<String> lockEventStatus(UUID eventId) {
+        return jdbc.sql("SELECT status FROM event WHERE id = :id FOR UPDATE")
                 .param("id", eventId)
                 .query(String.class)
                 .optional();
+    }
+
+    Optional<UUID> findEventIdForShowtime(UUID showtimeId) {
+        return jdbc.sql("SELECT event_id FROM showtime WHERE id = :id")
+                .param("id", showtimeId).query(UUID.class).optional();
+    }
+
+    boolean hasAllocatedInventoryOrOrders(UUID showtimeId) {
+        // Khóa tồn kho cũ trước khi kiểm tra và thay phiên bản để không xóa chỗ vừa được giữ.
+        jdbc.sql("SELECT seat_id FROM showtime_seat WHERE showtime_id = :id ORDER BY seat_id FOR UPDATE")
+                .param("id", showtimeId).query(UUID.class).list();
+        jdbc.sql("SELECT zone_id FROM showtime_zone_stock WHERE showtime_id = :id ORDER BY zone_id FOR UPDATE")
+                .param("id", showtimeId).query(UUID.class).list();
+        return jdbc.sql("""
+                SELECT EXISTS (SELECT 1 FROM orders WHERE showtime_id = :id)
+                    OR EXISTS (SELECT 1 FROM showtime_seat
+                               WHERE showtime_id = :id AND status IN ('HELD', 'SOLD'))
+                    OR EXISTS (SELECT 1 FROM showtime_zone_stock
+                               WHERE showtime_id = :id AND (held > 0 OR sold > 0))
+                """).param("id", showtimeId).query(Boolean.class).single();
     }
 
     Optional<LayoutAttachmentRow> findLayoutForAttach(UUID layoutId) {

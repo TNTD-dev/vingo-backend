@@ -675,6 +675,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
             throws Exception {
         String boundary = "svg-test-boundary";
         var body = new java.io.ByteArrayOutputStream();
+        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nCP6\r\n")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\""
                 + "\r\nContent-Type: " + contentType + "\r\n\r\n")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -695,6 +697,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     private org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec uploadSvg(
             String token, UUID hallId, byte[] input, String contentType) {
         var parts = new MultipartBodyBuilder();
+        parts.part("name", "CP6");
         var resource = new ByteArrayResource(input) {
             @Override
             public String getFilename() {
@@ -759,6 +762,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     private UUID importThienTruong(String token, UUID hallId) {
         var parts = new MultipartBodyBuilder();
+        parts.part("name", "Bóng đá Thiên Trường");
         parts.part("file", new FileSystemResource(
                 "sources/LAYOUT__THIEN-TRUONG.svg"
         )).contentType(MediaType.parseMediaType("image/svg+xml"));

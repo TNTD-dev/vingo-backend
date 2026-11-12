@@ -8,6 +8,11 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
@@ -19,6 +24,7 @@ import vingo.catalog.CatalogChanged;
 
 @Service
 public class SeatLayoutImportService {
+    private static final Logger log = LoggerFactory.getLogger(SeatLayoutImportService.class);
     private final SeatLayoutSvgParser parser;
     private final SeatLayoutRepository repository;
     private final Clock clock;
@@ -33,13 +39,14 @@ public class SeatLayoutImportService {
     }
 
     @Transactional
-    public ImportedLayout importSvg(UUID hallId, byte[] input) {
+    public ImportedLayout importSvg(UUID hallId, String name, byte[] input) {
+        String normalizedName = validateName(name);
         var layout = parser.parse(input);
         if (!repository.lockActiveVenueForHall(hallId)) {
             throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy hall thuộc sân đang hoạt động.");
         }
 
-        var draft = repository.insertDraft(hallId);
+        var draft = repository.insertDraft(hallId, normalizedName);
         repository.insertSvg(draft.id(), layout);
         int seatCount = layout.zones().stream().mapToInt(zone -> zone.seats().size()).sum();
         UUID seatTypeId = seatCount > 0 ? repository.standardSeatType() : null;
@@ -49,7 +56,10 @@ public class SeatLayoutImportService {
                 repository.insertSeats(zoneId, seatTypeId, zone.seats());
             }
         }
-        return new ImportedLayout(draft.id(), hallId, draft.version(), layout.schemaVersion(),
+        try (var ignored = MDC.putCloseable("seat_layout_id", draft.id().toString())) {
+            log.info("Đã nhập sơ đồ DRAFT");
+        }
+        return new ImportedLayout(draft.id(), hallId, normalizedName, draft.version(), layout.schemaVersion(),
                 layout.zones().size(), seatCount);
     }
 
@@ -72,8 +82,42 @@ public class SeatLayoutImportService {
         }
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
         repository.markPublished(layoutId, now);
+        try (var ignored = MDC.putCloseable("seat_layout_id", layoutId.toString())) {
+            log.info("Đã công bố phiên bản sơ đồ");
+        }
+        repository.findLayoutReferences(layoutId).stream()
+                .collect(Collectors.groupingBy(SeatLayoutRepository.LayoutReference::eventId,
+                        Collectors.mapping(SeatLayoutRepository.LayoutReference::showtimeId, Collectors.toSet())))
+                .forEach((eventId, showtimes) -> events.publishEvent(new CatalogChanged(eventId, Set.copyOf(showtimes))));
         return repository.findLayoutHeader(layoutId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên bản sơ đồ sân."));
+    }
+
+    @Transactional
+    public SeatLayoutRepository.LayoutHeaderRow rename(UUID layoutId, String name) {
+        String normalizedName = validateName(name);
+        if (repository.lockPublishableLayout(layoutId).isEmpty()) {
+            throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên bản sơ đồ sân.");
+        }
+        var header = repository.findLayoutHeader(layoutId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên bản sơ đồ sân."));
+        if (!"DRAFT".equals(header.status())) {
+            throw new DomainException(ErrorCode.SEAT_LAYOUT_LOCKED, "Chỉ được đổi tên sơ đồ DRAFT.");
+        }
+        repository.rename(layoutId, normalizedName);
+        try (var ignored = MDC.putCloseable("seat_layout_id", layoutId.toString())) {
+            log.info("Đã đổi tên cấu hình sơ đồ DRAFT");
+        }
+        return repository.findLayoutHeader(layoutId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên bản sơ đồ sân."));
+    }
+
+    private static String validateName(String name) {
+        if (name == null || name.isBlank() || name.length() > 200) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR,
+                    "Tên cấu hình sơ đồ không được để trống và tối đa 200 ký tự.");
+        }
+        return name.strip();
     }
 
     private void requireLayout(UUID layoutId) {
@@ -113,7 +157,7 @@ public class SeatLayoutImportService {
         }
     }
 
-    public record ImportedLayout(UUID id, UUID hallId, long version, int schemaVersion, int zoneCount,
+    public record ImportedLayout(UUID id, UUID hallId, String name, long version, int schemaVersion, int zoneCount,
             int seatCount) {}
 
     @Transactional(readOnly = true)
@@ -204,14 +248,15 @@ public class SeatLayoutImportService {
             UUID eventId,
             SeatLayoutRepository.ShowtimeData input
     ) {
-        String eventStatus = repository.findEventStatus(eventId)
-                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sự kiện."));
+        String eventStatus = requireEditableEvent(eventId);
         validateShowtimeData(input);
         requirePublishedLayoutForHall(input.hallId(), input.seatLayoutId());
 
         String showtimeStatus = "PUBLISHED".equals(eventStatus) ? "SCHEDULED" : "DRAFT";
         var created = repository.insertShowtime(eventId, showtimeStatus, input);
         repository.initShowtimeInventory(created.id(), input.seatLayoutId());
+        events.publishEvent(new CatalogChanged(eventId, Set.of(created.id())));
+        logShowtimeChange(eventId, created.id(), "Đã tạo suất diễn");
         return created;
     }
 
@@ -220,6 +265,10 @@ public class SeatLayoutImportService {
             UUID showtimeId,
             SeatLayoutRepository.ShowtimeData patch
     ) {
+        UUID eventId = repository.findEventIdForShowtime(showtimeId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy suất diễn."));
+        // Cùng thứ tự khóa với các use case sửa/công bố event: event trước, suất sau.
+        requireEditableEvent(eventId);
         var current = repository.lockShowtime(showtimeId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy suất diễn."));
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
@@ -239,12 +288,39 @@ public class SeatLayoutImportService {
         validateShowtimeData(merged);
         requirePublishedLayoutForHall(merged.hallId(), merged.seatLayoutId());
 
-        var updated = repository.updateShowtime(showtimeId, merged);
-        if (!merged.seatLayoutId().equals(current.data().seatLayoutId())) {
-            repository.replaceShowtimeInventory(showtimeId, merged.seatLayoutId());
-            events.publishEvent(new CatalogChanged(current.eventId(), Set.of(showtimeId)));
+        boolean layoutChanged = !merged.seatLayoutId().equals(current.data().seatLayoutId());
+        if (layoutChanged && repository.hasAllocatedInventoryOrOrders(showtimeId)) {
+            throw new DomainException(ErrorCode.SHOWTIME_LOCKED,
+                    "Không thể đổi sơ đồ của suất đã có đơn hoặc tồn kho đang giữ/đã bán.");
         }
+        if (merged.equals(current.data())) {
+            return current;
+        }
+
+        var updated = repository.updateShowtime(showtimeId, merged);
+        if (layoutChanged) {
+            repository.replaceShowtimeInventory(showtimeId, merged.seatLayoutId());
+        }
+        events.publishEvent(new CatalogChanged(current.eventId(), Set.of(showtimeId)));
+        logShowtimeChange(current.eventId(), showtimeId, "Đã cập nhật suất diễn");
         return updated;
+    }
+
+    private static void logShowtimeChange(UUID eventId, UUID showtimeId, String message) {
+        try (var eventContext = MDC.putCloseable("event_id", eventId.toString());
+             var showtimeContext = MDC.putCloseable("showtime_id", showtimeId.toString())) {
+            log.info(message);
+        }
+    }
+
+    private String requireEditableEvent(UUID eventId) {
+        String status = repository.lockEventStatus(eventId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sự kiện."));
+        if (!Set.of("DRAFT", "PUBLISHED").contains(status)) {
+            throw new DomainException(ErrorCode.EVENT_LOCKED,
+                    "Không thể thêm hoặc sửa suất của sự kiện đã kết thúc hoặc hủy.");
+        }
+        return status;
     }
 
     private void requirePublishedLayoutForHall(UUID hallId, UUID layoutId) {
