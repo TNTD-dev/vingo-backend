@@ -78,15 +78,7 @@ public class AdminOpsService {
     @Transactional(readOnly = true)
     public AdminGetOrder200Response adminGetOrder(UUID orderId) {
         requireAdmin();
-        var detail = booking.adminGetOrder(orderId);
-        var order = detail.order();
-        return new AdminGetOrder200Response().id(order.getId()).code(order.getCode()).status(order.getStatus())
-                .event(order.getEvent()).showtime(order.getShowtime()).items(order.getItems())
-                .totalAmount(order.getTotalAmount()).currency(AdminGetOrder200Response.CurrencyEnum.VND)
-                .expiresAt(order.getExpiresAt()).paidAt(order.getPaidAt()).buyer(order.getBuyer())
-                .reviewReason(order.getReviewReason() == null ? null
-                        : AdminGetOrder200Response.ReviewReasonEnum.fromValue(order.getReviewReason().getValue()))
-                .createdAt(order.getCreatedAt()).history(detail.history()).payments(payments.readPayments(orderId));
+        return booking.adminGetOrder(orderId).payments(payments.readPayments(orderId));
     }
 
     /** Kiểm quyền admin rồi tra cứu vé qua API ticketing luôn ẩn QR. */

@@ -29,20 +29,17 @@ public class AdminOpsController implements AdminOperationsApi {
         this.adminOps = adminOps;
     }
 
-    /** Trả trang đơn mọi buyer sau khi service kiểm quyền admin. */
     @Override
     public ResponseEntity<ListMyOrders200Response> adminListOrders(
             OrderStatus status, UUID eventId, UUID showtimeId, String q, String cursor, Integer limit) {
         return ResponseEntity.ok(adminOps.adminListOrders(status, eventId, showtimeId, q, cursor, limit));
     }
 
-    /** Trả chi tiết đơn cùng lịch sử và payments không chứa URL thanh toán. */
     @Override
     public ResponseEntity<AdminGetOrder200Response> adminGetOrder(UUID orderId) {
         return ResponseEntity.ok(adminOps.adminGetOrder(orderId));
     }
 
-    /** Trả trang vé admin không chứa QR, kể cả vé ISSUED. */
     @Override
     public ResponseEntity<ListMyTickets200Response> adminListTickets(
             String code, UUID orderId, UUID showtimeId, TicketStatus status, String cursor, Integer limit) {

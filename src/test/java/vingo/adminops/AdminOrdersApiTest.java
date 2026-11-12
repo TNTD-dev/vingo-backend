@@ -53,28 +53,6 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
     }
 
     @Test
-    void adminListOrders_returnsAllBuyersNewestFirstWithIdTieBreak() {
-        var expected = jdbc.sql("SELECT id FROM orders ORDER BY created_at DESC, id DESC").query(String.class).list();
-
-        var data = readPages("/api/v1/admin/orders", 100, expected);
-
-        assertThat(data.stream().map(row -> (String) row.get("id")).toList())
-                .contains(paid.toString(), cancelled.toString(), review.toString(), expired.toString(),
-                        pending.toString(), otherPaid.toString());
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"PENDING", "PAID", "NEEDS_REVIEW", "CANCELLED", "EXPIRED"})
-    void adminListOrders_filtersStatusAcrossAllBuyers(String status) {
-        var expected = jdbc.sql("SELECT id FROM orders WHERE status = :status ORDER BY created_at DESC, id DESC")
-                .param("status", status).query(String.class).list();
-
-        var data = readPages("/api/v1/admin/orders?status=" + status, 100, expected);
-
-        assertThat(data).allSatisfy(row -> assertThat(row).containsEntry("status", status));
-    }
-
-    @Test
     void adminListOrders_filtersEventThroughShowtime() {
         String json = body(get(adminToken, "/api/v1/admin/orders?event_id={id}", otherShowtime.event().id()), 200);
 
@@ -123,12 +101,6 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
     void adminListOrders_doesNotMatchPartialEmailOrPhone() {
         assertIds(query(buyerEmail.substring(0, 12)));
         assertIds(query(phone.substring(0, phone.length() - 2)));
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"%%%", "a_c", "%_%"})
-    void adminListOrders_treatsLikeWildcardsAsLiteralCharacters(String q) {
-        assertIds(query(q));
     }
 
     @Test

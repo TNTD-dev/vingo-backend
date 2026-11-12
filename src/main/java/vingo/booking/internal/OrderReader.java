@@ -12,6 +12,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
+import tools.jackson.databind.json.JsonMapper;
+import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.AdminGetOrder200ResponseAllOfHistoryInner;
 import vingo.api.model.BuyerProfile;
 import vingo.api.model.CityCode;
@@ -30,9 +32,17 @@ import vingo.shared.error.ErrorCode;
 public class OrderReader {
 
     private final JdbcClient jdbc;
+    private final JsonMapper json;
 
-    public OrderReader(JdbcClient jdbc) {
+    public OrderReader(JdbcClient jdbc, JsonMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
+    }
+
+    /** Đơn kèm history cho admin; chuyển qua JSON để field mới của Order tự có ở đây, không phải chép tay. */
+    public AdminGetOrder200Response readAdminOrder(UUID orderId, OffsetDateTime now) {
+        return json.convertValue(readOrder(orderId, now), AdminGetOrder200Response.class)
+                .history(readHistory(orderId));
     }
 
     // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
