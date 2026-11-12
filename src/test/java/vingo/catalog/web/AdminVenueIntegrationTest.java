@@ -3,6 +3,7 @@ package vingo.catalog.web;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -84,6 +85,8 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         String prefix = uniqueName();
         UUID first = createVenue(prefix + " A", "HN");
         UUID second = createVenue(prefix + " B", "HN");
+        postHall(first, "Hall A").expectStatus().isCreated();
+        postHall(second, "Hall B").expectStatus().isCreated();
         createVenue(prefix + " ngoài bộ lọc", "DN");
         createVenue(uniqueName(), "HN");
 
@@ -125,6 +128,42 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         assertThat(new String[] {firstId, secondId})
                 .containsExactlyInAnyOrder(first.toString(), second.toString());
         assertThat(nextCursor).isNull();
+        var hallNames = Map.of(first.toString(), "Hall A", second.toString(), "Hall B");
+        assertThat(JsonPath.<List<String>>read(pageOne, "$.data[0].halls[*].name"))
+                .containsExactly(hallNames.get(firstId));
+        assertThat(JsonPath.<List<String>>read(pageTwo, "$.data[0].halls[*].name"))
+                .containsExactly(hallNames.get(secondId));
+    }
+
+    @Test
+    void listVenues_returnsOnlyOwnHallsAndEmptyListForVenueWithoutHall() {
+        String prefix = uniqueName();
+        UUID first = createVenue(prefix + " A", "HN");
+        UUID second = createVenue(prefix + " B", "HN");
+        UUID empty = createVenue(prefix + " C", "HN");
+        postHall(first, "Sân chính").expectStatus().isCreated();
+        postHall(first, "Khán đài phụ").expectStatus().isCreated();
+        postHall(second, "Hall B").expectStatus().isCreated();
+        String response = client.get().uri(builder -> builder.path(VENUES)
+                        .queryParam("q", prefix).queryParam("limit", 100).build())
+                .headers(h -> h.setBearerAuth(adminToken)).exchange().expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
+        String firstPath = "$.data[?(@.id == '" + first + "')].halls";
+        String secondPath = "$.data[?(@.id == '" + second + "')].halls";
+        assertThat(JsonPath.<List<String>>read(response, firstPath + "[*].name"))
+                .containsExactlyInAnyOrder("Sân chính", "Khán đài phụ");
+        assertThat(JsonPath.<List<String>>read(response, secondPath + "[*].name")).containsExactly("Hall B");
+        assertThat(JsonPath.<List<String>>read(response, firstPath + "[*].venue_id")).containsOnly(first.toString());
+        assertThat(JsonPath.<List<String>>read(response, secondPath + "[*].venue_id")).containsOnly(second.toString());
+        assertThat(JsonPath.<List<List<Object>>>read(response,
+                "$.data[?(@.id == '" + empty + "')].halls")).containsExactly(List.of());
+    }
+
+    @Test
+    void listVenues_returnsEmptyPageWithoutQueryingEmptyHallIds() {
+        client.get().uri(builder -> builder.path(VENUES).queryParam("q", uniqueName()).build())
+                .headers(h -> h.setBearerAuth(adminToken)).exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.data").isEmpty();
     }
 
     @Test
