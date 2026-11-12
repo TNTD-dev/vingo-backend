@@ -1846,8 +1846,8 @@ paths:
       summary: Sinh qr_token mới, QR cũ mất hiệu lực
       description: |
         Chỉ ADMIN; reason ít nhất 3 ký tự. Khoá vé FOR UPDATE; chỉ vé ISSUED được cấp lại QR.
-        Chỉ đổi qr_token bằng 32 byte SecureRandom mã hoá base64url, trả Ticket có token mới;
-        QR cũ không còn tìm thấy. USED → TICKET_USED, VOID → TICKET_NOT_VALID.
+        Chỉ đổi qr_token bằng 32 byte SecureRandom mã hoá base64url; Ticket trả về KHÔNG có qr_token
+        (admin không nhận QR vào cổng), khách nhận QR mới qua gửi lại vé. QR cũ không còn tìm thấy. USED → TICKET_USED, VOID → TICKET_NOT_VALID.
         Ghi audit REISSUE_QR cùng transaction với status ISSUED trước/sau, không lưu qr_token.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       requestBody: { $ref: '#/components/requestBodies/Reason' }

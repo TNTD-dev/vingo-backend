@@ -59,7 +59,8 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
 
         assertThat(text(json, "$.id")).isEqualTo(ticket.toString());
         assertThat(text(json, "$.status")).isEqualTo("ISSUED");
-        String newQr = text(json, "$.qr_token");
+        assertThat(object(json).get("qr_token")).isNull();
+        String newQr = qr(ticket);
         assertThat(newQr).isNotEqualTo(oldQr).matches("[A-Za-z0-9_-]{43}");
         assertThat(Base64.getUrlDecoder().decode(newQr)).hasSize(32);
         var expected = new LinkedHashMap<>(before);

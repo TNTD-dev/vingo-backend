@@ -123,7 +123,8 @@ public class TicketingService {
         byte[] token = new byte[32];
         random.nextBytes(token);
         repository.reissueQr(ticketId, Base64.getUrlEncoder().withoutPadding().encodeToString(token));
-        return reader.readTickets(List.of(ticketId), now()).getFirst();
+        // Admin không nhận QR vào cổng: lộ tài khoản admin không được kéo theo lộ vé; khách nhận QR mới qua gửi lại vé.
+        return reader.readTickets(List.of(ticketId), now()).getFirst().qrToken(null);
     }
 
     /** Giữ khoá vé ISSUED đến hết transaction gửi email; trả id đơn để đọc email qua booking. */
