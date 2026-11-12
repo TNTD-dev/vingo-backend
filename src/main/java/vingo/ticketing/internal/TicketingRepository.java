@@ -55,6 +55,32 @@ public class TicketingRepository {
                 .param("id", ticketId).query(UUID.class).optional();
     }
 
+    /** Khoá vé theo id trước mọi kiểm tra trạng thái, chỉ khoá ticket để tránh đảo thứ tự khoá đơn. */
+    public Optional<ManagedTicket> lockTicket(UUID ticketId) {
+        return jdbc.sql("""
+                        SELECT t.id, t.status, oi.order_id, o.user_id
+                        FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
+                        JOIN orders o ON o.id = oi.order_id WHERE t.id = :id FOR UPDATE OF t
+                        """)
+                .param("id", ticketId).query((rs, row) -> new ManagedTicket(
+                        rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                        rs.getObject("user_id", UUID.class), rs.getString("status"))).optional();
+    }
+
+    /** Vô hiệu vé đã khoá, không thay đổi tồn kho của ghế. */
+    public void voidTicket(UUID ticketId, OffsetDateTime now) {
+        int updated = jdbc.sql("UPDATE ticket SET status = 'VOID', voided_at = :now WHERE id = :id AND status = 'ISSUED'")
+                .param("now", now).param("id", ticketId).update();
+        if (updated != 1) {
+            throw new IllegalStateException("Không thể vô hiệu vé ISSUED sau khi đã khoá " + ticketId);
+        }
+    }
+
+    /** Chỉ đổi qr_token của vé đã khoá; QR cũ mất hiệu lực ngay khi commit. */
+    public void reissueQr(UUID ticketId, String qrToken) {
+        jdbc.sql("UPDATE ticket SET qr_token = :token WHERE id = :id").param("token", qrToken).param("id", ticketId).update();
+    }
+
     /** Chọn trang id vé của chủ sở hữu với keyset issued_at và id. */
     public List<PagePosition> listTickets(UUID userId, boolean past, String status, PagePosition after,
                                            OffsetDateTime now, int limit) {
@@ -132,4 +158,7 @@ public class TicketingRepository {
     /** Dữ liệu vé đã khoá cùng thông tin vị trí để trả kết quả quét. */
     public record ScannableTicket(UUID id, UUID showtimeId, String status, OffsetDateTime usedAt,
                                    String code, String zone, String row, Integer number) {}
+
+    /** Dữ liệu vé đã khoá để kiểm chủ và trạng thái mà không mang email hoặc QR ra khỏi repository. */
+    public record ManagedTicket(UUID id, UUID orderId, UUID userId, String status) {}
 }

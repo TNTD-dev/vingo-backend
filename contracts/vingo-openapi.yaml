@@ -848,9 +848,28 @@ paths:
       operationId: resendMyTicket
       tags: [Tickets]
       summary: Gửi lại vé tới email trên đơn (rate limit 3 lần / giờ)
+      description: |
+        Chỉ chủ vé được gửi lại; vé không tồn tại hoặc khác chủ đều trả 404.
+        Khoá vé trước khi kiểm trạng thái; chỉ vé ISSUED được gửi. USED → TICKET_USED,
+        VOID → TICKET_NOT_VALID; đơn không có buyer_email → ORDER_STATE_INVALID.
+        Giới hạn 3 lần/giờ/user (RATE_LIMITED); ghi email vé qua outbox, không ghi audit_log.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '202': { description: Đã đưa vào hàng đợi gửi }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED, TICKET_NOT_VALID hoặc ORDER_STATE_INVALID khi đơn không có email.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ gửi lại vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
+                noEmail:
+                  value: { title: Đơn không có email, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không có buyer_email để gửi vé. }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   # ------------------------------------------------------------------ Check-in
@@ -1698,6 +1717,20 @@ paths:
       operationId: resolveReview
       tags: [Admin Operations]
       summary: Xử lý đơn NEEDS_REVIEW
+      description: |
+        Chỉ ADMIN; bắt buộc Idempotency-Key và reason. Khoá đơn FOR UPDATE, chỉ xử lý NEEDS_REVIEW.
+        Cùng key và body trả kết quả cũ; cùng key khác body → IDEMPOTENCY_CONFLICT.
+        ISSUE_TICKETS phải lấy lại toàn bộ tồn kho cũ theo order_item, không đổi ghế:
+        ghế AVAILABLE hoặc HELD quá hạn (held_until < now) → SOLD với order_id của đơn;
+        khu đứng tăng sold theo quantity khi capacity - sold - held đủ. Thiếu ghế → SEAT_TAKEN
+        (không kèm gợi ý ghế), thiếu khu đứng → NOT_ENOUGH_STOCK; rollback toàn bộ thao tác.
+        Suất đã diễn (ends_at <= now) hoặc CANCELLED → ORDER_STATE_INVALID; đã đóng bán
+        nhưng chưa diễn vẫn được xử lý. Thành công chuyển đơn PAID, paid_at = now, ghi history
+        NEEDS_REVIEW → PAID với actor_id admin và reason, phát vé cùng ticket.issued,
+        order.paid và email vé qua outbox nếu có buyer_email; thiếu email vẫn thành công.
+        REFUND chỉ đánh dấu REFUNDED sau khi admin hoàn thủ công trên VNPay, ghi history;
+        không gọi API hoàn tiền và không giải phóng tồn kho vì đơn không còn giữ.
+        Mọi thay đổi, history, audit_log trước/sau, outbox và realtime nằm trong cùng transaction.
       parameters:
         - $ref: '#/components/parameters/OrderId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1717,11 +1750,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Ghế không còn trống để xuất vé (SEAT_TAKEN)
+          description: ORDER_STATE_INVALID (đơn không NEEDS_REVIEW hoặc suất đã diễn/huỷ), SEAT_TAKEN, NOT_ENOUGH_STOCK hoặc IDEMPOTENCY_CONFLICT.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                invalidOrder:
+                  value: { title: Trạng thái đơn không hợp lệ, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không ở trạng thái NEEDS_REVIEW. }
+                finishedOrCancelled:
+                  value: { title: Suất không thể phát vé, status: 409, code: ORDER_STATE_INVALID, detail: Suất đã diễn hoặc đã bị huỷ. }
+                seatTaken:
+                  value: { title: Ghế không còn trống, status: 409, code: SEAT_TAKEN, detail: Không thể lấy lại toàn bộ ghế cũ của đơn. }
+                notEnoughStock:
+                  value: { title: Khu đứng không đủ chỗ, status: 409, code: NOT_ENOUGH_STOCK, detail: Tồn kho còn lại nhỏ hơn quantity của đơn. }
+                idempotencyConflict:
+                  value: { title: Idempotency-Key xung đột, status: 409, code: IDEMPOTENCY_CONFLICT, detail: Key đã được dùng với body khác. }
   /admin/orders/{order_id}/reconcile:
     post:
       operationId: reconcileOrder
@@ -1764,6 +1812,11 @@ paths:
       operationId: voidTicket
       tags: [Admin Operations]
       summary: Vô hiệu vé (bắt buộc lý do)
+      description: |
+        Chỉ ADMIN; reason ít nhất 3 ký tự. Khoá vé FOR UPDATE trước khi kiểm trạng thái.
+        Chỉ ISSUED → VOID, đặt voided_at, không trả qr_token; ghế vẫn SOLD, không mở bán lại.
+        USED → TICKET_USED, VOID → TICKET_NOT_VALID. Ghi audit VOID_TICKET cùng transaction,
+        gồm admin, thời điểm, reason và status trước/sau; QR cũ không còn dùng để vào cổng.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
@@ -1772,11 +1825,30 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED nếu vé đã dùng; TICKET_NOT_VALID nếu vé VOID.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ vô hiệu vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
   /admin/tickets/{ticket_id}/reissue-qr:
     post:
       operationId: reissueTicketQr
       tags: [Admin Operations]
       summary: Sinh qr_token mới, QR cũ mất hiệu lực
+      description: |
+        Chỉ ADMIN; reason ít nhất 3 ký tự. Khoá vé FOR UPDATE; chỉ vé ISSUED được cấp lại QR.
+        Chỉ đổi qr_token bằng 32 byte SecureRandom mã hoá base64url; Ticket trả về KHÔNG có qr_token
+        (admin không nhận QR vào cổng), khách nhận QR mới qua gửi lại vé. QR cũ không còn tìm thấy. USED → TICKET_USED, VOID → TICKET_NOT_VALID.
+        Ghi audit REISSUE_QR cùng transaction với status ISSUED trước/sau, không lưu qr_token.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
@@ -1785,19 +1857,54 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED nếu vé đã dùng; TICKET_NOT_VALID nếu vé VOID.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ cấp lại QR cho vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
   /admin/tickets/{ticket_id}/resend:
     post:
       operationId: adminResendTicket
       tags: [Admin Operations]
       summary: Gửi lại vé tới email trên đơn
+      description: |
+        Chỉ ADMIN, không rate limit. Khoá vé FOR UPDATE; chỉ vé ISSUED được gửi.
+        USED → TICKET_USED, VOID → TICKET_NOT_VALID; không có buyer_email → ORDER_STATE_INVALID.
+        Ghi email qua outbox và audit RESEND_TICKET trong cùng transaction:
+        before null, after chứa outbox_id, không lưu email trong audit.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '202': { description: Đã đưa vào hàng đợi }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED, TICKET_NOT_VALID hoặc ORDER_STATE_INVALID khi đơn không có email.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ gửi lại vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
+                noEmail:
+                  value: { title: Đơn không có email, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không có buyer_email để gửi vé. }
   /admin/audit-logs:
     get:
       operationId: listAuditLogs
       tags: [Admin Operations]
       summary: Nhật ký thao tác của admin
+      description: Chỉ ADMIN; lọc entity và entity_id, mới nhất trước theo at DESC rồi id DESC. Phân trang keyset cursor, limit từ 1 đến 100; limit hoặc cursor sai trả 400.
       parameters:
         - { name: entity, in: query, schema: { type: string } }
         - { name: entity_id, in: query, schema: { type: string, format: uuid } }
@@ -1816,6 +1923,9 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/AuditLog' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ------------------------------------------------------------------ Admin Reports
   /admin/reports/metrics:
@@ -2430,6 +2540,8 @@ components:
         reason: { type: string }
         via_agent: { type: boolean, description: Thao tác do Admin Copilot thực hiện sau khi được duyệt }
         at: { type: string, format: date-time }
+        before: { type: [object, 'null'], description: Trạng thái liên quan trước thao tác }
+        after: { type: [object, 'null'], description: Trạng thái liên quan sau thao tác }
     MetricResult:
       type: object
       properties:

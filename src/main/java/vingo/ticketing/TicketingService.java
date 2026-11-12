@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.DateTimeException;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -26,15 +27,18 @@ import vingo.api.model.ListShowtimeCheckins200Response;
 import vingo.api.model.Ticket;
 import vingo.api.model.TicketStatus;
 import vingo.booking.BookingService;
+import vingo.notifications.NotificationsService;
 import vingo.realtime.RealtimeEventType;
 import vingo.realtime.RealtimeService;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.logging.LogKeys;
+import vingo.shared.ratelimit.RateLimiter;
 import vingo.shared.security.CurrentUser;
 import vingo.ticketing.internal.TicketingReader;
 import vingo.ticketing.internal.TicketingRepository;
 import vingo.ticketing.internal.TicketingRepository.PagePosition;
+import vingo.ticketing.internal.TicketingRepository.ManagedTicket;
 
 /** API công khai để payment phát vé trong transaction chốt bán. */
 @Service
@@ -49,16 +53,21 @@ public class TicketingService {
     private final TicketingReader reader;
     private final CurrentUser currentUser;
     private final RealtimeService realtime;
+    private final NotificationsService notifications;
+    private final RateLimiter rateLimiter;
     private final Clock clock;
 
     /** Dùng chung transaction của booking, phát vé và realtime. */
     public TicketingService(BookingService booking, TicketingRepository repository, TicketingReader reader,
-                            CurrentUser currentUser, RealtimeService realtime, Clock clock) {
+                            CurrentUser currentUser, RealtimeService realtime, NotificationsService notifications,
+                            RateLimiter rateLimiter, Clock clock) {
         this.booking = booking;
         this.repository = repository;
         this.reader = reader;
         this.currentUser = currentUser;
         this.realtime = realtime;
+        this.notifications = notifications;
+        this.rateLimiter = rateLimiter;
         this.clock = clock;
     }
 
@@ -96,6 +105,68 @@ public class TicketingService {
         log.atInfo().addKeyValue(LogKeys.ORDER_ID, orderId).addKeyValue(LogKeys.USER_ID, order.userId())
                 .addKeyValue("ticket_count", ids.size()).log("Đã phát {} vé", ids.size());
         return List.copyOf(ids);
+    }
+
+    /** Khoá và vô hiệu vé ISSUED trong transaction audit của adminops, giữ nguyên ghế SOLD. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Ticket voidTicket(UUID ticketId, OffsetDateTime now) {
+        lockIssuedTicket(ticketId);
+        repository.voidTicket(ticketId, now);
+        return reader.readTickets(List.of(ticketId), now).getFirst();
+    }
+
+    /** Khoá vé ISSUED và chỉ đổi qr_token trong transaction audit của adminops. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Ticket reissueTicketQr(UUID ticketId) {
+        lockIssuedTicket(ticketId);
+        // 32 byte ngẫu nhiên: trùng gần như không thể; nếu có, UNIQUE chặn và transaction rollback.
+        byte[] token = new byte[32];
+        random.nextBytes(token);
+        repository.reissueQr(ticketId, Base64.getUrlEncoder().withoutPadding().encodeToString(token));
+        // Admin không nhận QR vào cổng: lộ tài khoản admin không được kéo theo lộ vé; khách nhận QR mới qua gửi lại vé.
+        return reader.readTickets(List.of(ticketId), now()).getFirst().qrToken(null);
+    }
+
+    /** Giữ khoá vé ISSUED đến hết transaction gửi email; trả id đơn để đọc email qua booking. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public UUID lockIssuedTicketOrder(UUID ticketId) {
+        return lockIssuedTicket(ticketId).orderId();
+    }
+
+    /** Chủ vé gửi lại qua outbox, giới hạn 3 lần/giờ/user và không ghi audit admin. */
+    @Transactional
+    public void resendMyTicket(UUID ticketId) {
+        UUID userId = currentUser.require().id();
+        // Đếm cả yêu cầu sai chủ hoặc không tồn tại để không cho dò id vé không giới hạn.
+        rateLimiter.check(userId, "ticket-resend", 3, Duration.ofHours(1));
+        var ticket = lockTicket(ticketId);
+        currentUser.requireOwner(ticket.userId());
+        requireIssued(ticket);
+        String email = booking.buyerEmailForOrder(ticket.orderId())
+                .orElseThrow(() -> new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đơn không có email để gửi vé"));
+        notifications.enqueueTickets(email, List.of(ticketId));
+        log.atInfo().addKeyValue("action", "RESEND_MY_TICKET").addKeyValue("ticket_id", ticketId)
+                .addKeyValue(LogKeys.USER_ID, userId).log("Đã đưa email vé vào outbox");
+    }
+
+    private ManagedTicket lockTicket(UUID ticketId) {
+        return repository.lockTicket(ticketId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy vé"));
+    }
+
+    private ManagedTicket lockIssuedTicket(UUID ticketId) {
+        var ticket = lockTicket(ticketId);
+        requireIssued(ticket);
+        return ticket;
+    }
+
+    private static void requireIssued(ManagedTicket ticket) {
+        if (ticket.status().equals("USED")) {
+            throw new DomainException(ErrorCode.TICKET_USED, "Vé đã sử dụng");
+        }
+        if (!ticket.status().equals("ISSUED")) {
+            throw new DomainException(ErrorCode.TICKET_NOT_VALID, "Vé không còn hiệu lực");
+        }
     }
 
     /** Đọc vé của chủ sở hữu; vé không tồn tại hoặc khác chủ đều trả NOT_FOUND. */
