@@ -11,6 +11,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.context.annotation.Profile;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
@@ -31,12 +33,18 @@ import vingo.shared.security.SecurityConfig;
  * <p>Container dùng chung cho cả lần chạy test. Mỗi test tự tạo dữ liệu mình cần.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@AutoConfigureRestTestClient
 @ActiveProfiles({"api", "test"})
-@Import({TestcontainersConfig.class, TestClockConfig.class})
+@Import({TestcontainersConfig.class, TestClockConfig.class, IntegrationTest.ApiClientConfig.class})
 public abstract class IntegrationTest {
 
-    @Autowired
+    /** Chỉ API cần client HTTP; worker vẫn dùng chung DB/Testcontainers của base. */
+    @TestConfiguration(proxyBeanMethods = false)
+    @Profile("api")
+    @AutoConfigureRestTestClient
+    static class ApiClientConfig {}
+
+    // Worker kế thừa base này không có HTTP client; API tests vẫn dùng client thật.
+    @Autowired(required = false)
     protected RestTestClient client;
 
     @Autowired
