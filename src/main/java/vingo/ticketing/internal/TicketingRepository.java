@@ -104,6 +104,39 @@ public class TicketingRepository {
                 rs.getObject("issued_at", OffsetDateTime.class))).list();
     }
 
+    /** Chọn trang id vé mọi buyer theo bộ lọc chính xác và keyset issued_at/id giảm dần. */
+    public List<PagePosition> adminListTickets(String code, UUID orderId, UUID showtimeId, String status,
+                                                PagePosition after, int limit) {
+        var query = jdbc.sql("""
+                        SELECT t.id, t.issued_at FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
+                        WHERE true
+                        """
+                        + (code == null ? "" : " AND t.code = upper(:code)")
+                        + (orderId == null ? "" : " AND oi.order_id = :order")
+                        + (showtimeId == null ? "" : " AND t.showtime_id = :showtime")
+                        + (status == null ? "" : " AND t.status = :status")
+                        + (after == null ? "" : " AND (t.issued_at, t.id) < (:at, :id)")
+                        + " ORDER BY t.issued_at DESC, t.id DESC LIMIT :limit")
+                .param("limit", limit);
+        if (code != null) {
+            query.param("code", code);
+        }
+        if (orderId != null) {
+            query.param("order", orderId);
+        }
+        if (showtimeId != null) {
+            query.param("showtime", showtimeId);
+        }
+        if (status != null) {
+            query.param("status", status);
+        }
+        if (after != null) {
+            query.param("at", after.at()).param("id", after.id());
+        }
+        return query.query((rs, row) -> new PagePosition(rs.getObject("id", UUID.class),
+                rs.getObject("issued_at", OffsetDateTime.class))).list();
+    }
+
     /** Khoá riêng dòng vé để hai máy quét không cùng chấp nhận một QR. */
     public Optional<ScannableTicket> lockTicket(String qrToken) {
         return jdbc.sql("""

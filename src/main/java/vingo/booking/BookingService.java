@@ -84,6 +84,38 @@ public class BookingService {
         this.holdTtl = Duration.parse(holdTtl);
     }
 
+    /** Tra cứu đơn cho adminops, kiểm q/limit và đọc cả trang theo keyset created_at/id. */
+    @Transactional(readOnly = true)
+    public ListMyOrders200Response adminListOrders(
+            OrderStatus status, UUID eventId, UUID showtimeId, String q, String cursor, Integer limit) {
+        int size = limit == null ? 20 : limit;
+        if (size < 1 || size > 100) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "limit phải từ 1 đến 100");
+        }
+        String query = q == null ? null : q.trim();
+        if (query != null && (query.length() < 3 || query.length() > 254)) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "q sau trim phải dài 3–254 ký tự");
+        }
+        var positions = repository.adminListOrders(status == null ? null : status.getValue(), eventId,
+                showtimeId, query, cursor == null ? null : decodeCursor(cursor), size + 1);
+        var page = positions.subList(0, Math.min(size, positions.size()));
+        var response = new ListMyOrders200Response().data(orders.readOrders(
+                page.stream().map(OrderPosition::id).toList(), OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)));
+        if (positions.size() > size) {
+            var last = page.getLast();
+            response.nextCursor(Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    (last.createdAt() + "|" + last.id()).getBytes(StandardCharsets.UTF_8)));
+        }
+        return response;
+    }
+
+    /** Đọc đơn cùng history cho adminops, ném NOT_FOUND nếu không có đơn. */
+    @Transactional(readOnly = true)
+    public AdminOrderDetail adminGetOrder(UUID orderId) {
+        var order = orders.readOrder(orderId, OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
+        return new AdminOrderDetail(order, orders.readHistory(orderId));
+    }
+
     /**
      * Đọc và khoá đơn bằng {@code SELECT FOR UPDATE} đến khi transaction của payment kết thúc.
      * Phải có transaction đang chạy ({@code MANDATORY}); không kiểm trạng thái hay quyền sở hữu.

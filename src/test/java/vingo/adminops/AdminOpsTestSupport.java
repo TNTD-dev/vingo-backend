@@ -1,9 +1,11 @@
 package vingo.adminops;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +16,9 @@ import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -21,6 +26,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import vingo.booking.BookingService;
 import vingo.booking.ReviewReason;
 import vingo.booking.SaleOutcome;
+import vingo.shared.error.DomainException;
+import vingo.shared.error.ErrorCode;
+import vingo.shared.security.CurrentUser;
 import vingo.shared.security.Role;
 import vingo.support.CatalogFixture.Showtime;
 import vingo.support.IntegrationTest;
@@ -318,6 +326,71 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
                 .param("id", orderId).query(Integer.class).single()).isZero();
         assertThat(eventCount(orderId, "order.paid")).isZero();
         assertThat(eventCount(orderId, "ticket.issued")).isZero();
+    }
+
+    protected UUID readOrderFixture(UUID owner, Showtime target, String status, String email, String phone,
+                                    OffsetDateTime createdAt) {
+        UUID id = catalog.order(owner, target.id(), status, catalog.now().plusMinutes(10));
+        jdbc.sql("""
+                        UPDATE orders SET buyer_name = 'Read test buyer', buyer_email = :email,
+                                          buyer_phone = :phone, created_at = :created WHERE id = :id
+                        """)
+                .param("email", email).param("phone", phone).param("created", createdAt).param("id", id).update();
+        return id;
+    }
+
+    protected UUID holdForShowtime(String token, Showtime target, String email, UUID... seatIds) {
+        String json = body(client.post().uri("/api/v1/showtimes/{id}/holds", target.id())
+                .headers(headers -> {
+                    headers.setBearerAuth(token);
+                    headers.set("Idempotency-Key", UUID.randomUUID().toString());
+                })
+                .contentType(MediaType.APPLICATION_JSON).body(seats(seatIds)).exchange(), 201);
+        UUID orderId = UUID.fromString(text(json, "$.id"));
+        jdbc.sql("UPDATE orders SET buyer_email = :email WHERE id = :id")
+                .param("email", email).param("id", orderId).update();
+        return orderId;
+    }
+
+    protected List<Map<String, Object>> pageData(String json) {
+        return JsonPath.read(json, "$.data");
+    }
+
+    protected List<Map<String, Object>> readPages(String uri, int limit, List<String> expectedIds) {
+        List<Map<String, Object>> data = new ArrayList<>();
+        String cursor = null;
+        int pages = Math.max(1, (expectedIds.size() + limit - 1) / limit);
+        String query = uri + (uri.contains("?") ? "&" : "?") + "limit={limit}";
+        for (int page = 0; page < pages; page++) {
+            String json = cursor == null ? body(get(adminToken, query, limit), 200)
+                    : body(get(adminToken, query + "&cursor={cursor}", limit, cursor), 200);
+            assertThat(pageData(json)).hasSize(Math.min(limit, expectedIds.size() - data.size()));
+            data.addAll(pageData(json));
+            if (page == pages - 1) {
+                assertThat(object(json)).containsEntry("next_cursor", null);
+            } else {
+                cursor = text(json, "$.next_cursor");
+                assertThat(cursor).isNotBlank();
+            }
+        }
+        assertThat(data.stream().map(row -> (String) row.get("id")).toList())
+                .doesNotHaveDuplicates().containsExactlyElementsOf(expectedIds);
+        return data;
+    }
+
+    protected void assertServiceRejectsBuyer(Runnable action) {
+        var previous = SecurityContextHolder.getContext();
+        var context = SecurityContextHolder.createEmptyContext();
+        var jwt = Jwt.withTokenValue("test-buyer").header("alg", "HS256")
+                .subject(buyer.toString()).claim(CurrentUser.ROLE_CLAIM, "BUYER").build();
+        context.setAuthentication(new JwtAuthenticationToken(jwt));
+        try {
+            SecurityContextHolder.setContext(context);
+            assertThatThrownBy(action::run).isInstanceOfSatisfying(DomainException.class,
+                    error -> assertThat(error.code()).isEqualTo(ErrorCode.FORBIDDEN));
+        } finally {
+            SecurityContextHolder.setContext(previous);
+        }
     }
 
     protected record AuditRow(UUID id, UUID actorId, String action, String entity, UUID entityId,

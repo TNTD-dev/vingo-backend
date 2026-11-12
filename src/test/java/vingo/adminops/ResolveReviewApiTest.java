@@ -364,10 +364,8 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
     }
 
     @Test
-    void deferredOperations_keepDefault501() {
-        get(adminToken, "/api/v1/admin/orders").expectStatus().isEqualTo(501);
-        get(adminToken, "/api/v1/admin/orders/{id}", UUID.randomUUID()).expectStatus().isEqualTo(501);
-        get(adminToken, "/api/v1/admin/tickets").expectStatus().isEqualTo(501);
+    void reconcileOrder_keepsDefault501() {
+        // Ba API đọc admin đã làm ở PR 2; reconcile (querydr) thuộc payment nên vẫn 501.
         post(adminToken, "/api/v1/admin/orders/{id}/reconcile", null, UUID.randomUUID()).expectStatus().isEqualTo(501);
     }
 
