@@ -161,7 +161,12 @@ class SearchCacheConfig implements CachingConfigurer {
             }
             try {
                 // Request khác có thể đã nạp xong và nhả inFlight sau lần đọc cache miss phía trên.
-                hit = get(key);
+                try {
+                    hit = get(key);
+                } catch (RuntimeException ex) {
+                    log.warn("Cache search lỗi khi đọc lại, tiếp tục nạp dữ liệu cache={} error={}",
+                            getName(), ex.getClass().getSimpleName());
+                }
                 if (hit != null) {
                     T value = (T) hit.get();
                     mine.complete(value);

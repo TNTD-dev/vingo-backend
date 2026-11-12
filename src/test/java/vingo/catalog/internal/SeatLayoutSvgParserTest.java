@@ -12,6 +12,10 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import java.util.stream.Stream;
 
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
@@ -130,11 +134,62 @@ class SeatLayoutSvgParserTest {
 
     @Test
     void parse_rejectsZoneOnlyTouchingViewBoxEdge() {
-        assertThat(assertThrows(DomainException.class, () -> parser.parse(bytes("""
+        assertParseInvalid("""
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
                   <rect id="ZONE__A-T1__STANDING__10" x="100" width="20" height="20"/>
                 </svg>
-                """))).code()).isEqualTo(ErrorCode.INVALID_SEAT_LAYOUT);
+                """, "ZONE_OUTSIDE_VIEW_BOX");
+    }
+
+    @ParameterizedTest
+    @MethodSource("unsafeSvg")
+    void parse_rejectsUnsafeSvg(String input, String reason) {
+        assertParseInvalid(input, reason);
+    }
+
+    static Stream<Arguments> unsafeSvg() {
+        String header = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>";
+        return Stream.of(
+                Arguments.of("<!DOCTYPE svg [<!ENTITY x SYSTEM 'file:///unused'>]>" + header + "&x;</svg>", "MALFORMED_XML"),
+                Arguments.of("<?xml-stylesheet href='https://example.com/a.css'?>" + header + "</svg>", "UNSUPPORTED_SVG_ELEMENT"),
+                Arguments.of(header + "<script/></svg>", "UNSUPPORTED_SVG_ELEMENT"),
+                Arguments.of(header + "<foreignObject/></svg>", "UNSUPPORTED_SVG_ELEMENT"),
+                Arguments.of(header.replace(">", " onload='alert(1)'>") + "</svg>", "UNSUPPORTED_SVG_ATTRIBUTE"),
+                Arguments.of(header.replace(">", " style='fill:red'>") + "</svg>", "UNSUPPORTED_SVG_ATTRIBUTE"),
+                Arguments.of(header + "<rect fill='url(https://example.com/a)'/></svg>", "INVALID_PAINT"),
+                Arguments.of(header + "<use href='https://example.com/a.svg#x'/></svg>", "INVALID_SVG_REFERENCE"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidSeats")
+    void parse_rejectsInvalidSeatStructure(String content, String reason) {
+        assertParseInvalid("""
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                  <rect id="ZONE__A-T1__SEATED" width="50" height="50"/>
+                  %s
+                </svg>
+                """.formatted(content), reason);
+    }
+
+    static Stream<Arguments> invalidSeats() {
+        String seat = "<circle id='SEAT__A-T1__A__1' cx='10' cy='10' r='1'/>";
+        String pitch = "<path id='PITCH_SIDE__A-T1' d='M0 0 L50 0'/>";
+        return Stream.of(
+                Arguments.of("<g id='CONTENT__A-T1'>" + seat
+                        + seat.replace("__1'", "__01'") + pitch + "</g>", "DUPLICATE_SEAT"),
+                Arguments.of("<g id='CONTENT__A-T1'>" + seat.replace("cx='10'", "cx='70'")
+                        + pitch + "</g>", "SEAT_OUTSIDE_ZONE"),
+                Arguments.of(seat, "INVALID_SEAT_ZONE"),
+                Arguments.of("<g id='CONTENT__A-T1'>" + seat + "</g>", "MISSING_ZONE_DETAIL"));
+    }
+
+    private void assertParseInvalid(String input, String reason) {
+        DomainException error = assertThrows(DomainException.class, () -> parser.parse(bytes(input)));
+        assertThat(error.code()).isEqualTo(ErrorCode.INVALID_SEAT_LAYOUT);
+        List<?> issues = assertInstanceOf(List.class, error.properties().get("issues"));
+        assertThat(issues).hasSize(1);
+        Map<?, ?> issue = assertInstanceOf(Map.class, issues.getFirst());
+        assertThat(issue.get("reason")).isEqualTo(reason);
     }
 
     private static byte[] svg(String viewBox) {

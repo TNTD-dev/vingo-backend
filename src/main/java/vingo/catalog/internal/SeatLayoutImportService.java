@@ -6,24 +6,30 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
+import vingo.catalog.CatalogChanged;
 
 @Service
 public class SeatLayoutImportService {
     private final SeatLayoutSvgParser parser;
     private final SeatLayoutRepository repository;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
-    SeatLayoutImportService(SeatLayoutSvgParser parser, SeatLayoutRepository repository, Clock clock) {
+    SeatLayoutImportService(SeatLayoutSvgParser parser, SeatLayoutRepository repository, Clock clock,
+            ApplicationEventPublisher events) {
         this.parser = parser;
         this.repository = repository;
         this.clock = clock;
+        this.events = events;
     }
 
     @Transactional
@@ -236,6 +242,7 @@ public class SeatLayoutImportService {
         var updated = repository.updateShowtime(showtimeId, merged);
         if (!merged.seatLayoutId().equals(current.data().seatLayoutId())) {
             repository.replaceShowtimeInventory(showtimeId, merged.seatLayoutId());
+            events.publishEvent(new CatalogChanged(current.eventId(), Set.of(showtimeId)));
         }
         return updated;
     }

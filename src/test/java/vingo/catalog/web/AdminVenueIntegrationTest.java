@@ -9,6 +9,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import java.util.stream.Stream;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 
 import com.jayway.jsonpath.JsonPath;
@@ -316,6 +322,50 @@ class AdminVenueIntegrationTest extends IntegrationTest {
 
     private static String uniqueName() {
         return "CP3-" + UUID.randomUUID();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DRAFT,1,409", "DRAFT,0,204", "DRAFT,-1,204", "SCHEDULED,1,409", "CANCELLED,1,204"})
+    void deleteVenue_checksUnfinishedDraftAndScheduledShowtimes(String status, int endsHours, int expected) {
+        Instant now = Instant.parse("2026-11-12T05:00:00Z");
+        clock.set(now);
+        var event = catalog.event();
+        catalog.showtime(event, new Window(status, Duration.ofHours(-4), Duration.ofHours(-3),
+                Duration.ofHours(-2), Duration.ofHours(endsHours)));
+        var response = client.delete().uri(VENUE, event.venueId())
+                .headers(headers -> headers.setBearerAuth(adminToken)).exchange()
+                .expectStatus().isEqualTo(expected);
+        if (expected == 409) {
+            response.expectBody().jsonPath("$.code").isEqualTo("VENUE_IN_USE");
+        }
+    }
+
+    static Stream<Arguments> protectedVenueOperations() {
+        String venue = VENUES + "/" + UUID.randomUUID();
+        return Stream.of(Arguments.of(HttpMethod.POST, VENUES),
+                Arguments.of(HttpMethod.PATCH, venue),
+                Arguments.of(HttpMethod.DELETE, venue),
+                Arguments.of(HttpMethod.POST, venue + "/halls"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("protectedVenueOperations")
+    void venueWrites_return401WithoutToken(HttpMethod method, String path) {
+        client.method(method).uri(path).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("name", "Sân test", "type", "STADIUM", "address", ADDRESS, "city", "HN"))
+                .exchange().expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
+    }
+
+    @ParameterizedTest
+    @MethodSource("protectedVenueOperations")
+    void venueWrites_return403ForBuyer(HttpMethod method, String path) {
+        client.method(method).uri(path)
+                .headers(headers -> headers.setBearerAuth(tokenFor(Role.BUYER)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("name", "Sân test", "type", "STADIUM", "address", ADDRESS, "city", "HN"))
+                .exchange().expectStatus().isForbidden()
+                .expectBody().jsonPath("$.code").isEqualTo("FORBIDDEN");
     }
 
     private static final String HALLS = VENUE + "/halls";

@@ -164,7 +164,7 @@ public class VenueRepository {
                     FROM showtime s
                     JOIN hall h ON h.id = s.hall_id
                     WHERE h.venue_id = :venueId
-                      AND s.status = 'SCHEDULED'
+                      AND s.status IN ('DRAFT', 'SCHEDULED')
                       AND s.ends_at > :now
                 )
                 """)

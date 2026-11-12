@@ -3,6 +3,8 @@ package vingo.catalog.web;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.time.Clock;
+import java.time.OffsetDateTime;
 
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
@@ -10,6 +12,7 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -55,11 +58,13 @@ class AdminVenueController implements AdminCatalogApi {
     private final VenueService venues;
     private final SeatLayoutImportService layouts;
     private final JsonMapper json;
+    private final Clock clock;
 
-    AdminVenueController(VenueService venues, SeatLayoutImportService layouts, JsonMapper json) {
+    AdminVenueController(VenueService venues, SeatLayoutImportService layouts, JsonMapper json, Clock clock) {
         this.venues = venues;
         this.layouts = layouts;
         this.json = json;
+        this.clock = clock;
     }
 
     @Override
@@ -127,7 +132,7 @@ class AdminVenueController implements AdminCatalogApi {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "File SVG không được để trống.");
         }
         String contentType = file.getContentType();
-        if (contentType == null || !SVG.equalsTypeAndSubtype(MediaType.parseMediaType(contentType))) {
+        if (!isSvg(contentType)) {
             throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE, "File phải có kiểu image/svg+xml.");
         }
 
@@ -146,6 +151,14 @@ class AdminVenueController implements AdminCatalogApi {
                 .status(SeatLayout.StatusEnum.DRAFT)
                 .zoneCount(created.zoneCount())
                 .seatCount(created.seatCount()));
+    }
+
+    private static boolean isSvg(String contentType) {
+        try {
+            return contentType != null && SVG.equalsTypeAndSubtype(MediaType.parseMediaType(contentType));
+        } catch (InvalidMediaTypeException ex) {
+            return false;
+        }
     }
 
     @Override
@@ -328,12 +341,14 @@ class AdminVenueController implements AdminCatalogApi {
         );
     }
 
-    private static Showtime toShowtime(ShowtimeRow row) {
+    private Showtime toShowtime(ShowtimeRow row) {
         var data = row.data();
         return new Showtime()
                 .id(row.id())
                 .eventId(row.eventId())
-                .status(ShowtimeStatus.fromValue(row.status()))
+                .status(ShowtimeStatus.fromValue(vingo.catalog.ShowtimeStatus.of(row.status(),
+                        data.saleOpensAt(), data.saleClosesAt(), data.endsAt(),
+                        OffsetDateTime.now(clock)).name()))
                 .hallId(data.hallId())
                 .seatLayoutId(data.seatLayoutId())
                 .startsAt(data.startsAt())

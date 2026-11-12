@@ -1053,6 +1053,7 @@ paths:
       operationId: updateVenue
       tags: [Admin Catalog]
       summary: Sửa sân
+      description: Cập nhật các trường được gửi của sân đang hoạt động. Trả 400 VALIDATION_ERROR khi dữ liệu không hợp lệ, 404 NOT_FOUND khi sân không tồn tại hoặc đã ngừng sử dụng.
       requestBody:
         required: true
         content:
@@ -1070,6 +1071,7 @@ paths:
       operationId: deleteVenue
       tags: [Admin Catalog]
       summary: Ngừng sử dụng sân (soft-delete)
+      description: Ngừng sử dụng sân bằng xóa mềm. Trả 404 NOT_FOUND nếu sân không tồn tại hoặc đã bị xóa; trả 409 VENUE_IN_USE nếu còn suất DRAFT hoặc SCHEDULED chưa kết thúc.
       responses:
         '204': { description: Đã ẩn }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1078,11 +1080,17 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sân đang được sử dụng
+                status: 409
+                code: VENUE_IN_USE
+                detail: Sân còn suất diễn DRAFT hoặc SCHEDULED chưa kết thúc.
   /admin/venues/{venue_id}/halls:
     post:
       operationId: createHall
       tags: [Admin Catalog]
       summary: Thêm khu vực (hall) cho sân
+      description: Tạo hall trong sân đang hoạt động. Trả 400 VALIDATION_ERROR nếu tên không hợp lệ, 404 NOT_FOUND nếu sân không tồn tại hoặc đã ngừng sử dụng, 409 HALL_NAME_TAKEN nếu tên đã có trong sân.
       parameters: [ { $ref: '#/components/parameters/VenueId' } ]
       requestBody:
         required: true
@@ -1173,6 +1181,7 @@ paths:
       tags: [Admin Catalog]
       summary: Nhập sơ đồ sân từ SVG
       description: >
+        Giới hạn file 10 MiB và tổng request 11 MiB, áp dụng cho mọi profile.
         Nhập một SVG xuất từ Figma theo quy ước v1.
         File hợp lệ tạo một phiên bản sơ đồ DRAFT thuộc hall.
       parameters:
@@ -1199,6 +1208,16 @@ paths:
               schema: { $ref: '#/components/schemas/SeatLayout' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '413':
+          description: File vượt 10 MiB hoặc tổng request multipart vượt 11 MiB.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Content Too Large
+                status: 413
+                code: VALIDATION_ERROR
+                detail: Maximum upload size exceeded
         '415':
           description: Định dạng file không được hỗ trợ
           content:
@@ -1233,6 +1252,7 @@ paths:
                     issues:
                       - reason: MALFORMED_XML
                         message: Không đọc được cấu trúc XML. Hãy xuất lại SVG từ Figma.
+
   /admin/seat-layouts/{layout_id}:
     parameters:
       - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }

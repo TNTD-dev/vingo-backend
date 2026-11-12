@@ -11,11 +11,21 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -26,15 +36,27 @@ import com.jayway.jsonpath.JsonPath;
 
 import vingo.shared.security.Role;
 import vingo.catalog.VenueService;
+import vingo.search.SearchService;
+import tools.jackson.databind.json.JsonMapper;
 import vingo.support.IntegrationTest;
 
 class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
-    @Autowired
-    private PlatformTransactionManager transactionManager;
+    private final PlatformTransactionManager transactionManager;
+    private final VenueService venues;
+    private final SearchService search;
+    private final JsonMapper json;
+    private final int port;
 
     @Autowired
-    private VenueService venues;
+    AdminSeatLayoutImportIntegrationTest(PlatformTransactionManager transactionManager, VenueService venues,
+            SearchService search, JsonMapper json, @Value("${local.server.port}") int port) {
+        this.transactionManager = transactionManager;
+        this.venues = venues;
+        this.search = search;
+        this.json = json;
+        this.port = port;
+    }
 
     private static final String IMPORT =
             "/api/v1/admin/halls/{hall_id}/seat-layouts/import";
@@ -514,18 +536,32 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
         var body = showtimeBody(event.hallId(), event.layoutId());
-        try (var executor = Executors.newSingleThreadExecutor()) {
-            var request = new TransactionTemplate(transactionManager).execute(status -> {
+        var executor = Executors.newSingleThreadExecutor();
+        var startRequest = new CountDownLatch(1);
+        var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        var httpRequest = HttpRequest.newBuilder(URI.create(
+                        "http://localhost:" + port + "/api/v1/admin/events/" + event.id() + "/showtimes"))
+                .timeout(Duration.ofSeconds(10))
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)))
+                .build();
+        var request = executor.submit(() -> {
+            if (!startRequest.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Giao dịch xóa chưa sẵn sàng.");
+            }
+            var response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(404);
+            assertThat(JsonPath.<String>read(response.body(), "$.code")).isEqualTo("NOT_FOUND");
+            return null;
+        });
+        try {
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
                 venues.delete(event.venueId());
-                var pending = executor.submit(() -> client.post().uri(CREATE_SHOWTIME, event.id())
-                        .headers(headers -> headers.setBearerAuth(token))
-                        .contentType(MediaType.APPLICATION_JSON).body(body)
-                        .exchange().expectStatus().isNotFound()
-                        .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND"));
+                startRequest.countDown();
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 boolean waiting = false;
-                while (!pending.isDone() && System.nanoTime() < deadline) {
-                    // PostgreSQL giữ snapshot thống kê trong transaction; đọc lại trạng thái chờ khóa.
+                while (!request.isDone() && System.nanoTime() < deadline) {
                     jdbc.sql("SELECT pg_stat_clear_snapshot()").query((rs, row) -> true).single();
                     waiting = jdbc.sql("""
                             SELECT EXISTS (
@@ -545,10 +581,13 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                     }
                 }
                 assertThat(waiting).as("Create must wait for the venue deletion transaction").isTrue();
-                return pending;
             });
-            assertThat(request).isNotNull();
             request.get(10, TimeUnit.SECONDS);
+        } finally {
+            request.cancel(true);
+            executor.shutdownNow();
+            http.shutdownNow();
+            assertThat(executor.awaitTermination(1, TimeUnit.SECONDS)).isTrue();
         }
         assertThat(jdbc.sql("SELECT count(*) FROM showtime WHERE event_id = :id")
                 .param("id", event.id()).query(Integer.class).single()).isZero();
@@ -588,6 +627,135 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     }
 
     private record StandingStock(UUID zoneId, int capacity, int sold, int held) {}
+
+    @Test
+    void importSvg_returns400ForEmptyFile() {
+        uploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(), new byte[0], "image/svg+xml")
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+    }
+
+    @Test
+    void importSvg_returns404ForMissingHall() {
+        uploadSvg(tokenFor(Role.ADMIN), UUID.randomUUID(), standingSvg(), "image/svg+xml")
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    }
+
+    @Test
+    void importSvg_returns415ForUnsupportedOrMalformedMediaType() throws Exception {
+        String token = tokenFor(Role.ADMIN);
+        UUID hallId = catalog.event().hallId();
+        for (String type : List.of("text/plain", "invalid-content-type")) {
+            var response = rawUploadSvg(token, hallId, standingSvg(), type);
+            assertThat(response.statusCode()).isEqualTo(415);
+            assertThat(JsonPath.<String>read(response.body(), "$.code")).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        }
+    }
+
+    @Test
+    void importSvg_returns422ForInvalidXml() {
+        uploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(),
+                "<svg>".getBytes(java.nio.charset.StandardCharsets.UTF_8), "image/svg+xml")
+                .expectStatus().isEqualTo(422)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT")
+                .jsonPath("$.issues[0].reason").isEqualTo("MALFORMED_XML");
+    }
+
+    @Test
+    void importSvg_returns413WhenFileExceedsConfiguredLimit() throws Exception {
+        var response = rawUploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(),
+                new byte[10 * 1024 * 1024 + 1], "image/svg+xml");
+        assertThat(response.statusCode()).isEqualTo(413);
+        assertThat(JsonPath.<String>read(response.body(), "$.code")).isEqualTo("VALIDATION_ERROR");
+    }
+
+    private HttpResponse<String> rawUploadSvg(String token, UUID hallId, byte[] input, String contentType)
+            throws Exception {
+        String boundary = "svg-test-boundary";
+        var body = new java.io.ByteArrayOutputStream();
+        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\""
+                + "\r\nContent-Type: " + contentType + "\r\n\r\n")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        body.write(input);
+        body.write(("\r\n--" + boundary + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var request = HttpRequest.newBuilder(URI.create(
+                        "http://localhost:" + port + "/api/v1/admin/halls/" + hallId + "/seat-layouts/import"))
+                .timeout(Duration.ofSeconds(10))
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()))
+                .build();
+        try (var http = HttpClient.newHttpClient()) {
+            return http.send(request, HttpResponse.BodyHandlers.ofString());
+        }
+    }
+
+    private org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec uploadSvg(
+            String token, UUID hallId, byte[] input, String contentType) {
+        var parts = new MultipartBodyBuilder();
+        var resource = new ByteArrayResource(input) {
+            @Override
+            public String getFilename() {
+                return "layout.svg";
+            }
+        };
+        parts.part("file", resource).header(HttpHeaders.CONTENT_TYPE, contentType);
+        return client.post().uri(IMPORT, hallId)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.MULTIPART_FORM_DATA).body(parts.build()).exchange();
+    }
+
+    private static byte[] standingSvg() {
+        return """
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                  <rect id="ZONE__A-T1__STANDING__10" width="50" height="50"/>
+                </svg>
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void updateShowtime_refreshesCachedSeatmapAfterLayoutChange() {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
+        assertThat(search.getSeatmap(showtime, null).zones()).hasSize(2);
+        UUID layout = importThienTruong(token, event.hallId());
+        client.post().uri(PUBLISH, layout).headers(headers -> headers.setBearerAuth(token))
+                .exchange().expectStatus().isOk();
+        client.patch().uri(UPDATE_SHOWTIME, showtime)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layout))
+                .exchange().expectStatus().isOk();
+        var expectedZones = jdbc.sql("SELECT id FROM zone WHERE seat_layout_id = :id")
+                .param("id", layout).query(UUID.class).list();
+        assertThat(search.getSeatmap(showtime, null).zones().stream().map(zone -> zone.zoneId()).toList())
+                .containsExactlyInAnyOrderElementsOf(expectedZones);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2,4,6,SCHEDULED", "-2,2,4,ON_SALE", "-4,-2,2,SALES_CLOSED", "-6,-4,-2,FINISHED"})
+    void createShowtime_returnsComputedStatusAndStoresScheduled(
+            int opensHours, int closesHours, int endsHours, String expected) {
+        var event = catalog.event();
+        String token = tokenFor(Role.ADMIN);
+        OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        var body = Map.<String, Object>of("hall_id", event.hallId(), "seat_layout_id", event.layoutId(),
+                "sale_opens_at", now.plusHours(opensHours).toString(),
+                "sale_closes_at", now.plusHours(closesHours).toString(),
+                "starts_at", now.plusHours(endsHours - 1).toString(),
+                "ends_at", now.plusHours(endsHours).toString());
+        String response = client.post().uri(CREATE_SHOWTIME, event.id())
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(body)
+                .exchange().expectStatus().isCreated()
+                .expectBody(String.class).returnResult().getResponseBody();
+        assertThat(JsonPath.<String>read(response, "$.status")).isEqualTo(expected);
+        UUID id = UUID.fromString(JsonPath.read(response, "$.id"));
+        assertThat(jdbc.sql("SELECT status FROM showtime WHERE id = :id")
+                .param("id", id).query(String.class).single()).isEqualTo("SCHEDULED");
+    }
 
     private UUID importThienTruong(String token, UUID hallId) {
         var parts = new MultipartBodyBuilder();

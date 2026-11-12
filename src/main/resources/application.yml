@@ -24,6 +24,11 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  servlet:
+    multipart:
+      # Mọi profile kế thừa giới hạn này; request dành thêm 1 MiB cho multipart headers.
+      max-file-size: 10MB
+      max-request-size: 11MB
   jackson:
     default-property-inclusion: non_null
 

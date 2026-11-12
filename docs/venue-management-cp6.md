@@ -59,3 +59,23 @@ Integration test trong [AdminSeatLayoutImportIntegrationTest.java](../src/test/j
 ```
 
 Test dùng [SVG Thiên Trường](../sources/LAYOUT__THIEN-TRUONG.svg) làm fixture. Giữ file này trong checkout chạy test. Giao diện zoom và mini map dùng các API xem trước khi team tích hợp frontend.
+
+## Upload và cache
+
+Mọi profile kế thừa giới hạn upload từ `application.yml`: mỗi file tối đa 10 MiB, tổng multipart request tối đa 11 MiB. File vượt giới hạn trả HTTP 413 với `code=VALIDATION_ERROR` qua bộ xử lý lỗi Spring MVC hiện có. Caddy trong `deploy/Caddyfile` hiện chuyển tiếp request tới API và chưa đặt giới hạn body riêng. Khi bổ sung giới hạn tại proxy, cần dành đủ 11 MiB cho request multipart để giữ giới hạn file 10 MiB tại backend.
+
+Sau khi đổi phiên bản sơ đồ và thay inventory trong cùng transaction, service phát `CatalogChanged` với sự kiện và suất bị ảnh hưởng. Search cập nhật thế hệ cache sau commit. Transaction rollback giữ nguyên cache và inventory. Trạng thái suất trả về admin được tính bằng `ShowtimeStatus.of` và `Clock`, cùng quy tắc với booking và search.
+
+## Đánh giá migration trước triển khai
+
+Theo xác nhận hiện tại, `V20261111_1100` chỉ được áp dụng ở local/test. Migration này phù hợp với bước dựng schema ban đầu; thêm identity và đổi `seat.x/y` từ integer sang numeric có thể viết lại dữ liệu và giữ khóa trên bảng đã lớn. Khi chạy lên môi trường có dữ liệu, cần đo thời gian trên bản sao dữ liệu và xác định cửa sổ triển khai.
+
+Nếu triển khai online trên dữ liệu lớn, cần một đợt thay đổi riêng có thứ tự tương thích ứng dụng:
+
+1. Thêm version nullable với sequence/default cho bản ghi mới, và cột tọa độ numeric nullable mới. Ứng dụng trong giai đoạn chuyển tiếp đọc giá trị mới với fallback sang cột cũ và ghi cả hai biểu diễn khi tương thích.
+2. Backfill theo lô có commit giữa các lô, kiểm tra tiến độ và khả năng chạy lại. Tránh gom toàn bộ backfill vào một transaction Flyway dài.
+3. Tạo các unique index bằng `CREATE UNIQUE INDEX CONCURRENTLY` trong migration không chạy transaction, rồi gắn constraint. Thêm CHECK dưới dạng `NOT VALID` và validate ở bước riêng.
+4. Chuyển toàn bộ nơi đọc/ghi sang cột mới sau khi kiểm tra dữ liệu và triển khai phiên bản ứng dụng tương thích.
+5. Xóa cột cũ và fallback trong migration tiếp theo sau khi các instance cũ đã ngừng chạy.
+
+Các bước này cần chốt cùng quy trình deploy và rollback. Bản sửa review hiện tại giữ migration ban đầu và ghi nhận kế hoạch chuyển đổi trên.
