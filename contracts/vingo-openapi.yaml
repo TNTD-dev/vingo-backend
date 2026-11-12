@@ -864,7 +864,7 @@ paths:
             Từ chối quét, body là CheckinResult (không phải Problem):
             ALREADY_USED: vé đã quét trước đó, first_used_at là lần quét đầu.
             TICKET_VOID: vé đã huỷ.
-            WRONG_SHOWTIME: vé thuộc suất khác, vé giữ nguyên ISSUED.
+            WRONG_SHOWTIME: vé thuộc suất khác, trạng thái vé không đổi.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
