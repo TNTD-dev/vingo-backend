@@ -235,6 +235,13 @@ class CheckinApiTest extends TicketingTestSupport {
         problem(get(token, "/api/v1/admin/showtimes/{id}/checkins", showtime.id()), 403, "FORBIDDEN");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"limit=101", "cursor=not-a-cursor"})
+    void listShowtimeCheckins_returns400ForInvalidPaging(String query) {
+        problem(get(adminToken, "/api/v1/admin/showtimes/{id}/checkins?" + query, showtime.id()),
+                400, "VALIDATION_ERROR");
+    }
+
     @Test
     void listShowtimeCheckins_returns401WithoutToken() {
         problem(get(null, "/api/v1/admin/showtimes/{id}/checkins", showtime.id()), 401, "UNAUTHORIZED");

@@ -860,10 +860,42 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
         '409':
-          description: ALREADY_USED, TICKET_VOID, WRONG_SHOWTIME
+          description: |
+            Từ chối quét, body là CheckinResult (không phải Problem):
+            ALREADY_USED: vé đã quét trước đó, first_used_at là lần quét đầu.
+            TICKET_VOID: vé đã huỷ.
+            WRONG_SHOWTIME: vé thuộc suất khác, vé giữ nguyên ISSUED.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
+              examples:
+                alreadyUsed:
+                  value:
+                    result: ALREADY_USED
+                    ticket_code: K7M2QX9P
+                    zone: VIP
+                    row: B
+                    number: 12
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: '2026-12-20T12:05:41Z'
+                ticketVoid:
+                  value:
+                    result: TICKET_VOID
+                    ticket_code: H3WR8TNA
+                    zone: GA
+                    row: null
+                    number: null
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: null
+                wrongShowtime:
+                  value:
+                    result: WRONG_SHOWTIME
+                    ticket_code: P9DXE4LC
+                    zone: VIP
+                    row: C
+                    number: 3
+                    scanned_at: '2026-12-20T12:31:05Z'
+                    first_used_at: null
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /admin/showtimes/{showtime_id}/checkins:
