@@ -32,6 +32,7 @@ import vingo.api.model.HoldRequest;
 import vingo.api.model.ListMyOrders200Response;
 import vingo.api.model.Order;
 import vingo.api.model.OrderStatus;
+import vingo.api.model.ResolveReviewRequest.ActionEnum;
 import vingo.booking.internal.BookingRepository;
 import vingo.booking.internal.BookingRepository.HoldItem;
 import vingo.booking.internal.BookingRepository.OrderPosition;
@@ -94,6 +95,54 @@ public class BookingService {
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<OrderForPayment> lockOrderForPayment(UUID orderId) {
         return repository.lockOrder(orderId);
+    }
+
+    /** Adminops giữ transaction chung cho lấy lại tồn kho, chuyển trạng thái, history và phát vé. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Order resolveReview(UUID orderId, UUID adminId, ActionEnum action, String reason, OffsetDateTime now) {
+        var order = repository.lockOrder(orderId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
+        if (!order.status().equals("NEEDS_REVIEW")) {
+            throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Chỉ xử lý đơn NEEDS_REVIEW");
+        }
+        Objects.requireNonNull(action, "action");
+        String target;
+        if (action == ActionEnum.ISSUE_TICKETS) {
+            if (!repository.canIssueReviewedOrder(order.showtimeId(), now)) {
+                throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Suất đã kết thúc hoặc đã bị huỷ");
+            }
+            long requestedSeats = repository.orderLines(orderId).stream().filter(line -> line.seatId() != null).count();
+            if (repository.reclaimReviewSeats(orderId, order.showtimeId(), now) != requestedSeats) {
+                throw new DomainException(ErrorCode.SEAT_TAKEN, "Không thể lấy lại toàn bộ ghế cũ của đơn");
+            }
+            if (!repository.reclaimReviewStanding(orderId, order.showtimeId())) {
+                throw new DomainException(ErrorCode.NOT_ENOUGH_STOCK, "Khu đứng không đủ chỗ để phát vé");
+            }
+            repository.markPaid(orderId, now);
+            target = "PAID";
+        } else {
+            repository.markRefunded(orderId, now);
+            target = "REFUNDED";
+        }
+        repository.insertHistory(orderId, "NEEDS_REVIEW", target, adminId, reason, now);
+        return orders.readOrder(orderId, now);
+    }
+
+    /** Đọc email của đơn trong transaction gửi vé; rỗng khi đơn không khai báo email. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Optional<String> buyerEmailForOrder(UUID orderId) {
+        return repository.buyerEmailForOrder(orderId);
+    }
+
+    /** Adminops gọi sau khi phát vé để order.paid theo sau ticket.issued trong cùng transaction. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publishOrderPaid(UUID orderId) {
+        var order = repository.lockOrder(orderId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
+        if (!order.status().equals("PAID")) {
+            throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Chỉ thông báo đơn đã PAID");
+        }
+        realtime.publish(order.userId(), RealtimeEventType.ORDER_PAID, Map.of("order_id", orderId));
     }
 
     /**
