@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -46,6 +47,19 @@ class SingleFlightRedisCacheTest {
         assertThatThrownBy(() -> cache.get("k", () -> {
             throw new IllegalArgumentException("loader lỗi");
         })).isInstanceOf(ValueRetrievalException.class).hasRootCauseMessage("loader lỗi");
+    }
+
+    @Test
+    void get_loadsValue_whenCacheRecheckFails() {
+        var concurrentCache = spy(cache);
+        doReturn(null).doThrow(new IllegalStateException("Redis đọc lại lỗi")).doReturn(null)
+                .when(concurrentCache).get("k");
+        var loads = new AtomicInteger();
+        assertThat(concurrentCache.get("k", () -> {
+            loads.incrementAndGet();
+            return "đã tải";
+        })).isEqualTo("đã tải");
+        assertThat(loads.get()).isEqualTo(1);
     }
 
     @Test
