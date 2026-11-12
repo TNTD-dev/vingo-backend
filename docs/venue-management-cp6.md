@@ -60,6 +60,8 @@ Integration test trong [AdminSeatLayoutImportIntegrationTest.java](../src/test/j
 
 Test dùng [SVG Thiên Trường](../sources/LAYOUT__THIEN-TRUONG.svg) làm fixture. Giữ file này trong checkout chạy test. Giao diện zoom và mini map dùng các API xem trước khi team tích hợp frontend.
 
+Nghiệm thu toàn bộ luồng backend và bộ response mẫu bàn giao frontend được mô tả tại [CP7](venue-management-cp7.md).
+
 ## Upload và cache
 
 Mọi profile kế thừa giới hạn upload từ `application.yml`: mỗi file tối đa 10 MiB, tổng multipart request tối đa 11 MiB. File vượt giới hạn trả HTTP 413 với `code=VALIDATION_ERROR` qua bộ xử lý lỗi Spring MVC hiện có. Caddy trong `deploy/Caddyfile` hiện chuyển tiếp request tới API và chưa đặt giới hạn body riêng. Khi bổ sung giới hạn tại proxy, cần dành đủ 11 MiB cho request multipart để giữ giới hạn file 10 MiB tại backend.

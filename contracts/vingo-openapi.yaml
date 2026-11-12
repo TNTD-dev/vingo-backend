@@ -1397,18 +1397,42 @@ paths:
     post:
       operationId: createEvent
       tags: [Admin Catalog]
-      summary: Tạo sự kiện (DRAFT)
+      summary: Tạo sự kiện nháp
+      description: >
+        Admin tạo sự kiện ở trạng thái DRAFT.
+        Bắt buộc title không trắng và category hợp lệ.
+        Nếu không gửi max_tickets_per_order thì mặc định 10.
+        Hai poster được lưu độc lập và phải là URL tuyệt đối
+        dùng HTTP hoặc HTTPS khi được cung cấp.
+        Thao tác này chưa tạo suất, giá hoặc tồn kho.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EventInput' }
+            schema:
+              $ref: '#/components/schemas/EventCreateInput'
       responses:
         '201':
-          description: OK
+          description: Đã tạo sự kiện DRAFT.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/EventDetail' }
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '400':
+          description: Thiếu trường bắt buộc hoặc dữ liệu không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Tên sự kiện không được để trống.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /admin/events/{event_id}:
     patch:
       operationId: updateEvent
@@ -2172,16 +2196,44 @@ components:
     EventInput:
       type: object
       properties:
-        title: { type: string }
-        description: { type: string }
-        category: { $ref: '#/components/schemas/EventCategory' }
+        title:
+          type: string
+          minLength: 1
+          pattern: '(?s).*\S.*'
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
         attributes:
           type: object
           description: 'Thuộc tính theo loại, ví dụ FOOTBALL: home_team, away_team, league, round'
-        poster_mobile_url: { type: string, format: uri }
-        poster_desktop_url: { type: string, format: uri }
-        age_limit: { type: integer }
-        max_tickets_per_order: { type: integer, minimum: 1, maximum: 20, default: 10 }
+        poster_mobile_url:
+          type: string
+          format: uri
+          description: URL tuyệt đối HTTP hoặc HTTPS của poster mobile.
+        poster_desktop_url:
+          type: string
+          format: uri
+          description: URL tuyệt đối HTTP hoặc HTTPS của poster desktop.
+        age_limit:
+          type: integer
+          minimum: 0
+          description: Độ tuổi tối thiểu hiển thị trên thông tin sự kiện.
+        max_tickets_per_order:
+          type: integer
+          minimum: 1
+          maximum: 20
+    EventCreateInput:
+      allOf:
+        - $ref: '#/components/schemas/EventInput'
+        - type: object
+          required: [title, category]
+          properties:
+            max_tickets_per_order:
+              type: integer
+              minimum: 1
+              maximum: 20
+              default: 10
     EventSummary:
       type: object
       properties:
