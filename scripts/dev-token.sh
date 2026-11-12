@@ -7,8 +7,8 @@
 #   scripts/dev-token.sh admin      # admin@vingo.local  (ADMIN)
 #   TTL_HOURS=1 scripts/dev-token.sh buyer
 #
-# Claim giống AuthService: sub = user id, role, sid = id phiên seed. Secret lấy từ JWT_SECRET trong
-# .env.local, không có thì dùng giá trị mặc định của application-local.yml.
+# Claim giống AuthService: sub = user id, role, sid = id phiên seed. Secret lấy từ biến môi trường
+# JWT_SECRET, rồi đến JWT_SECRET trong .env.local, không có thì dùng giá trị mặc định của application-local.yml.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,8 +22,9 @@ case "${1:-}" in
   *) echo "Dùng: $0 admin|buyer|buyer2|buyer3" >&2; exit 2 ;;
 esac
 
-secret=""
-if [[ -f "$ROOT/.env.local" ]]; then
+# Cùng thứ tự với Spring: biến môi trường đã export thắng giá trị import từ .env.local.
+secret="${JWT_SECRET:-}"
+if [[ -z "$secret" && -f "$ROOT/.env.local" ]]; then
   secret="$(grep -E '^JWT_SECRET=' "$ROOT/.env.local" | tail -1 | cut -d= -f2- | sed -E 's/^["'\'']//; s/["'\'']$//' || true)"
 fi
 secret="${secret:-local-dev-secret-change-me-at-least-32-bytes}"
