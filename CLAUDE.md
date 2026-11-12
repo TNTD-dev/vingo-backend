@@ -112,6 +112,9 @@ Quy tắc:
 | 409 | ORDER_STATE_INVALID | Sai trạng thái đơn |
 | 409 | HOLD_EXPIRED | Đơn quá hạn giữ ghế |
 | 409 | IDEMPOTENCY_CONFLICT | Trùng Idempotency-Key, khác body |
+| 409 | HALL_NAME_TAKEN | Tên hall đã tồn tại trong cùng sân |
+| 415 | UNSUPPORTED_MEDIA_TYPE | Tệp tải lên có định dạng không được hỗ trợ |
+| 422 | INVALID_SEAT_LAYOUT | SVG không đọc được hoặc vi phạm quy ước nhập sơ đồ sân |
 | 422 | PROFILE_REQUIRED | Chưa có hồ sơ người mua |
 | 422 | MAX_TICKETS_EXCEEDED | Vượt số vé tối đa mỗi đơn |
 | 423 | ACCOUNT_LOCKED | Sai mật khẩu quá số lần |
