@@ -2,6 +2,9 @@
 spring:
   main:
     web-application-type: none
+    # Virtual threads bật thì thread của @Scheduled là daemon; không có web server
+    # giữ JVM nên tiến trình tự thoát (exit 0) ngay sau khi khởi động. Giữ JVM sống.
+    keep-alive: true
   flyway:
     # Migration do api chạy trước khi nhận request; worker chỉ kiểm tra.
     enabled: false
