@@ -841,7 +841,7 @@ paths:
       operationId: checkIn
       tags: [Check-in]
       summary: Quét QR tại cổng
-      description: Chỉ ADMIN. Khoá vé theo qr_token, ISSUED và đúng suất → USED. Mọi lần quét đều được ghi checkin.
+      description: Chỉ ADMIN (sau này có thể thêm vai trò nhân viên soát vé). Khoá vé theo qr_token; ISSUED và đúng suất → USED. Mọi lần quét đều ghi checkin; qr_token không tồn tại → 404, không ghi checkin.
       requestBody:
         required: true
         content:
@@ -864,6 +864,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CheckinResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /admin/showtimes/{showtime_id}/checkins:
     get:

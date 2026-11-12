@@ -55,6 +55,8 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(API + "/admin/**").hasRole(Role.ADMIN.name())
+                        // soát vé: chỉ ADMIN; khi có vai trò nhân viên soát vé thì thêm vào đây
+                        .requestMatchers(HttpMethod.POST, API + "/checkins").hasRole(Role.ADMIN.name())
                         .requestMatchers(API + "/**").hasAnyRole(Role.BUYER.name(), Role.ADMIN.name())
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(o -> o
