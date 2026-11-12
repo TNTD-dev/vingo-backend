@@ -60,8 +60,14 @@ jobs:
           docker compose pull
           docker compose up -d
           DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)
-          for i in $(seq 1 36); do
-            if curl -fsS "https://$DOMAIN/actuator/health"; then echo; echo "api UP sau ~$((i * 5))s"; exit 0; fi
+          # Hạn chót tính theo đồng hồ (gồm cả thời gian curl lẫn sleep); mỗi lần curl tối đa 10s
+          # để một request treo không giữ job mãi.
+          start=$SECONDS
+          deadline=$((start + 180))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if curl -fsS --connect-timeout 5 --max-time 10 "https://$DOMAIN/actuator/health"; then
+              echo; echo "api UP sau $((SECONDS - start))s"; exit 0
+            fi
             sleep 5
           done
           echo "api chưa UP sau 3 phút"
