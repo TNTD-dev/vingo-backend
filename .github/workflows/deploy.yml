@@ -56,9 +56,15 @@ jobs:
           ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" "TAG=$TAG bash -s" <<'EOF'
           set -e
           cd ~/vingo
+          # Khoá chung với workflow deploy của vingo-web: job nào tới sau thì đợi (tối đa 5 phút).
+          exec 9>~/vingo/.deploy.lock
+          flock -w 300 9
           export IMAGE_TAG="$TAG"
-          docker compose pull
-          docker compose up -d
+          # Chỉ đụng service của backend. web do workflow vingo-web deploy theo tag commit;
+          # up -d cho tất cả sẽ tạo lại web từ WEB_TAG trong .env và bỏ mất bản đang chạy.
+          # redis vẫn được khởi động khi cần vì api và worker phụ thuộc nó.
+          docker compose pull api worker
+          docker compose up -d api worker
           DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)
           # Hạn chót tính theo đồng hồ (gồm cả thời gian curl lẫn sleep); mỗi lần curl tối đa 10s
           # để một request treo không giữ job mãi.

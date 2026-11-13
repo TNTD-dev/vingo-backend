@@ -33,8 +33,8 @@
 		reverse_proxy api:8080
 	}
 
-	# Web (vingo-web) phục vụ phần còn lại khi bật service web.
+	# Mọi đường dẫn còn lại là trang của vingo-web (React SPA).
 	handle {
-		respond "Vingo API" 200
+		reverse_proxy web:80
 	}
 }
