@@ -35,14 +35,21 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
 
-  # Bật khi repo vingo-agent và vingo-web có image trên GHCR.
+  # Bật khi repo vingo-agent có image trên GHCR.
   # agent:
   #   image: ghcr.io/tntd-dev/vingo-agent:${AGENT_TAG:-latest}
   #   restart: unless-stopped
   #   env_file: .env.agent
-  # web:
-  #   image: ghcr.io/tntd-dev/vingo-web:${WEB_TAG:-latest}
-  #   restart: unless-stopped
+
+  # Giao diện web (repo vingo-web): Caddy phục vụ file tĩnh, Caddy ngoài chuyển mọi đường dẫn
+  # không phải API vào đây. Workflow của vingo-web tự deploy service này (truyền WEB_TAG theo commit).
+  web:
+    image: ghcr.io/tntd-dev/vingo-web:${WEB_TAG:-staging}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null || exit 1"]
+      interval: 30s
+      retries: 3
 
   caddy:
     image: caddy:2-alpine
@@ -57,6 +64,7 @@ services:
       - caddy_data:/data
     depends_on:
       - api
+      - web
 
 volumes:
   caddy_data:
