@@ -233,9 +233,19 @@ public class BookingService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void markNeedsReview(UUID orderId, ReviewReason reason) {
+        markNeedsReview(orderId, reason, false);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void markDuplicatePaymentForReview(UUID orderId) {
+        markNeedsReview(orderId, ReviewReason.AMOUNT_MISMATCH, true);
+    }
+
+    private void markNeedsReview(UUID orderId, ReviewReason reason, boolean duplicatePayment) {
         var order = repository.lockOrder(orderId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
-        if (!List.of("PENDING", "EXPIRED", "CANCELLED").contains(order.status())) {
+        if (!List.of("PENDING", "EXPIRED", "CANCELLED").contains(order.status())
+                && !(duplicatePayment && "PAID".equals(order.status()))) {
             throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đơn không thể chuyển sang NEEDS_REVIEW");
         }
         Objects.requireNonNull(reason, "reason");

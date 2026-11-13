@@ -58,7 +58,8 @@ vingo:
     hash-secret: ${VNPAY_HASH_SECRET:}
     pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
     api-url: ${VNPAY_API_URL:https://sandbox.vnpayment.vn/merchant_webapi/api/transaction}
-    return-url: ${VNPAY_RETURN_URL:http://localhost:5173/payment/result}
+    return-url: ${VNPAY_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}
+    frontend-return-url: ${VNPAY_FRONTEND_RETURN_URL:http://localhost:5173/payment/result}
   google:
     enabled: ${GOOGLE_LOGIN_ENABLED:false}
     client-id: ${GOOGLE_CLIENT_ID:}

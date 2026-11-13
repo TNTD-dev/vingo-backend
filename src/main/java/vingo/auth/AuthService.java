@@ -73,4 +73,9 @@ public class AuthService {
     private static DomainException invalidRefresh() {
         return new DomainException(ErrorCode.UNAUTHORIZED, "Refresh token không hợp lệ hoặc đã hết hạn");
     }
+    
+    /** Kiểm tra người mua đã có hồ sơ trước khi tạo thanh toán. */
+    public boolean hasBuyerProfile(UUID userId) {
+        return accounts.hasBuyerProfile(userId);
+    }
 }

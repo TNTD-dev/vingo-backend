@@ -762,7 +762,7 @@ paths:
       security: []
       parameters:
         - { name: vnp_TxnRef, in: query, required: true, schema: { type: string } }
-        - { name: vnp_Amount, in: query, required: true, schema: { type: integer, format: int64 } }
+        - { name: vnp_Amount, in: query, required: false, schema: { type: string } }
         - { name: vnp_ResponseCode, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionStatus, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionNo, in: query, schema: { type: string } }
@@ -2943,7 +2943,7 @@ components:
         expires_at: { type: string, format: date-time, description: Hạn giữ ghế khi PENDING }
         paid_at: { type: [string, 'null'], format: date-time }
         buyer: { $ref: '#/components/schemas/BuyerProfile' }
-        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, null] }
+        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, PAYMENT_SUSPECTED, null] }
         created_at: { type: string, format: date-time }
     PaymentIntent:
       type: object

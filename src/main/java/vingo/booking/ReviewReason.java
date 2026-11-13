@@ -6,5 +6,5 @@ package vingo.booking;
  * {@code PAID_AFTER_CANCEL}: tiền về sau huỷ; {@code AMOUNT_MISMATCH}: số tiền không khớp tổng đơn.
  */
 public enum ReviewReason {
-    PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH
+    PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, PAYMENT_SUSPECTED
 }
