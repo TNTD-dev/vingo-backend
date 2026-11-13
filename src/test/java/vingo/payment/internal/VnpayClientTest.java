@@ -111,7 +111,7 @@ class VnpayClientTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"20", "04", "07"})
+    @ValueSource(strings = {"04"})
     void querydr_returnsUnavailable_whenTransactionStatusIsNotTerminal(String transactionStatus) {
         Map<String, String> fields = baseResponseFields("8F3K2Q-1", "00", transactionStatus, "20000000", "14567891");
         fields.put("vnp_SecureHash", signResponse(fields));
@@ -120,6 +120,16 @@ class VnpayClientTest {
         QueryResult result = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
 
         assertThat(result.status()).isEqualTo(QueryStatus.UNAVAILABLE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"20", "07"})
+    void querydr_classifiesReturnedOrSuspectedTransaction(String status) {
+        var fields = baseResponseFields("8F3K2Q-1", "00", status, "20000000", "14567891");
+        fields.put("vnp_SecureHash", signResponse(fields));
+        respondJson(200, jsonMapper.writeValueAsString(fields), new AtomicReference<>());
+        var result = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
+        assertThat(result.status()).isEqualTo("20".equals(status) ? QueryStatus.SUCCESS : QueryStatus.SUSPECTED);
     }
 
     @Test

@@ -65,6 +65,7 @@ public class VnpayClient {
 
     public enum QueryStatus {
         SUCCESS,
+        SUSPECTED,
         FAILED,
         NOT_FOUND,
         UNAVAILABLE
@@ -166,7 +167,7 @@ public class VnpayClient {
             String transactionNo = textOrNull(root, "vnp_TransactionNo");
             String amountStr = textOrNull(root, "vnp_Amount");
 
-            if ("00".equals(transactionStatus)) {
+            if ("00".equals(transactionStatus) || "20".equals(transactionStatus)) {
                 if (amountStr == null || amountStr.isBlank()) {
                     return QueryResult.unavailable();
                 }
@@ -174,6 +175,10 @@ public class VnpayClient {
                 return QueryResult.success(amountVnd, transactionNo, rawBody);
             }
 
+            if ("07".equals(transactionStatus)) {
+                long amount = (amountStr == null || amountStr.isBlank()) ? 0L : Long.parseLong(amountStr) / 100L;
+                return new QueryResult(QueryStatus.SUSPECTED, amount, responseCode, transactionStatus, transactionNo, rawBody);
+            }
             if (!"02".equals(transactionStatus)) {
                 return QueryResult.unavailable();
             }

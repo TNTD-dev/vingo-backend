@@ -164,6 +164,11 @@ public class BookingService {
         markNeedsReview(orderId, ReviewReason.AMOUNT_MISMATCH, true);
     }
 
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void markSuspectedPaymentForReview(UUID orderId) {
+        markNeedsReview(orderId, ReviewReason.PAYMENT_SUSPECTED, true);
+    }
+
     private void markNeedsReview(UUID orderId, ReviewReason reason, boolean duplicatePayment) {
         var order = repository.lockOrder(orderId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));

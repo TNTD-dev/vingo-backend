@@ -40,7 +40,7 @@ public class ReconcilePaymentsJob {
                 total += batch.processed();
                 afterTime = batch.createdAt();
                 afterId = batch.id();
-                boolean endReached = batch.processed() < BATCH; 
+                boolean endReached = batch.selected() < BATCH;
                 cursorTime = endReached ? null : afterTime;
                 cursorId = endReached ? null : afterId;
                 if (endReached) {

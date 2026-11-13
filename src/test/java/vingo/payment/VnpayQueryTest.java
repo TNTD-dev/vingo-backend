@@ -28,6 +28,24 @@ class VnpayQueryTest extends PaymentTestSupport {
     }
 
     @Test
+    void reconcile_marksExpiredOrderForReview_whenGatewayReportsSuspectedPayment() {
+        clock.set(Instant.parse("2026-11-13T03:00:00Z"));
+        var showtime = catalog.onSaleShowtime();
+        UUID orderId = holdStandingOrder(buyerWithProfile(), showtime, 1);
+        String txnRef = openIntent(orderId);
+        clock.advance(Duration.ofMinutes(15));
+        booking.expireOverdueHolds(100);
+        assertThat(orderStatus(orderId)).isEqualTo("EXPIRED");
+        when(vnpayClient.querydr(eq(txnRef), any(), any())).thenReturn(new QueryResult(
+                VnpayClient.QueryStatus.SUSPECTED, CatalogFixture.GA_PRICE, "00", "07", "123", "{}"));
+        paymentService.reconcileOpenIntents(50);
+        assertThat(intentStatus(txnRef)).isEqualTo("OPEN");
+        assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
+        assertThat(orderReviewReason(orderId)).isEqualTo("PAYMENT_SUSPECTED");
+        assertThat(ticketCount(orderId)).isZero();
+    }
+
+    @Test
     void reconcile_marksOrderPaidAndIssuesTickets_whenQuerydrReportsSuccess() {
         clock.set(Instant.parse("2026-11-13T03:00:00Z"));
         var showtime = catalog.onSaleShowtime();
