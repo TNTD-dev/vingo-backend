@@ -299,7 +299,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <path class="edge evt" d="M866,114 L866,150 L640,150 L640,186" marker-end="url(#ae)"/>
       <text class="lbl" x="676" y="143">CatalogChanged(eventId)</text>
       <path class="edge evt" d="M600,188 L600,116" marker-end="url(#ae)"/>
-      <text class="lbl" x="560" y="172">evict</text>
+      <text class="lbl" x="560" y="172">tăng thế hệ</text>
     </svg>
     <div class="legend">
       <span><i class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></i>Class của module search</span>
@@ -316,8 +316,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 │           SearchApiMapper, CursorCodec
 └── <span class="d">internal/</span> PgSearchService
             EventSearchRepository, SeatmapRepository
-            AvailabilityRepository, SearchQueryNormalizer
-            SearchCacheConfig, CatalogChangedListener</div>
+            EventDetailRepository, SearchQueryNormalizer
+            SearchReads (cache), SearchCacheConfig, CatalogChangedListener</div>
     <div class="decisions" style="grid-template-columns:1fr">
       <div class="panel"><h3>Chỉ JdbcClient</h3><p class="sub">Mọi truy vấn join bảng của module khác; entity JPA thuộc catalog.</p></div>
       <div class="panel"><h3>Giờ lấy từ Clock</h3><p class="sub">Truyền <code>:now</code> vào SQL, không dùng <code>now()</code> của Postgres trong query search.</p></div>
@@ -377,8 +377,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div class="panel" style="padding:18px 20px">
       <ol class="steps">
         <li><div><b>Validate</b><span class="sub">limit 1..100, from ≤ to, price_min ≤ price_max, cursor khớp bộ lọc.</span><span class="err">Sai → 400 VALIDATION_ERROR</span></div></li>
-        <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → <code>son:* &amp; tung:*</code>.</span></div></li>
-        <li><div><b>Khớp</b><span class="sub">FTS <code>@@</code> (từ gõ dở) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → tsquery chặt <code>son:* &amp; tung:*</code> và tsquery lỏng <code>son:* | tung:*</code> (bỏ từ 1 ký tự).</span></div></li>
+        <li><div><b>Khớp chặt</b><span class="sub">FTS trên title + mô tả <code>@@</code> tsquery chặt (mọi từ phải có) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Nới khi rỗng</b><span class="sub">Trang đầu, q từ 2 từ trở lên, khớp chặt ra 0 dòng → chạy lại với tsquery lỏng, xếp theo relevance. <code>son tung concert</code> vẫn ra Sơn Tùng. Cursor ghi chế độ (<code>m</code>: STRICT/LOOSE) để các trang sau dùng đúng chế độ.</span></div></li>
         <li><div><b>Card</b><span class="sub">venue, city, first_starts_at lấy từ suất sớm nhất <b>thoả bộ lọc</b>; price_from chỉ tính hạng đã gán khu qua zone_price.</span></div></li>
         <li><div><b>Keyset</b><span class="sub"><code>(sort_key, id)</code>, lấy limit + 1 dòng để biết có next_cursor.</span></div></li>
       </ol>
@@ -396,6 +397,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         </table>
       </div>
       <div class="note">Ghép WHERE động, không viết <code>:x IS NULL OR …</code>. Biểu thức phải giống hệt lúc tạo index, kiểm bằng <code>EXPLAIN</code>.</div>
+      <div class="note info"><b>Agent điền q:</b> <code>q</code> chỉ chứa tên sự kiện, nghệ sĩ hoặc đội; loại sự kiện đưa vào <code>category</code>, thành phố vào <code>city</code>, thời gian vào <code>from</code>/<code>to</code> (đã ghi trong description của contract). Khớp lỏng là lưới an toàn khi người dùng hoặc agent vẫn gõ thừa từ.</div>
       <div class="note info"><b>Thành phố:</b> <code>city</code> là enum <code>CityCode</code> (HCM, HN, DN…). Backend không tự đổi "Sài Gòn" → HCM: web chọn dropdown, agent tự map nhờ description của enum.</div>
     </div>
   </div>
@@ -413,10 +415,10 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 <section id="cache">
   <div class="sec-head"><div class="eyebrow">Cache</div><h2>Redis chỉ cache đọc; sập thì đọc DB</h2></div>
   <div class="cache-grid">
-    <div class="panel"><span class="eyebrow">Event, suất</span><div class="ttl">10 phút</div><p class="sub">Lưu mốc giờ thô, status tính lại mỗi lần đọc.</p></div>
-    <div class="panel"><span class="eyebrow">Layout seatmap</span><div class="ttl">10 phút</div><p class="sub">Xoá cùng lúc với event.</p></div>
-    <div class="panel"><span class="eyebrow">Ghế, availability</span><div class="ttl">3 giây</div><p class="sub"><code>@Cacheable(sync = true)</code> chống dồn request lúc mở bán.</p></div>
-    <div class="panel"><span class="eyebrow">/events?q=</span><div class="ttl">—</div><p class="sub">Không cache.</p></div>
+    <div class="panel"><span class="eyebrow">search-event · search-showtimes</span><div class="ttl">10 phút</div><p class="sub">Khoá eventId. Lưu mốc giờ thô; status và <code>sold_out</code> tính lại mỗi lần đọc (<code>sold_out</code> là một câu SQL nhẹ, không cache).</p></div>
+    <div class="panel"><span class="eyebrow">search-seatmap-layout</span><div class="ttl">10 phút</div><p class="sub">Khoá showtimeId. Chỉ khu, ghế, toạ độ, hạng giá; trạng thái ghế đọc DB mỗi lần. Xoá cùng lúc với event.</p></div>
+    <div class="panel"><span class="eyebrow">search-availability</span><div class="ttl">3 giây</div><p class="sub">Khoá showtimeId. <code>@Cacheable(sync = true)</code>: request cùng miss trong một JVM chỉ truy vấn DB một lần. Status trong kết quả có thể trễ tới 3 giây.</p></div>
+    <div class="panel"><span class="eyebrow">/events?q=, suggestSeats</span><div class="ttl">—</div><p class="sub">Không cache.</p></div>
   </div>
   <div class="panel diagram scroll-x"><svg viewBox="0 0 900 400" role="img" aria-label="Trình tự xoá cache khi admin sửa sự kiện">
       <defs>
@@ -440,7 +442,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 
       <path class="edge evt" d="M297,250 H673" marker-end="url(#sqe)"/><text class="lbl" x="420" y="244">CatalogChanged(eventId, showtimeIds)</text>
       <text class="s" x="440" y="266">chỉ khi commit thành công</text>
-      <path class="edge evt" d="M677,284 H836" marker-end="url(#sqe)"/><text class="lbl" x="690" y="278">DEL event:{id}…</text>
+      <path class="edge evt" d="M677,284 H836" marker-end="url(#sqe)"/><text class="lbl" x="690" y="278">INCR gen:event:{id}…</text>
 
       <path class="edge" d="M20,330 H0" style="stroke:none"/>
       <text class="lbl" x="560" y="318">request đọc tiếp theo</text>
@@ -449,8 +451,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <path class="edge" d="M677,378 H836" marker-end="url(#sq)"/><text class="lbl" x="700" y="372">SET, TTL 10 phút</text>
     </svg></div>
   <div class="two">
-    <div class="note"><b>Phải xoá sau commit.</b> Xoá trước commit thì request đọc chen vào sẽ ghi lại dữ liệu cũ vào cache. Rollback thì không có event, không xoá oan.</div>
-    <div class="note info"><b>TTL là lưới an toàn</b> khi mất event (app sập sau commit, Redis sập lúc xoá). Không thêm cache trong bộ nhớ: 2 instance api dùng chung Redis. Rate limit theo IP cho cả 5 endpoint, bộ đếm Redis.</div>
+    <div class="note"><b>Phải xoá sau commit, và có thế hệ.</b> Xoá trước commit thì request đọc chen vào sẽ ghi lại dữ liệu cũ. Lần nạp bắt đầu trước commit mà ghi muộn cũng không được đọc lại: khoá cache gồm id và thế hệ (<code>vingo:search:gen:event:{id}</code>, <code>gen:showtime:{id}</code>, <code>gen:venue</code>) đọc trước khi đọc DB; listener sau commit tăng thế hệ nên lần nạp cũ ghi vào khoá không ai đọc và tự hết hạn. Rollback thì không có event, không tăng thế hệ.</div>
+    <div class="note info"><b>TTL là lưới an toàn</b> khi mất event (app sập sau commit, Redis sập lúc xoá). Không thêm cache trong bộ nhớ: 2 instance api dùng chung Redis. Cache chỉ bật ở profile <code>api</code>; lỗi Redis chỉ ghi WARN rồi đọc DB.</div>
+  </div>
+  <div class="two">
+    <div class="note"><b>Cách xoá.</b> Catalog phát <code>CatalogChanged(eventId, showtimeIds)</code> hoặc <code>VenueChanged(venueId)</code> (record ở gốc <code>vingo.catalog</code>) trong transaction ghi của admin. <code>CatalogChangedListener</code> dùng <code>@TransactionalEventListener(AFTER_COMMIT)</code> chạy đồng bộ, không dùng <code>@ApplicationModuleListener</code> vì nó chạy bất đồng bộ (cần <code>@EnableAsync</code>) nên admin vừa lưu xong vẫn có thể đọc dữ liệu cũ. <code>CatalogChanged</code> tăng thế hệ của eventId (cho <code>search-event</code>, <code>search-showtimes</code>) và của từng suất (cho <code>search-seatmap-layout</code>); <code>VenueChanged</code> tăng thế hệ chung của sân nên mọi cache event và suất bị bỏ. Bộ đếm có TTL 1 ngày; Redis lỗi lúc đọc thế hệ thì bỏ qua cache và đọc DB, lỗi lúc tăng thì WARN và chờ TTL.</div>
+    <div class="note"><b>Điều kiện:</b> thế hệ chỉ tăng khi catalog <b>phát event</b>. Mọi use case ghi của admin (sửa, publish, huỷ event; giá, <code>zone_price</code>; suất; publish sơ đồ ghế; sửa sân) phải gọi <code>publishEvent(new CatalogChanged(...))</code> hoặc <code>VenueChanged</code> trong transaction. Use case nào thiếu event thì cache của nó cũ tới hết TTL (10 phút). Hiện catalog chưa có use case ghi nào phát event: phần này chờ Luân.</div>
+    <div class="note info"><b>Rate limit.</b> Interceptor ở <code>search/web</code> đếm theo IP (<code>getRemoteAddr</code>) bằng <code>RateLimiter</code> dùng chung, một bộ đếm cho cả 5 endpoint: <code>vingo.search.rate-limit.per-minute</code> (mặc định 120, env <code>SEARCH_RATE_LIMIT_PER_MINUTE</code>), cửa sổ cố định 1 phút. Vượt thì 429 <code>RATE_LIMITED</code> kèm <code>Retry-After</code>; Redis sập thì cho qua.</div>
   </div>
 </section>
 
@@ -461,7 +468,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   <div class="panel prs">
     <div class="pr"><div class="prtag">PR 0<span class="chip warn">contract</span></div><div class="prbody"><p class="sub">404 cho showtimes, availability · 400 cho /events · 429 cho cả 5 · <code>relevance</code> · <code>zone_id</code> · <code>CityCode</code> + <code>city_name</code> · description kèm ví dụ lỗi. Cần người khác duyệt.</p></div></div>
     <div class="pr"><div class="prtag">Fixture</div><div class="prbody"><p class="sub"><code>CatalogFixtures</code> dựng venue → showtime_seat bằng JdbcClient.</p></div></div>
-    <div class="pr"><div class="prtag">PR 1<span class="chip">search</span></div><div class="prbody"><p class="sub">Không dấu · gõ sai · một đoạn tiêu đề · loại DRAFT và sự kiện đã qua · bộ lọc · card đúng thành phố · price_from · relevance mặc định · phân trang không trùng · 400 cursor, limit.</p></div></div>
+    <div class="pr"><div class="prtag">PR 1<span class="chip">search</span></div><div class="prbody"><p class="sub">Không dấu · gõ sai · một đoạn tiêu đề · loại DRAFT và sự kiện đã qua · bộ lọc · card đúng thành phố · price_from · relevance mặc định · phân trang không trùng · 400 cursor, limit. Bổ sung: khớp lỏng khi q có từ thừa, không nới khi đã khớp chặt hoặc q một từ, giữ chế độ qua các trang.</p></div></div>
     <div class="pr"><div class="prtag">PR 2<span class="chip">detail</span></div><div class="prbody"><p class="sub">ShowtimeStatus ở từng mốc giờ · 404 DRAFT · 404 event không có.</p></div></div>
     <div class="pr"><div class="prtag">PR 3<span class="chip">seatmap</span></div><div class="prbody"><p class="sub">HELD quá hạn → AVAILABLE · ghế đôi, khu đứng · sold_out · zone_id, 404 zone lạ · thiếu dòng → BLOCKED · gợi ý ghế liền nhau · EXPLAIN với 10k sự kiện, 40k ghế.</p></div></div>
     <div class="pr"><div class="prtag">PR 4<span class="chip">cache</span></div><div class="prbody"><p class="sub">Redis sập vẫn trả · thấy thay đổi sau commit · hết TTL · nhiều miss đọc DB một lần · 429.</p></div></div>

@@ -51,5 +51,33 @@ jobs:
         run: |
           if [ -z "$HOST" ]; then echo "Chưa cấu hình DEPLOY_HOST cho environment này, bỏ qua deploy."; exit 0; fi
           install -m 600 /dev/null key && echo "$SSH_KEY" > key
-          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
-            "cd ~/vingo && IMAGE_TAG=$TAG docker compose pull && IMAGE_TAG=$TAG docker compose up -d && sleep 20 && curl -fsS https://\$(grep ^DOMAIN= .env | cut -d= -f2)/actuator/health"
+          # api khởi động mất ~60s trên máy 2 GB, nên thử health tới khi UP (tối đa 3 phút)
+          # thay vì đợi một khoảng cố định.
+          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" "TAG=$TAG bash -s" <<'EOF'
+          set -e
+          cd ~/vingo
+          # Khoá chung với workflow deploy của vingo-web: job nào tới sau thì đợi (tối đa 5 phút).
+          exec 9>~/vingo/.deploy.lock
+          flock -w 300 9
+          export IMAGE_TAG="$TAG"
+          # Chỉ đụng service của backend. web do workflow vingo-web deploy theo tag commit;
+          # up -d cho tất cả sẽ tạo lại web từ WEB_TAG trong .env và bỏ mất bản đang chạy.
+          # redis vẫn được khởi động khi cần vì api và worker phụ thuộc nó.
+          docker compose pull api worker
+          docker compose up -d api worker
+          DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)
+          # Hạn chót tính theo đồng hồ (gồm cả thời gian curl lẫn sleep); mỗi lần curl tối đa 10s
+          # để một request treo không giữ job mãi.
+          start=$SECONDS
+          deadline=$((start + 180))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if curl -fsS --connect-timeout 5 --max-time 10 "https://$DOMAIN/actuator/health"; then
+              echo; echo "api UP sau $((SECONDS - start))s"; exit 0
+            fi
+            sleep 5
+          done
+          echo "api chưa UP sau 3 phút"
+          docker compose ps
+          docker compose logs --tail 50 api
+          exit 1
+          EOF

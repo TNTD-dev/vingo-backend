@@ -134,7 +134,7 @@ public class AuthService {
                 .orElseThrow(AuthService::invalidRefresh);
         String accessToken = issueAccessToken(session.account().id(), session.account().role(), session.id(), now);
         return new AuthResponse(accessToken, nextToken, session.expiresAt(),
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account());
+                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account(), profileCompleted);
     }
 
     /** Thu hồi phiên thuộc user hiện tại hoặc mọi phiên của user đó. */

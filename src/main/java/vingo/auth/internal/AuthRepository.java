@@ -18,12 +18,16 @@ public class AuthRepository {
 
     private final JdbcClient jdbc;
 
-    /** Nhận JDBC client dùng chung cho truy vấn tài khoản và phiên. */
+    /**
+     * Nhận JDBC client dùng chung cho truy vấn tài khoản và phiên.
+     */
     AuthRepository(JdbcClient jdbc) {
         this.jdbc = jdbc;
     }
 
-    /** Tìm và khoá bản ghi liên kết Google trong transaction đăng nhập. */
+    /**
+     * Tìm và khoá bản ghi liên kết Google trong transaction đăng nhập.
+     */
     public Optional<AuthUser> findByGoogleSubject(String subject) {
         return jdbc.sql("""
                         SELECT id, email, phone, full_name, avatar_url, role, status
@@ -33,7 +37,9 @@ public class AuthRepository {
                 .query(AuthRepository::account).optional();
     }
 
-    /** Tạo buyer Google, trả rỗng nếu email hoặc subject đã có chủ. */
+    /**
+     * Tạo buyer Google, trả rỗng nếu email hoặc subject đã có chủ.
+     */
     public Optional<AuthUser> createGoogleAccount(String subject, String email, String name, URI avatar) {
         return jdbc.sql("""
                         INSERT INTO users (google_sub, email, full_name, avatar_url, role, status)
@@ -155,7 +161,9 @@ public class AuthRepository {
                 .single();
     }
 
-    /** Thay hash một cách nguyên tử nếu phiên và tài khoản còn hiệu lực. */
+    /**
+     * Thay hash một cách nguyên tử nếu phiên và tài khoản còn hiệu lực.
+     */
     public Optional<RotatedSession> rotate(String oldHash, String newHash, OffsetDateTime now) {
         return jdbc.sql("""
                         UPDATE sessions s SET refresh_token_hash = :newHash
@@ -173,7 +181,9 @@ public class AuthRepository {
                 .optional();
     }
 
-    /** Đánh dấu thu hồi cho một phiên hoặc mọi phiên của đúng user. */
+    /**
+     * Đánh dấu thu hồi cho một phiên hoặc mọi phiên của đúng user.
+     */
     public void revoke(UUID userId, UUID sessionId, boolean allDevices, OffsetDateTime now) {
         jdbc.sql("""
                         UPDATE sessions SET revoked_at = :now
@@ -187,7 +197,9 @@ public class AuthRepository {
                 .update();
     }
 
-    /** Ánh xạ các cột tài khoản, kể cả avatar có thể vắng mặt. */
+    /**
+     * Ánh xạ các cột tài khoản, kể cả avatar có thể vắng mặt.
+     */
     private static AuthUser account(ResultSet rs, int row) throws SQLException {
         String avatar = rs.getString("avatar_url");
         return new AuthUser(rs.getObject("id", UUID.class), rs.getString("email"), rs.getString("phone"),
@@ -195,7 +207,27 @@ public class AuthRepository {
                 Role.valueOf(rs.getString("role")), rs.getString("status"));
     }
 
+    /**
+     * Kiểm tra người dùng đã khai báo hồ sơ người mua đủ họ tên, số điện thoại
+     * và email.
+     */
+    public boolean hasBuyerProfile(UUID userId) {
+        return jdbc.sql("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM buyer_profile
+                            WHERE user_id = :user
+                              AND length(btrim(full_name)) > 0
+                              AND length(btrim(phone)) > 0
+                              AND length(btrim(email)) > 0
+                        )
+                        """)
+                .param("user", userId)
+                .query(Boolean.class)
+                .single();
+    }
+
     public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
+
     }
 
     public record PasswordAccount(AuthUser user, String passwordHash, OffsetDateTime lockedUntil) {

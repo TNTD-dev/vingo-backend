@@ -42,13 +42,13 @@ def load_env(path: Path) -> dict[str, str]:
 
 
 def amount_from_db(txn_ref: str) -> int:
+    if not txn_ref.replace("-", "").isalnum():
+        sys.exit("--order chỉ gồm chữ, số và dấu '-'")
     sql = (
         "SELECT o.total_amount FROM orders o "
         "LEFT JOIN payment_intent p ON p.order_id = o.id "
         f"WHERE p.txn_ref = '{txn_ref}' OR o.code = '{txn_ref}' LIMIT 1"
     )
-    if not txn_ref.isalnum():
-        sys.exit("--order chỉ gồm chữ và số")
     out = subprocess.run(
         ["docker", "compose", "-f", str(ROOT / "deploy/compose.dev.yaml"), "exec", "-T", "postgres",
          "psql", "-U", "vingo", "-d", "vingo", "-tAc", sql],
