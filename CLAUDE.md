@@ -106,6 +106,16 @@ Quy tắc:
 
 | HTTP | code | Khi nào |
 |---|---|---|
+| 400 | VALIDATION_ERROR | Dữ liệu đầu vào không hợp lệ |
+| 400 | OTP_INVALID | Mã hoặc phiên OTP không hợp lệ |
+| 400 | OTP_EXPIRED | OTP đã hết hạn |
+| 400 | OTP_TOO_MANY_ATTEMPTS | Nhập sai OTP quá số lần |
+| 401 | UNAUTHORIZED | Chưa đăng nhập hoặc refresh token không hợp lệ |
+| 401 | INVALID_CREDENTIALS | Sai thông tin đăng nhập |
+| 403 | FORBIDDEN | Không có quyền |
+| 404 | NOT_FOUND | Không tìm thấy |
+| 409 | EMAIL_TAKEN | Email đã tồn tại |
+| 409 | PHONE_TAKEN | Số điện thoại đã tồn tại |
 | 409 | SEAT_TAKEN | Ghế vừa bị giữ/bán (kèm gợi ý ghế khác) |
 | 409 | NOT_ENOUGH_STOCK | Khu đứng không đủ chỗ |
 | 409 | SHOWTIME_NOT_ON_SALE | Suất chưa mở / đã đóng bán |
