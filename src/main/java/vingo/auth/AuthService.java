@@ -118,8 +118,9 @@ public class AuthService {
         OffsetDateTime expiresAt = now.plus(authProperties.refreshTokenTtl());
         UUID sessionId = accounts.createSession(user.id(), TokenSecrets.hash(refreshToken), device, expiresAt);
         String accessToken = issueAccessToken(user.id(), user.role(), sessionId, now);
+        boolean profileCompleted = accounts.hasBuyerProfile(user.id());
         return new LoginOutcome.Success(new AuthResponse(accessToken, refreshToken, expiresAt,
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), user));
+                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), user, profileCompleted));
     }
 
     /** Xoay vòng refresh token và ký access JWT trong một transaction. */
@@ -133,6 +134,7 @@ public class AuthService {
         var session = accounts.rotate(TokenSecrets.hash(refreshToken), TokenSecrets.hash(nextToken), now)
                 .orElseThrow(AuthService::invalidRefresh);
         String accessToken = issueAccessToken(session.account().id(), session.account().role(), session.id(), now);
+        boolean profileCompleted = accounts.hasBuyerProfile(session.account().id());
         return new AuthResponse(accessToken, nextToken, session.expiresAt(),
                 Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account(), profileCompleted);
     }
@@ -141,6 +143,11 @@ public class AuthService {
     @Transactional
     public void logout(UUID userId, UUID sessionId, boolean allDevices) {
         accounts.revoke(userId, sessionId, allDevices, OffsetDateTime.now(clock));
+    }
+
+    /** Kiểm tra người mua đã có hồ sơ trước khi tạo thanh toán. */
+    public boolean hasBuyerProfile(UUID userId) {
+        return accounts.hasBuyerProfile(userId);
     }
 
     private String issueAccessToken(UUID userId, Role role, UUID sessionId, OffsetDateTime now) {
