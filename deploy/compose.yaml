@@ -23,6 +23,8 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
       retries: 6
+      # JVM khởi động ~60s trên máy 2 GB; trong khoảng này lỗi healthcheck không tính.
+      start_period: 90s
 
   worker:
     <<: *backend
