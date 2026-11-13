@@ -13,15 +13,22 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.adminops.internal.AuditLogRepository;
+import vingo.adminops.internal.PaymentReadRepository;
+import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.CancelEventRequest;
 import vingo.api.model.ListAuditLogs200Response;
+import vingo.api.model.ListMyOrders200Response;
+import vingo.api.model.ListMyTickets200Response;
 import vingo.api.model.Order;
+import vingo.api.model.OrderStatus;
 import vingo.api.model.ResolveReviewRequest;
 import vingo.api.model.ResolveReviewRequest.ActionEnum;
 import vingo.api.model.Ticket;
+import vingo.api.model.TicketStatus;
 import vingo.booking.BookingService;
 import vingo.notifications.NotificationsService;
 import vingo.shared.error.DomainException;
@@ -41,21 +48,47 @@ public class AdminOpsService {
     private final TicketingService ticketing;
     private final NotificationsService notifications;
     private final AuditLogRepository auditLogs;
+    private final PaymentReadRepository payments;
     private final IdempotencyService idempotency;
     private final CurrentUser currentUser;
     private final Clock clock;
 
     /** Nhận API gốc của các module để giữ ranh giới và transaction nghiệp vụ chung. */
     public AdminOpsService(BookingService booking, TicketingService ticketing, NotificationsService notifications,
-                           AuditLogRepository auditLogs, IdempotencyService idempotency,
+                           AuditLogRepository auditLogs, PaymentReadRepository payments, IdempotencyService idempotency,
                            CurrentUser currentUser, Clock clock) {
         this.booking = booking;
         this.ticketing = ticketing;
         this.notifications = notifications;
         this.auditLogs = auditLogs;
+        this.payments = payments;
         this.idempotency = idempotency;
         this.currentUser = currentUser;
         this.clock = clock;
+    }
+
+    /** Kiểm quyền admin rồi tra cứu đơn mọi buyer qua API booking. */
+    // REPEATABLE_READ: chọn id trang và đọc chi tiết cùng một snapshot, không lẫn đơn/vé vừa đổi trạng thái.
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ListMyOrders200Response adminListOrders(
+            OrderStatus status, UUID eventId, UUID showtimeId, String q, String cursor, Integer limit) {
+        requireAdmin();
+        return booking.adminListOrders(status, eventId, showtimeId, q, cursor, limit);
+    }
+
+    /** Kiểm quyền admin rồi ghép chi tiết đơn, history và payments không chứa URL thanh toán. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public AdminGetOrder200Response adminGetOrder(UUID orderId) {
+        requireAdmin();
+        return booking.adminGetOrder(orderId).payments(payments.readPayments(orderId));
+    }
+
+    /** Kiểm quyền admin rồi tra cứu vé qua API ticketing luôn ẩn QR. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ListMyTickets200Response adminListTickets(
+            String code, UUID orderId, UUID showtimeId, TicketStatus status, String cursor, Integer limit) {
+        requireAdmin();
+        return ticketing.adminListTickets(code, orderId, showtimeId, status, cursor, limit);
     }
 
     /** Xử lý review dưới khoá đơn, lưu kết quả idempotent cùng mọi thay đổi và audit. */

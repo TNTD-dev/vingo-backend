@@ -1968,11 +1968,23 @@ paths:
       operationId: adminListOrders
       tags: [Admin Operations]
       summary: Tra cứu đơn
+      description: |
+        Chỉ ADMIN; đọc đơn của mọi buyer, không thay đổi dữ liệu. Các bộ lọc kết hợp bằng AND;
+        event_id lọc theo showtime.event_id. Sắp xếp created_at DESC, id DESC;
+        phân trang keyset như GET /orders, next_cursor null ở trang cuối, limit từ 1 đến 100.
+        q sau trim phải dài 3–254 ký tự và khớp CHÍNH XÁC một trong: mã đơn
+        (upper(code) = upper(q)), email (lower(buyer_email) = lower(q)),
+        hoặc SĐT (buyer_phone = q, giữ nguyên định dạng). Không dùng LIKE; % và _ là ký tự thường.
+        Không log q. q sai độ dài, cursor hỏng hoặc limit ngoài khoảng → 400 VALIDATION_ERROR.
+        Ví dụ lỗi q: {"status":400,"code":"VALIDATION_ERROR","detail":"q sau trim phải dài 3–254 ký tự"}.
+        Ví dụ cursor hỏng: {"status":400,"code":"VALIDATION_ERROR","detail":"Cursor không hợp lệ"}.
+        Ví dụ limit sai: {"status":400,"code":"VALIDATION_ERROR","detail":"limit phải từ 1 đến 100"}.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
         - { name: event_id, in: query, schema: { type: string, format: uuid } }
         - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
-        - { name: q, in: query, description: 'Mã đơn, email hoặc SĐT', schema: { type: string } }
+        - { name: q, in: query, description: 'Khớp chính xác mã đơn/email không phân biệt hoa thường hoặc SĐT nguyên văn; trim rồi kiểm tra 3–254 ký tự', schema: { type: string } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -1988,11 +2000,23 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /admin/orders/{order_id}:
     get:
       operationId: adminGetOrder
       tags: [Admin Operations]
       summary: Chi tiết đơn, lịch sử trạng thái và các giao dịch
+      description: |
+        Chỉ ADMIN; đọc đơn của mọi buyer gồm items, buyer, payments và history, không thay đổi dữ liệu.
+        payments sắp xếp created_at ASC, id ASC; last_response_code lấy từ payment_transaction
+        mới nhất theo received_at của từng intent. Không có payment thì payments là mảng rỗng.
+        Không trả payment_url của PaymentIntent (không có trường hoặc null), không lộ URL thanh toán.
+        history sắp xếp at ASC, id ASC; actor là email của order_status_history.actor_id
+        (JOIN users), hoặc "SYSTEM" khi actor_id NULL.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
+        Đơn không tồn tại: {"status":404,"code":"NOT_FOUND","detail":"Không tìm thấy đơn"}.
       parameters: [ { $ref: '#/components/parameters/OrderId' } ]
       responses:
         '200':
@@ -2015,6 +2039,9 @@ paths:
                             status: { $ref: '#/components/schemas/OrderStatus' }
                             at: { type: string, format: date-time }
                             actor: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /admin/orders/{order_id}/resolve-review:
     post:
       operationId: resolveReview
@@ -2090,6 +2117,16 @@ paths:
       operationId: adminListTickets
       tags: [Admin Operations]
       summary: Tra cứu vé
+      description: |
+        Chỉ ADMIN; đọc vé của mọi buyer, không thay đổi dữ liệu. Các bộ lọc kết hợp bằng AND;
+        code khớp chính xác, không phân biệt hoa thường, không dùng LIKE.
+        Sắp xếp issued_at DESC, id DESC; phân trang keyset như GET /tickets,
+        next_cursor null ở trang cuối, limit từ 1 đến 100.
+        Admin KHÔNG BAO GIỜ nhận qr_token: mọi vé đều không có trường hoặc null,
+        kể cả vé ISSUED và kể cả admin là chủ vé.
+        Ví dụ cursor hỏng: {"status":400,"code":"VALIDATION_ERROR","detail":"Cursor không hợp lệ"}.
+        Ví dụ limit sai: {"status":400,"code":"VALIDATION_ERROR","detail":"limit phải từ 1 đến 100"}.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - { name: code, in: query, schema: { type: string } }
         - { name: order_id, in: query, schema: { type: string, format: uuid } }
@@ -2110,6 +2147,9 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /admin/tickets/{ticket_id}/void:
     post:
       operationId: voidTicket

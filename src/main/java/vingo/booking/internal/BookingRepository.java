@@ -213,6 +213,40 @@ public class BookingRepository {
                 rs.getObject("created_at", OffsetDateTime.class))).list();
     }
 
+    /** Chọn trang đơn mọi buyer theo bộ lọc chính xác và keyset created_at/id giảm dần. */
+    // Mã đơn luôn viết hoa: so cột trần với upper(:q)::bpchar để dùng unique index (bpchar không độ dài nên không cắt q dài).
+    public List<OrderPosition> adminListOrders(String status, UUID eventId, UUID showtimeId, String q,
+                                               OrderPosition after, int limit) {
+        var query = jdbc.sql("""
+                        SELECT o.id, o.created_at FROM orders o JOIN showtime s ON s.id = o.showtime_id
+                        WHERE true
+                        """
+                        + (status == null ? "" : " AND o.status = :status")
+                        + (eventId == null ? "" : " AND s.event_id = :event")
+                        + (showtimeId == null ? "" : " AND o.showtime_id = :showtime")
+                        + (q == null ? "" : " AND (o.code = upper(:q)::bpchar OR lower(o.buyer_email) = lower(:q) OR o.buyer_phone = :q)")
+                        + (after == null ? "" : " AND (o.created_at, o.id) < (:created, :id)")
+                        + " ORDER BY o.created_at DESC, o.id DESC LIMIT :limit")
+                .param("limit", limit);
+        if (status != null) {
+            query.param("status", status);
+        }
+        if (eventId != null) {
+            query.param("event", eventId);
+        }
+        if (showtimeId != null) {
+            query.param("showtime", showtimeId);
+        }
+        if (q != null) {
+            query.param("q", q);
+        }
+        if (after != null) {
+            query.param("created", after.createdAt()).param("id", after.id());
+        }
+        return query.query((rs, row) -> new OrderPosition(rs.getObject("id", UUID.class),
+                rs.getObject("created_at", OffsetDateTime.class))).list();
+    }
+
     public void cancelOrder(UUID orderId, OffsetDateTime now) {
         jdbc.sql("UPDATE orders SET status = 'CANCELLED', updated_at = :now WHERE id = :order")
                 .param("order", orderId).param("now", now).update();

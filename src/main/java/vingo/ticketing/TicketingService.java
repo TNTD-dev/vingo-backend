@@ -71,6 +71,24 @@ public class TicketingService {
         this.clock = clock;
     }
 
+    /** Tra cứu vé cho adminops theo keyset issued_at/id, đọc theo lô và luôn ẩn QR. */
+    @Transactional(readOnly = true)
+    public ListMyTickets200Response adminListTickets(
+            String code, UUID orderId, UUID showtimeId, TicketStatus status, String cursor, Integer limit) {
+        int size = pageSize(limit);
+        var positions = repository.adminListTickets(code, orderId, showtimeId,
+                status == null ? null : status.getValue(), cursor == null ? null : decodeCursor(cursor), size + 1);
+        var page = positions.subList(0, Math.min(size, positions.size()));
+        var tickets = reader.readTickets(page.stream().map(PagePosition::id).toList(), now());
+        // Admin không nhận QR, kể cả khi chính admin là chủ vé ISSUED.
+        tickets.forEach(ticket -> ticket.setQrToken(null));
+        var response = new ListMyTickets200Response().data(tickets);
+        if (positions.size() > size) {
+            response.nextCursor(encodeCursor(page.getLast()));
+        }
+        return response;
+    }
+
     /** Payment gọi sau markSold = SOLD trong transaction IPN; khoá đơn PAID, phát vé idempotent và một sự kiện ticket.issued. */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<UUID> issueForOrder(UUID orderId) {

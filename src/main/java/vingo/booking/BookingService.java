@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.HoldRequest;
 import vingo.api.model.ListMyOrders200Response;
 import vingo.api.model.Order;
@@ -82,6 +83,33 @@ public class BookingService {
         this.events = events;
         this.clock = clock;
         this.holdTtl = Duration.parse(holdTtl);
+    }
+
+    /** Tra cứu đơn cho adminops, kiểm q/limit và đọc cả trang theo keyset created_at/id. */
+    @Transactional(readOnly = true)
+    public ListMyOrders200Response adminListOrders(
+            OrderStatus status, UUID eventId, UUID showtimeId, String q, String cursor, Integer limit) {
+        // limit 1..100 đã được validation của interface sinh từ contract kiểm (sai → 400).
+        int size = limit == null ? 20 : limit;
+        String query = q == null ? null : q.trim();
+        if (query != null && (query.length() < 3 || query.length() > 254)) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "q sau trim phải dài 3–254 ký tự");
+        }
+        var positions = repository.adminListOrders(status == null ? null : status.getValue(), eventId,
+                showtimeId, query, cursor == null ? null : decodeCursor(cursor), size + 1);
+        var page = positions.subList(0, Math.min(size, positions.size()));
+        var response = new ListMyOrders200Response().data(orders.readOrders(
+                page.stream().map(OrderPosition::id).toList(), OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)));
+        if (positions.size() > size) {
+            response.nextCursor(encodeCursor(page.getLast()));
+        }
+        return response;
+    }
+
+    /** Đọc đơn cùng history cho adminops (chưa có payments), ném NOT_FOUND nếu không có đơn. */
+    @Transactional(readOnly = true)
+    public AdminGetOrder200Response adminGetOrder(UUID orderId) {
+        return orders.readAdminOrder(orderId, OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
     }
 
     /**
@@ -274,11 +302,14 @@ public class BookingService {
         var response = new ListMyOrders200Response()
                 .data(orders.readOrders(page.stream().map(OrderPosition::id).toList(), now));
         if (hasMore) {
-            var last = page.getLast();
-            response.nextCursor(Base64.getUrlEncoder().withoutPadding().encodeToString(
-                    (last.createdAt() + "|" + last.id()).getBytes(StandardCharsets.UTF_8)));
+            response.nextCursor(encodeCursor(page.getLast()));
         }
         return response;
+    }
+
+    private static String encodeCursor(OrderPosition position) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(
+                (position.createdAt() + "|" + position.id()).getBytes(StandardCharsets.UTF_8));
     }
 
     private static OrderPosition decodeCursor(String cursor) {
