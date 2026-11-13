@@ -7,16 +7,21 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.AuthApi;
 import vingo.api.model.LoginRequest;
 import vingo.api.model.LogoutRequest;
+import vingo.api.model.OtpSession;
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
+import vingo.api.model.RegisterRequest;
+import vingo.api.model.ResendOtpRequest;
 import vingo.api.model.TokenPair;
 import vingo.api.model.User;
+import vingo.api.model.VerifyOtpRequest;
 import vingo.auth.AuthService;
 import vingo.auth.AuthUser;
 import vingo.shared.error.DomainException;
@@ -41,6 +46,38 @@ class AuthController implements AuthApi {
         this.cookies = cookies;
         this.web = web;
         this.request = request;
+    }
+
+    /** Đăng ký tài khoản UNVERIFIED và gửi OTP qua email. */
+    @Override
+    public ResponseEntity<OtpSession> register(RegisterRequest body) {
+        var session = auth.register(body.getFullName(), body.getEmail(), body.getPhone(), body.getPassword());
+        var response = new OtpSession()
+                .otpSessionId(session.otpSessionId())
+                .expiresAt(session.expiresAt())
+                .channel(OtpSession.ChannelEnum.fromValue(session.channel()));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .cacheControl(CacheControl.noStore())
+                .body(response);
+    }
+
+    /** Xác thực OTP, kích hoạt tài khoản và cấp cặp token. */
+    @Override
+    public ResponseEntity<TokenPair> verifyOtp(VerifyOtpRequest body) {
+        var session = auth.verifyOtp(body.getOtpSessionId(), body.getOtp());
+        var result = new TokenPair(session.accessToken(), session.refreshToken(),
+                session.expiresIn(), toApiUser(session.user()));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString())
+                .body(result);
+    }
+
+    /** Gửi lại OTP cho phiên đang chờ xác thực. */
+    @Override
+    public ResponseEntity<Void> resendOtp(ResendOtpRequest body) {
+        auth.resendOtp(body.getOtpSessionId());
+        return ResponseEntity.accepted().build();
     }
 
     /** Đăng nhập bằng email/SĐT và mật khẩu, cấp TokenPair và đặt cookie refresh. */

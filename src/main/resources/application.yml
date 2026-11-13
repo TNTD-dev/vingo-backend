@@ -74,9 +74,16 @@ vingo:
       max-attempts: ${AUTH_LOGIN_MAX_ATTEMPTS:5}
       attempt-window: ${AUTH_LOGIN_ATTEMPT_WINDOW:PT15M}
       lock-duration: ${AUTH_LOGIN_LOCK_DURATION:PT15M}
+    otp:
+      ttl: ${AUTH_OTP_TTL:PT5M}
+      max-attempts: ${AUTH_OTP_MAX_ATTEMPTS:5}
+      resend-cooldown: ${AUTH_OTP_RESEND_COOLDOWN:PT60S}
+      resend-max-per-window: ${AUTH_OTP_RESEND_MAX:3}
+      resend-window: ${AUTH_OTP_RESEND_WINDOW:PT15M}
   mail:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}
+    base-url: ${MAIL_BASE_URL:https://api.resend.com}
 
 logging:
   structured:

@@ -1,12 +1,19 @@
 package vingo.notifications;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import vingo.notifications.internal.DeliveryException;
+import vingo.notifications.internal.EmailPayload;
+import vingo.notifications.internal.EmailSender;
+import vingo.notifications.internal.NotificationSettings;
 import vingo.notifications.internal.OutboxRepository;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
@@ -14,9 +21,46 @@ import vingo.shared.error.ErrorCode;
 /** Caller giữ quyền gửi, danh sách vé và transaction nghiệp vụ của mình. */
 @Service
 public class NotificationsService {
+    private static final Logger log = LoggerFactory.getLogger(NotificationsService.class);
     private final OutboxRepository outbox;
+    private final EmailSender emailSender;
+    private final NotificationSettings settings;
     private final Clock clock;
-    public NotificationsService(OutboxRepository outbox,Clock clock) { this.outbox=outbox; this.clock=clock; }
+    public NotificationsService(OutboxRepository outbox, EmailSender emailSender, NotificationSettings settings, Clock clock) {
+        this.outbox = outbox;
+        this.emailSender = emailSender;
+        this.settings = settings;
+        this.clock = clock;
+    }
+
+    /**
+     * Gửi email OTP trực tiếp ngoài transaction để không lưu OTP dạng rõ vào database.
+     *
+     * @throws DomainException VALIDATION_ERROR nếu đầu vào không hợp lệ, SERVICE_UNAVAILABLE nếu gửi thất bại
+     */
+    @Transactional(propagation = Propagation.NEVER)
+    public void sendOtpEmail(UUID idempotencyKey, String recipient, String otp, OffsetDateTime expiresAt) {
+        validateRecipient(recipient);
+        if (idempotencyKey == null || otp == null || !otp.matches("[0-9]{6}")
+                || expiresAt == null || !expiresAt.toInstant().isAfter(clock.instant())) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "OTP must have 6 digits and future expiry");
+        }
+        long minutes = Math.max(1, Duration.between(clock.instant(), expiresAt.toInstant()).toMinutes());
+        String html = """
+                <p>Mã xác thực tài khoản Vingo của bạn là: <strong>%s</strong></p>
+                <p>Mã có hiệu lực trong %d phút. Không chia sẻ mã này với bất kỳ ai.</p>
+                """.formatted(otp, minutes);
+        var payload = new EmailPayload(recipient, "Mã xác thực tài khoản Vingo", html, List.of(), settings.sender());
+        try {
+            emailSender.send(idempotencyKey, payload);
+        } catch (DeliveryException ex) {
+            log.atWarn()
+                    .addKeyValue("error_code", ex.code())
+                    .addKeyValue("retryable", ex.retryable())
+                    .log("OTP email delivery failed");
+            throw new DomainException(ErrorCode.SERVICE_UNAVAILABLE, "Không thể gửi email xác thực lúc này");
+        }
+    }
 
     /**
      * Kiểm tra yêu cầu nhưng chủ động từ chối trước khi ghi DB: thiết kế gửi OTP

@@ -226,10 +226,143 @@ public class AuthRepository {
                 .single();
     }
 
+    public boolean existsByEmail(String email) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower(:email))")
+                .param("email", email)
+                .query(Boolean.class)
+                .single();
+    }
+
+    public boolean existsByPhone(String phone) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM users WHERE phone = :phone)")
+                .param("phone", phone)
+                .query(Boolean.class)
+                .single();
+    }
+
+    public AuthUser createUnverifiedUser(String email, String phone, String fullName,
+                                         String passwordHash, OffsetDateTime now) {
+        return jdbc.sql("""
+                        INSERT INTO users (email, phone, full_name, password_hash, role, status, created_at, updated_at)
+                        VALUES (:email, :phone, :fullName, :passwordHash, 'BUYER', 'UNVERIFIED', :now, :now)
+                        RETURNING id, email, phone, full_name, avatar_url, role, status
+                        """)
+                .param("email", email)
+                .param("phone", phone)
+                .param("fullName", fullName)
+                .param("passwordHash", passwordHash)
+                .param("now", now)
+                .query(AuthRepository::account)
+                .single();
+    }
+
+    public OtpSessionRecord createOtpSession(UUID userId, String purpose, String channel,
+                                             String otpHash, OffsetDateTime now, OffsetDateTime expiresAt) {
+        return jdbc.sql("""
+                        INSERT INTO otp_session (user_id, purpose, channel, otp_hash, attempts, created_at, expires_at, last_sent_at)
+                        VALUES (:userId, :purpose, :channel, :otpHash, 0, :now, :expiresAt, :now)
+                        RETURNING id, user_id, purpose, channel, otp_hash, attempts, created_at, expires_at, consumed_at, last_sent_at
+                        """)
+                .param("userId", userId)
+                .param("purpose", purpose)
+                .param("channel", channel)
+                .param("otpHash", otpHash)
+                .param("now", now)
+                .param("expiresAt", expiresAt)
+                .query((rs, row) -> new OtpSessionRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("user_id", UUID.class),
+                        rs.getString("purpose"),
+                        rs.getString("channel"),
+                        rs.getString("otp_hash"),
+                        rs.getInt("attempts"),
+                        rs.getObject("created_at", OffsetDateTime.class),
+                        rs.getObject("expires_at", OffsetDateTime.class),
+                        rs.getObject("consumed_at", OffsetDateTime.class),
+                        rs.getObject("last_sent_at", OffsetDateTime.class)))
+                .single();
+    }
+
+    public Optional<OtpSessionWithUser> findOtpSessionForUpdate(UUID otpSessionId) {
+        return jdbc.sql("""
+                        SELECT o.id AS otp_id, o.user_id, o.purpose, o.channel, o.otp_hash, o.attempts,
+                               o.created_at, o.expires_at, o.consumed_at, o.last_sent_at,
+                               u.id, u.email, u.phone, u.full_name, u.avatar_url, u.role, u.status
+                        FROM otp_session o
+                        JOIN users u ON u.id = o.user_id
+                        WHERE o.id = :id
+                        FOR UPDATE OF o, u
+                        """)
+                .param("id", otpSessionId)
+                .query((rs, row) -> new OtpSessionWithUser(
+                        new OtpSessionRecord(
+                                rs.getObject("otp_id", UUID.class),
+                                rs.getObject("user_id", UUID.class),
+                                rs.getString("purpose"),
+                                rs.getString("channel"),
+                                rs.getString("otp_hash"),
+                                rs.getInt("attempts"),
+                                rs.getObject("created_at", OffsetDateTime.class),
+                                rs.getObject("expires_at", OffsetDateTime.class),
+                                rs.getObject("consumed_at", OffsetDateTime.class),
+                                rs.getObject("last_sent_at", OffsetDateTime.class)),
+                        account(rs, row)))
+                .optional();
+    }
+
+    public void incrementOtpAttempts(UUID otpSessionId) {
+        jdbc.sql("UPDATE otp_session SET attempts = attempts + 1 WHERE id = :id")
+                .param("id", otpSessionId)
+                .update();
+    }
+
+    public void consumeOtpSession(UUID otpSessionId, OffsetDateTime now) {
+        jdbc.sql("UPDATE otp_session SET consumed_at = :now WHERE id = :id AND consumed_at IS NULL")
+                .param("id", otpSessionId)
+                .param("now", now)
+                .update();
+    }
+
+    public void activateUser(UUID userId, OffsetDateTime now) {
+        jdbc.sql("UPDATE users SET status = 'ACTIVE', updated_at = :now WHERE id = :id AND status = 'UNVERIFIED'")
+                .param("id", userId)
+                .param("now", now)
+                .update();
+    }
+
+    public void refreshOtpSession(UUID otpSessionId, String newOtpHash, OffsetDateTime now, OffsetDateTime newExpiresAt) {
+        jdbc.sql("""
+                        UPDATE otp_session
+                        SET otp_hash = :otpHash, attempts = 0, expires_at = :expiresAt, last_sent_at = :now
+                        WHERE id = :id AND consumed_at IS NULL
+                        """)
+                .param("id", otpSessionId)
+                .param("otpHash", newOtpHash)
+                .param("expiresAt", newExpiresAt)
+                .param("now", now)
+                .update();
+    }
+
     public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
 
     }
 
     public record PasswordAccount(AuthUser user, String passwordHash, OffsetDateTime lockedUntil) {
+    }
+
+    public record OtpSessionRecord(
+            UUID id,
+            UUID userId,
+            String purpose,
+            String channel,
+            String otpHash,
+            int attempts,
+            OffsetDateTime createdAt,
+            OffsetDateTime expiresAt,
+            OffsetDateTime consumedAt,
+            OffsetDateTime lastSentAt) {
+    }
+
+    public record OtpSessionWithUser(OtpSessionRecord session, AuthUser user) {
     }
 }
