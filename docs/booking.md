@@ -31,8 +31,9 @@ sequenceDiagram
     API->>DB: Tính items và giá, INSERT đơn PENDING
     API->>DB: UPDATE showtime_seat SET HELD ... RETURNING seat_id
     alt Giữ đủ số ghế hoặc khu đứng đủ chỗ
-        API->>DB: INSERT order_item, history, COMMIT
-        API->>RT: ORDER_HELD
+        API->>DB: INSERT order_item, history, realtime_event, pg_notify
+        API->>DB: COMMIT
+        DB-->>RT: NOTIFY ORDER_HELD
         API-->>Client: 201 Order
     else Thiếu ghế
         API->>DB: ROLLBACK toàn bộ
@@ -73,7 +74,7 @@ Luồng đi theo **controller → service → repository → PostgreSQL**. Modul
 
 ### Idempotency
 
-Hold nhận `Idempotency-Key` bắt buộc. Phạm vi key là `(user, endpoint kèm showtime_id)`. Cùng key và cùng body trong 24 giờ trả lại kết quả cũ. Cùng key nhưng khác body trả `409 IDEMPOTENCY_CONFLICT`. Nhờ vậy client retry khi mạng lỗi không tạo thêm đơn.
+Hold nhận `Idempotency-Key` bắt buộc. Phạm vi key là `(user, endpoint kèm showtime_id)`. Sau khi hold thành công, cùng key và cùng body trong 24 giờ trả lại kết quả cũ. Cùng key nhưng khác body trả `409 IDEMPOTENCY_CONFLICT`. Hold thất bại (ví dụ `SEAT_TAKEN`) rollback nên không lưu key, retry với cùng key sẽ chạy lại nghiệp vụ. Rate limit chạy trước idempotency, nên retry vẫn có thể nhận `429`. Nhờ vậy client retry khi mạng lỗi sau hold thành công không tạo thêm đơn.
 
 ### Vòng đời đơn
 
@@ -92,7 +93,7 @@ NEEDS_REVIEW ──► PAID | REFUNDED      (admin xử lý)
 | `expireOverdueHolds` | `ExpireHoldsJob` | Lấy đơn quá hạn bằng `FOR UPDATE SKIP LOCKED`, nhả tồn kho, chuyển `EXPIRED`, phát `ORDER_EXPIRED`. Chạy lại không làm gì thêm. |
 | `markSold` | `payment` | Chỉ nhận `PENDING`. Khoá và kiểm đủ ghế lẫn khu đứng trước khi bán. Thiếu thì chuyển `NEEDS_REVIEW` với lý do `PAID_AFTER_EXPIRY` và không phát vé. Đủ thì bán, chuyển `PAID`, phát `ORDER_PAID`. |
 | `markNeedsReview` | `payment` | Nhận `PENDING`, `EXPIRED`, `CANCELLED`. Với `PENDING` thì nhả tồn kho còn giữ. |
-| `resolveReview` | `adminops` | `ISSUE_TICKETS` lấy lại đúng ghế cũ rồi chuyển `PAID`. Nếu không lấy được thì trả `SEAT_TAKEN` hoặc `NOT_ENOUGH_STOCK`. Hành động còn lại chuyển `REFUNDED`. |
+| `resolveReview` | `adminops` | `ISSUE_TICKETS` lấy lại đúng ghế cũ rồi chuyển `PAID`. Nếu không lấy được thì trả `SEAT_TAKEN` hoặc `NOT_ENOUGH_STOCK`. `REFUND` chỉ đánh dấu đơn `REFUNDED`: admin phải hoàn tiền thủ công trên VNPay trước, hệ thống không gọi API hoàn tiền. |
 
 Các hàm `MANDATORY` (`markSold`, `markNeedsReview`, `lockOrderForPayment`, `orderLines`, `resolveReview`) báo lỗi nếu gọi ngoài transaction. Đơn `PENDING` quá hạn vẫn bán được nếu còn đủ tồn kho. Chỉ IPN hoặc querydr được chốt bán, trang return không được.
 
@@ -117,7 +118,7 @@ Các hàm `MANDATORY` (`markSold`, `markNeedsReview`, `lockOrderForPayment`, `or
 | 422 | `MAX_TICKETS_EXCEEDED` | Vượt `max_tickets_per_order`, tính cả ghế cặp. |
 | 429 | `RATE_LIMITED` | Quá 10 lượt giữ ghế mỗi phút cho một user. |
 
-Mọi thay đổi trạng thái đều ghi history, log INFO kèm `order_id` và `user_id`, và phát sự kiện SSE: `order.held`, `order.paid`, `order.expired`, `order.needs_review`.
+Mọi thay đổi trạng thái đều ghi history, log INFO kèm `order_id` và `user_id`. Các sự kiện SSE gồm `order.held`, `order.paid`, `order.expired`, `order.needs_review`. Chuyển sang `REFUNDED` (`resolveReview` với `REFUND`) không phát sự kiện SSE.
 
 ## 6. Kiểm thử
 
