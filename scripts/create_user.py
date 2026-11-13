@@ -20,6 +20,12 @@ def hash_password(raw_password: str) -> str:
     return hasher.hash(raw_password)
 
 
+def sql_literal(value: str | None) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + value.replace("'", "''") + "'"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Cấp tài khoản Vingo ACTIVE với mật khẩu Argon2id.")
     parser.add_argument("--email", required=True, help="Email đăng nhập")
@@ -62,8 +68,9 @@ def main() -> None:
     if args.print_sql_only:
         print(f"-- Hash Argon2id đã tạo cho {email} ({args.role})")
         print(
-            f"INSERT INTO users (email, phone, full_name, password_hash, role, status)\n"
-            f"VALUES ('{email}', " + (f"'{phone}'" if phone else "NULL") + f", '{name}', '{password_hash}', '{args.role}', 'ACTIVE')\n"
+            "INSERT INTO users (email, phone, full_name, password_hash, role, status)\n"
+            f"VALUES ({sql_literal(email)}, {sql_literal(phone)}, {sql_literal(name)}, "
+            f"{sql_literal(password_hash)}, {sql_literal(args.role)}, 'ACTIVE')\n"
             "ON CONFLICT (lower(email)) DO UPDATE SET\n"
             "  full_name = EXCLUDED.full_name,\n"
             "  phone = COALESCE(EXCLUDED.phone, users.phone),\n"
@@ -85,9 +92,8 @@ def main() -> None:
         "-v", f"name={name}",
         "-v", f"hash={password_hash}",
         "-v", f"role={args.role}",
-        "-c", sql,
     ]
-    res = subprocess.run(cmd, check=False)
+    res = subprocess.run(cmd, input=sql, text=True, check=False)
     if res.returncode != 0:
         sys.exit(res.returncode)
 

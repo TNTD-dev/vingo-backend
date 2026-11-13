@@ -2,8 +2,8 @@ package vingo.auth.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -45,6 +45,9 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private Clock clock;
 
     @Test
     void activeBuyerAndAdmin_canLoginByEmailCaseInsensitive_andPhone_withCorrectRoleAndRefreshLogout() {
@@ -210,7 +213,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
 
         // Simulate expired temporary lock -> correct password unlocks account and issues tokens
         jdbc.sql("UPDATE users SET locked_until = :past WHERE id = :id")
-                .param("past", OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1))
+                .param("past", OffsetDateTime.now(clock).minusMinutes(1))
                 .param("id", userId)
                 .update();
 
