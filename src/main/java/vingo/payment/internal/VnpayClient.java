@@ -174,6 +174,9 @@ public class VnpayClient {
                 return QueryResult.success(amountVnd, transactionNo, rawBody);
             }
 
+            if (!"02".equals(transactionStatus)) {
+                return QueryResult.unavailable();
+            }
             long amountVnd = (amountStr == null || amountStr.isBlank()) ? 0L : Long.parseLong(amountStr) / 100L;
             return QueryResult.failed(amountVnd, responseCode, transactionStatus, transactionNo, rawBody);
         } catch (org.springframework.web.client.ResourceAccessException | org.springframework.web.client.HttpServerErrorException ex) {

@@ -19,6 +19,8 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -106,6 +108,18 @@ class VnpayClientTest {
         assertThat(result.status()).isEqualTo(QueryStatus.FAILED);
         assertThat(result.amountVnd()).isEqualTo(200_000L);
         assertThat(result.transactionStatus()).isEqualTo("02");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"20", "04", "07"})
+    void querydr_returnsUnavailable_whenTransactionStatusIsNotTerminal(String transactionStatus) {
+        Map<String, String> fields = baseResponseFields("8F3K2Q-1", "00", transactionStatus, "20000000", "14567891");
+        fields.put("vnp_SecureHash", signResponse(fields));
+        respondJson(200, jsonMapper.writeValueAsString(fields), new AtomicReference<>());
+
+        QueryResult result = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
+
+        assertThat(result.status()).isEqualTo(QueryStatus.UNAVAILABLE);
     }
 
     @Test

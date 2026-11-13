@@ -2755,7 +2755,7 @@ components:
         expires_at: { type: string, format: date-time, description: Hạn giữ ghế khi PENDING }
         paid_at: { type: [string, 'null'], format: date-time }
         buyer: { $ref: '#/components/schemas/BuyerProfile' }
-        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, null] }
+        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, PAYMENT_SUSPECTED, null] }
         created_at: { type: string, format: date-time }
     PaymentIntent:
       type: object

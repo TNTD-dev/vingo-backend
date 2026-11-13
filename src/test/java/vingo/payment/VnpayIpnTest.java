@@ -14,6 +14,24 @@ import vingo.support.CatalogFixture;
 class VnpayIpnTest extends PaymentTestSupport {
 
     @Test
+    void ipn_keepsIntentOpenAndMarksReviewWithoutTickets_whenResponseCode07() {
+        var showtime = catalog.onSaleShowtime();
+        UUID buyer = buyerWithProfile();
+        UUID orderId = holdStandingOrder(buyer, showtime, 1);
+        String txnRef = openIntent(orderId);
+
+        var params = signedIpnParams(txnRef, CatalogFixture.GA_PRICE, "07", "00", "14567891");
+        assertThat(rspCode(callIpn(params))).isEqualTo("00");
+        assertThat(rspCode(callIpn(params))).isEqualTo("00");
+        assertThat(intentStatus(txnRef)).isEqualTo("OPEN");
+        assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
+        assertThat(orderReviewReason(orderId)).isEqualTo("PAYMENT_SUSPECTED");
+        assertThat(ticketCount(orderId)).isZero();
+        assertThat(soldStanding(showtime)).isZero();
+        assertThat(heldStanding(showtime)).isZero();
+    }
+
+    @Test
     void ipn_recordsSecondSuccessfulIntent_andMarksPaidOrderNeedsReview() {
         var showtime = catalog.onSaleShowtime();
         UUID buyer = buyerWithProfile();

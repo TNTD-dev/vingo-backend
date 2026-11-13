@@ -293,6 +293,14 @@ public class PaymentService {
         repository.insertTransaction(intent.id(), source, success ? "SUCCESS" : "FAILED",
                 responseCode, gatewayTxnNo, amountVnd, rawJson, now);
 
+        if ("IPN".equals(source) && "07".equals(responseCode)) {
+            repository.updateIntentStatus(intent.id(), "OPEN", now);
+            if (List.of("PENDING", "EXPIRED", "CANCELLED").contains(order.status())) {
+                booking.markNeedsReview(orderId, ReviewReason.PAYMENT_SUSPECTED);
+            }
+            return PaymentResult.of("00", "Confirm Success");
+        }
+
         // 5. Nếu giao dịch thất bại: đánh dấu FAILED, giữ nguyên đơn để khách có thể thử lại
         if (!success) {
             repository.updateIntentStatus(intent.id(), "FAILED", now);

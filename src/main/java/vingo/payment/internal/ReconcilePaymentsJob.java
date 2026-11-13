@@ -19,6 +19,8 @@ public class ReconcilePaymentsJob {
     private static final Logger log = LoggerFactory.getLogger(ReconcilePaymentsJob.class);
     private static final int BATCH = 50;
     private static final int MAX_BATCHES = 10;
+    private java.time.OffsetDateTime cursorTime;
+    private java.util.UUID cursorId;
 
     private final PaymentService paymentService;
 
@@ -31,14 +33,17 @@ public class ReconcilePaymentsJob {
     public void reconcilePayments() {
         try {
             int total = 0;
-            java.time.OffsetDateTime afterTime = null;
-            java.util.UUID afterId = null;
+            java.time.OffsetDateTime afterTime = cursorTime;
+            java.util.UUID afterId = cursorId;
             for (int i = 0; i < MAX_BATCHES; i++) {
                 var batch = paymentService.reconcileBatch(BATCH, afterTime, afterId);
                 total += batch.processed();
                 afterTime = batch.createdAt();
                 afterId = batch.id();
-                if (batch.selected() < BATCH) {
+                boolean endReached = batch.processed() < BATCH; 
+                cursorTime = endReached ? null : afterTime;
+                cursorId = endReached ? null : afterId;
+                if (endReached) {
                     break;
                 }
             }
