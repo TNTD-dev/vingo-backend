@@ -14,6 +14,23 @@ import vingo.support.CatalogFixture;
 class VnpayIpnTest extends PaymentTestSupport {
 
     @Test
+    void ipn_doesNotReopenOldIntent_whenAnotherIntentIsOpenAndResponse07() {
+        var showtime = catalog.onSaleShowtime();
+        UUID orderId = holdStandingOrder(buyerWithProfile(), showtime, 1);
+        String old = openIntent(orderId);
+        jdbc.sql("UPDATE payment_intent SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", old).update();
+        String next = old + "-new";
+        jdbc.sql("INSERT INTO payment_intent(order_id, txn_ref, amount, expires_at) SELECT order_id, :next, amount, expires_at FROM payment_intent WHERE txn_ref = :old")
+                .param("next", next).param("old", old).update();
+        assertThat(rspCode(callIpn(signedIpnParams(old, CatalogFixture.GA_PRICE, "07", "00", "123")))).isEqualTo("00");
+        assertThat(intentStatus(old)).isEqualTo("FAILED");
+        assertThat(intentStatus(next)).isEqualTo("OPEN");
+        assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
+        assertThat(txCount(old)).isEqualTo(1);
+        assertThat(ticketCount(orderId)).isZero();
+    }
+
+    @Test
     void ipn_keepsIntentOpenAndMarksReviewWithoutTickets_whenResponseCode07() {
         var showtime = catalog.onSaleShowtime();
         UUID buyer = buyerWithProfile();

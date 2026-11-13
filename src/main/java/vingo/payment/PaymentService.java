@@ -199,10 +199,10 @@ public class PaymentService {
                 repository.findIntentByTxnRef(txnRef).ifPresent(intent -> {
                     if ("OPEN".equals(intent.status())) {
                         QueryResult qr = vnpayClient.querydr(intent.txnRef(), intent.createdAt(), clientIp);
-                        if (qr.status() == QueryStatus.SUCCESS || qr.status() == QueryStatus.FAILED) {
+                        if (qr.status() == QueryStatus.SUCCESS || qr.status() == QueryStatus.FAILED || qr.status() == QueryStatus.SUSPECTED) {
                             txTemplate.executeWithoutResult(status -> applyGatewayResult(
                                     intent.txnRef(), qr.amountVnd(), qr.status() == QueryStatus.SUCCESS,
-                                    qr.responseCode(), qr.gatewayTxnNo(), qr.rawJson(), "QUERY"));
+                                    qr.status() == QueryStatus.SUSPECTED ? "07" : qr.responseCode(), qr.gatewayTxnNo(), qr.rawJson(), "QUERY"));
                         }
                     }
                 });
@@ -238,10 +238,10 @@ public class PaymentService {
         for (IntentRow intent : candidates) {
             try {
                 QueryResult qr = vnpayClient.querydr(intent.txnRef(), intent.createdAt(), "127.0.0.1");
-                if (qr.status() == QueryStatus.SUCCESS || qr.status() == QueryStatus.FAILED) {
+                if (qr.status() == QueryStatus.SUCCESS || qr.status() == QueryStatus.FAILED || qr.status() == QueryStatus.SUSPECTED) {
                     txTemplate.executeWithoutResult(status -> applyGatewayResult(
                             intent.txnRef(), qr.amountVnd(), qr.status() == QueryStatus.SUCCESS,
-                            qr.responseCode(), qr.gatewayTxnNo(), qr.rawJson(), "QUERY"));
+                            qr.status() == QueryStatus.SUSPECTED ? "07" : qr.responseCode(), qr.gatewayTxnNo(), qr.rawJson(), "QUERY"));
                     processed++;
                 } else if (qr.status() == QueryStatus.NOT_FOUND) {
                     OffsetDateTime checkTime = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
@@ -293,10 +293,13 @@ public class PaymentService {
         repository.insertTransaction(intent.id(), source, success ? "SUCCESS" : "FAILED",
                 responseCode, gatewayTxnNo, amountVnd, rawJson, now);
 
-        if ("IPN".equals(source) && "07".equals(responseCode)) {
-            repository.updateIntentStatus(intent.id(), "OPEN", now);
-            if (List.of("PENDING", "EXPIRED", "CANCELLED").contains(order.status())) {
-                booking.markNeedsReview(orderId, ReviewReason.PAYMENT_SUSPECTED);
+        if ("07".equals(responseCode)) {
+            var otherOpen = repository.findOpenIntentByOrderId(orderId);
+            if (otherOpen.isEmpty() || otherOpen.get().id().equals(intent.id())) {
+                repository.updateIntentStatus(intent.id(), "OPEN", now);
+            }
+            if (List.of("PENDING", "EXPIRED", "CANCELLED", "PAID").contains(order.status())) {
+                booking.markSuspectedPaymentForReview(orderId);
             }
             return PaymentResult.of("00", "Confirm Success");
         }
