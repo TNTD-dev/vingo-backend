@@ -343,6 +343,16 @@ public class AuthRepository {
                 .update();
     }
 
+    public void deleteUnverifiedRegistration(UUID userId, UUID otpSessionId) {
+        jdbc.sql("DELETE FROM otp_session WHERE id = :otpId AND user_id = :userId AND consumed_at IS NULL")
+                .param("otpId", otpSessionId)
+                .param("userId", userId)
+                .update();
+        jdbc.sql("DELETE FROM users WHERE id = :userId AND status = 'UNVERIFIED'")
+                .param("userId", userId)
+                .update();
+    }
+
     public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
 
     }

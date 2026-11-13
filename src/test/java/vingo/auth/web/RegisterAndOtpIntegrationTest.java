@@ -29,6 +29,7 @@ import vingo.api.model.ResendOtpRequest;
 import vingo.api.model.TokenPair;
 import vingo.api.model.User;
 import vingo.api.model.VerifyOtpRequest;
+import vingo.notifications.internal.DeliveryException;
 import vingo.notifications.internal.EmailPayload;
 import vingo.notifications.internal.EmailSender;
 import vingo.support.IntegrationTest;
@@ -40,7 +41,9 @@ import vingo.support.IntegrationTest;
         "vingo.auth.otp.max-attempts=3",
         "vingo.auth.otp.resend-cooldown=PT30S",
         "vingo.auth.otp.resend-max-per-window=3",
-        "vingo.auth.otp.resend-window=PT15M"
+        "vingo.auth.otp.resend-window=PT15M",
+        "vingo.auth.otp.register-max-per-window=3",
+        "vingo.auth.otp.register-window=PT1M"
 })
 class RegisterAndOtpIntegrationTest extends IntegrationTest {
 
@@ -58,6 +61,7 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     void resetMailAndClock() {
         clock.set(Instant.parse("2026-11-13T10:00:00Z"));
         mailSender.sent.clear();
+        mailSender.failure = null;
     }
 
     @Test
@@ -143,6 +147,51 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(phoneConflict).isNotNull();
         assertThat(phoneConflict.getCode()).isEqualTo(Problem.CodeEnum.PHONE_TAKEN);
+    }
+
+    @Test
+    void register_returns400ValidationError_whenFullNameIsBlank() {
+        Problem blankName = client.post().uri(REGISTER)
+                .body(new RegisterRequest("   ", "blank." + UUID.randomUUID() + "@vingo.local", randomPhone(), PASSWORD))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(blankName).isNotNull();
+        assertThat(blankName.getCode()).isEqualTo(Problem.CodeEnum.VALIDATION_ERROR);
+    }
+
+    @Test
+    void resendOtp_returns400OtpInvalid_whenSessionMissingOrAlreadyConsumed() {
+        Problem missing = client.post().uri(RESEND_OTP)
+                .body(new ResendOtpRequest(UUID.randomUUID()))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(missing).isNotNull();
+        assertThat(missing.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
+
+        String email = "consumed." + UUID.randomUUID() + "@vingo.local";
+        OtpSession session = registerUser(email, randomPhone());
+        String otp = extractOtp(mailSender.sent.getLast().payload().html());
+
+        client.post().uri(VERIFY_OTP)
+                .body(new VerifyOtpRequest(session.getOtpSessionId(), otp))
+                .exchange()
+                .expectStatus().isOk();
+
+        Problem consumed = client.post().uri(RESEND_OTP)
+                .body(new ResendOtpRequest(session.getOtpSessionId()))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(consumed).isNotNull();
+        assertThat(consumed.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
     }
 
     @Test
@@ -283,6 +332,48 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .expectStatus().isOk();
     }
 
+    @Test
+    void register_returns429RateLimited_whenExceedingPerIpLimit() {
+        for (int i = 0; i < 3; i++) {
+            registerUser("rl." + i + "." + UUID.randomUUID() + "@vingo.local", randomPhone());
+        }
+
+        Problem rateLimited = client.post().uri(REGISTER)
+                .body(new RegisterRequest("Too Fast", "rl.overflow." + UUID.randomUUID() + "@vingo.local",
+                        randomPhone(), PASSWORD))
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
+                .expectHeader().exists(HttpHeaders.RETRY_AFTER)
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(rateLimited).isNotNull();
+        assertThat(rateLimited.getCode()).isEqualTo(Problem.CodeEnum.RATE_LIMITED);
+    }
+
+    @Test
+    void register_cleansUpUnverifiedUserWhenEmailFails_allowingSafeRetry() {
+        String email = "retry." + UUID.randomUUID() + "@vingo.local";
+        String phone = randomPhone();
+        mailSender.failure = new DeliveryException(true, "EMAIL_TRANSPORT_ERROR", 0);
+
+        Problem failed = client.post().uri(REGISTER)
+                .body(new RegisterRequest("Retry User", email, phone, PASSWORD))
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(failed).isNotNull();
+        assertThat(failed.getCode()).isEqualTo(Problem.CodeEnum.SERVICE_UNAVAILABLE);
+
+        // Khi dịch vụ email phục hồi, đăng ký lại cùng email và SĐT phải thành công, không kẹt ở 409
+        mailSender.failure = null;
+        OtpSession recovered = registerUser(email, phone);
+        assertThat(recovered).isNotNull();
+        assertThat(recovered.getOtpSessionId()).isNotNull();
+    }
+
     private OtpSession registerUser(String email, String phone) {
         return client.post().uri(REGISTER)
                 .body(new RegisterRequest("Test Buyer", email, phone, PASSWORD))
@@ -315,9 +406,13 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
 
     static class RecordingEmailSender implements EmailSender {
         final List<SentMail> sent = new CopyOnWriteArrayList<>();
+        volatile DeliveryException failure;
 
         @Override
         public String send(UUID idempotencyKey, EmailPayload payload) {
+            if (failure != null) {
+                throw failure;
+            }
             sent.add(new SentMail(idempotencyKey, payload));
             return "msg-" + idempotencyKey;
         }

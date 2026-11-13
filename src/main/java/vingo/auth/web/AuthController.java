@@ -51,7 +51,8 @@ class AuthController implements AuthApi {
     /** Đăng ký tài khoản UNVERIFIED và gửi OTP qua email. */
     @Override
     public ResponseEntity<OtpSession> register(RegisterRequest body) {
-        var session = auth.register(body.getFullName(), body.getEmail(), body.getPhone(), body.getPassword());
+        var session = auth.register(body.getFullName(), body.getEmail(), body.getPhone(),
+                body.getPassword(), request.getRemoteAddr());
         var response = new OtpSession()
                 .otpSessionId(session.otpSessionId())
                 .expiresAt(session.expiresAt())

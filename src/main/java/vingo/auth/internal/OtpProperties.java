@@ -10,5 +10,7 @@ public record OtpProperties(
         int maxAttempts,
         Duration resendCooldown,
         int resendMaxPerWindow,
-        Duration resendWindow) {
+        Duration resendWindow,
+        int registerMaxPerWindow,
+        Duration registerWindow) {
 }
