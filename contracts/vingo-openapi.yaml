@@ -339,6 +339,7 @@ paths:
       operationId: getBuyerProfile
       tags: [Me]
       summary: Hồ sơ người mua dùng để điền sẵn khi thanh toán
+      description: Đọc hồ sơ của người đang đăng nhập; chưa khai báo trả 404 NOT_FOUND.
       responses:
         '200':
           description: OK
@@ -350,6 +351,7 @@ paths:
       operationId: putBuyerProfile
       tags: [Me]
       summary: Tạo hoặc cập nhật hồ sơ người mua
+      description: Lưu hồ sơ của người đang đăng nhập; dữ liệu trống hoặc email sai trả 400 VALIDATION_ERROR.
       requestBody:
         required: true
         content:
@@ -2276,6 +2278,7 @@ components:
       required: [access_token, expires_in, user]
       properties:
         access_token: { type: string }
+        profile_completed: { type: boolean, description: Đã khai báo đủ hồ sơ người mua để thanh toán }
         refresh_token: { type: string, description: Chỉ có khi refresh token được gửi trong JSON }
         expires_in: { type: integer, description: Giây }
         user: { $ref: '#/components/schemas/User' }
