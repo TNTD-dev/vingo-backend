@@ -46,7 +46,7 @@ public class PaymentController implements PaymentApi {
 
     @Override
     public ResponseEntity<HandleVnpayIpn200Response> handleVnpayIpn(
-            String vnpTxnRef, Long vnpAmount, String vnpResponseCode,
+            String vnpTxnRef, String vnpAmount, String vnpResponseCode,
             String vnpTransactionStatus, String vnpSecureHash, String vnpTransactionNo) {
         PaymentResult result = paymentService.handleVnpayIpn(extractQueryParams());
         return ResponseEntity.ok(new HandleVnpayIpn200Response(

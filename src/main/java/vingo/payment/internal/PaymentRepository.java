@@ -112,6 +112,10 @@ public class PaymentRepository {
                 .optional();
     }
 
+    public boolean hasOtherSucceededIntent(UUID orderId, UUID intentId) {
+        return jdbc.sql("SELECT EXISTS(SELECT 1 FROM payment_intent WHERE order_id = :order AND id <> :id AND status = 'SUCCEEDED')")
+                .param("order", orderId).param("id", intentId).query(Boolean.class).single();
+    }
     public void updateIntentStatus(UUID intentId, String status, OffsetDateTime now) {
         jdbc.sql("UPDATE payment_intent SET status = :status, updated_at = :now WHERE id = :id")
                 .param("status", status)
@@ -144,7 +148,7 @@ public class PaymentRepository {
      * giao dịch ngắn.
      */
     public List<IntentRow> lockCandidatesForReconcile(OffsetDateTime createdBefore,
-            OffsetDateTime expiredAfter, int limit) {
+            OffsetDateTime expiredAfter, int limit, OffsetDateTime afterTime, UUID afterId) {
         return jdbc.sql("""
                         SELECT id, order_id, txn_ref, amount, status, payment_url, created_at, expires_at,
                                CAST(NULL AS text) AS last_response_code
@@ -152,10 +156,13 @@ public class PaymentRepository {
                         WHERE status = 'OPEN'
                           AND created_at <= :createdBefore
                           AND expires_at >= :expiredAfter
-                        ORDER BY created_at ASC
+                        AND (CAST(:afterTime AS timestamptz) IS NULL OR (created_at, id) > (:afterTime, :afterId))
+                        ORDER BY created_at ASC, id ASC
                         LIMIT :limit
                         FOR UPDATE SKIP LOCKED
                         """)
+                .param("afterTime", afterTime, Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("afterId", afterId, Types.OTHER)
                 .param("createdBefore", createdBefore)
                 .param("expiredAfter", expiredAfter)
                 .param("limit", limit)

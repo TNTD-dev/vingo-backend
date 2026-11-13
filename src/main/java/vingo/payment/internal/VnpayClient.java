@@ -153,7 +153,8 @@ public class VnpayClient {
                 return QueryResult.notFound(responseCode, rawBody);
             }
             if (!"00".equals(responseCode)) {
-                return QueryResult.unavailable();
+                log.atWarn().addKeyValue("txn_ref", txnRef).addKeyValue("response_code", responseCode).log("VNPay rejected querydr request");
+                throw new IllegalStateException("VNPay querydr rejected: " + responseCode);
             }
 
             String transactionStatus = textOrNull(root, "vnp_TransactionStatus");
@@ -175,7 +176,7 @@ public class VnpayClient {
 
             long amountVnd = (amountStr == null || amountStr.isBlank()) ? 0L : Long.parseLong(amountStr) / 100L;
             return QueryResult.failed(amountVnd, responseCode, transactionStatus, transactionNo, rawBody);
-        } catch (Exception ex) {
+        } catch (org.springframework.web.client.ResourceAccessException | org.springframework.web.client.HttpServerErrorException ex) {
             log.atWarn().addKeyValue("txn_ref", txnRef).setCause(ex).log("VNPay querydr call failed");
             return QueryResult.unavailable();
         }

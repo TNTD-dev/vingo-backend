@@ -21,10 +21,14 @@ if ($token -notmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$') {
     throw 'Access token khong dung dinh dang JWT. Chi dan chuoi eyJ... gom 3 phan ngan bang dau cham; khong dan JSON, dau nhay hoac lenh terminal.'
 }
 $api = $BaseUrl.TrimEnd('/') + '/api/v1'
+$uri = [uri]$api
+if (-not $uri.IsAbsoluteUri -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $uri.IsLoopback)) -or $uri.UserInfo) {
+    throw 'BaseUrl must use HTTPS; HTTP is allowed only for loopback hosts.'
+}
 $headers = @{ Authorization = "Bearer $token" }
 
 function Call-Api([string]$Method, [string]$Path, $Body = $null, [string]$Key = '') {
-    $options = @{ Uri = "$api$Path"; Method = $Method; Headers = $headers; TimeoutSec = 20 }
+    $options = @{ Uri = "$api$Path"; Method = $Method; Headers = $headers; TimeoutSec = 20; MaximumRedirection = 0 }
     if ($Key) { $options.Headers = $headers.Clone(); $options.Headers['Idempotency-Key'] = $Key }
     if ($null -ne $Body) { $options.Body = ConvertTo-Json -InputObject $Body -Depth 12 -Compress; $options.ContentType = 'application/json' }
     try { Invoke-RestMethod @options }

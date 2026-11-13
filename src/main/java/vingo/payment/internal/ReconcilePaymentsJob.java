@@ -31,10 +31,14 @@ public class ReconcilePaymentsJob {
     public void reconcilePayments() {
         try {
             int total = 0;
+            java.time.OffsetDateTime afterTime = null;
+            java.util.UUID afterId = null;
             for (int i = 0; i < MAX_BATCHES; i++) {
-                int count = paymentService.reconcileOpenIntents(BATCH);
-                total += count;
-                if (count < BATCH) {
+                var batch = paymentService.reconcileBatch(BATCH, afterTime, afterId);
+                total += batch.processed();
+                afterTime = batch.createdAt();
+                afterId = batch.id();
+                if (batch.selected() < BATCH) {
                     break;
                 }
             }

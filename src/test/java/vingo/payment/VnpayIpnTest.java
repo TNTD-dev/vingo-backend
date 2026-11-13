@@ -14,6 +14,24 @@ import vingo.support.CatalogFixture;
 class VnpayIpnTest extends PaymentTestSupport {
 
     @Test
+    void ipn_recordsSecondSuccessfulIntent_andMarksPaidOrderNeedsReview() {
+        var showtime = catalog.onSaleShowtime();
+        UUID buyer = buyerWithProfile();
+        UUID orderId = holdStandingOrder(buyer, showtime, 1);
+        String first = openIntent(orderId);
+        jdbc.sql("UPDATE payment_intent SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", first).update();
+        String second = first + "-second";
+        jdbc.sql("INSERT INTO payment_intent(order_id, txn_ref, amount, expires_at) SELECT order_id, :ref, amount, expires_at FROM payment_intent WHERE txn_ref = :first")
+                .param("ref", second).param("first", first).update();
+        assertThat(rspCode(callIpn(signedSuccessIpn(first, CatalogFixture.GA_PRICE)))).isEqualTo("00");
+        assertThat(rspCode(callIpn(signedSuccessIpn(second, CatalogFixture.GA_PRICE)))).isEqualTo("00");
+        assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
+        assertThat(intentStatus(second)).isEqualTo("SUCCEEDED");
+        assertThat(ticketCount(orderId)).isEqualTo(1);
+        assertThat(rspCode(callIpn(signedSuccessIpn(second, CatalogFixture.GA_PRICE)))).isEqualTo("02");
+    }
+
+    @Test
     void ipn_returns97_andDoesNotModifyOrderOrRecordTransaction_whenSignatureInvalid() {
         var showtime = catalog.onSaleShowtime();
         UUID buyer = buyerWithProfile();
@@ -57,7 +75,7 @@ class VnpayIpnTest extends PaymentTestSupport {
     }
 
     @Test
-    void ipn_returns04_andMarksOrderNeedsReviewWithoutIssuingTickets_whenAmountMismatch() {
+    void ipn_returns00_andMarksOrderNeedsReviewWithoutIssuingTickets_whenAmountMismatch() {
         var showtime = catalog.onSaleShowtime();
         UUID buyer = buyerWithProfile();
         UUID orderId = holdStandingOrder(buyer, showtime, 2); // 400_000 VND
@@ -67,7 +85,7 @@ class VnpayIpnTest extends PaymentTestSupport {
         String first = callIpn(wrongAmount);
         String duplicate = callIpn(wrongAmount);
 
-        assertThat(rspCode(first)).isEqualTo("04");
+        assertThat(rspCode(first)).isEqualTo("00");
         assertThat(rspCode(duplicate)).isEqualTo("02");
         assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
         assertThat(orderReviewReason(orderId)).isEqualTo("AMOUNT_MISMATCH");

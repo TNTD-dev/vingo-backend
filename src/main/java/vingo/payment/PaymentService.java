@@ -224,12 +224,14 @@ public class PaymentService {
      * trước, trong vòng 24h sau expires_at). Gọi HTTP querydr ngoài transaction
      * giữ lock, sau đó áp dụng kết quả qua luồng nghiệp vụ chung.
      */
-    public int reconcileOpenIntents(int limit) {
+    public int reconcileOpenIntents(int limit) { return reconcileBatch(limit, null, null).processed(); }
+    public record ReconcileBatch(int selected, int processed, OffsetDateTime createdAt, UUID id) {}
+    public ReconcileBatch reconcileBatch(int limit, OffsetDateTime afterTime, UUID afterId) {
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         List<IntentRow> candidates = txTemplate.execute(status -> repository.lockCandidatesForReconcile(
-                now.minusMinutes(2), now.minusHours(24), limit));
+                now.minusMinutes(2), now.minusHours(24), limit, afterTime, afterId));
         if (candidates == null || candidates.isEmpty()) {
-            return 0;
+            return new ReconcileBatch(0, 0, afterTime, afterId);
         }
 
         int processed = 0;
@@ -255,7 +257,8 @@ public class PaymentService {
                         .setCause(ex).log("Failed to reconcile open payment intent");
             }
         }
-        return processed;
+        var last = candidates.getLast();
+        return new ReconcileBatch(candidates.size(), processed, last.createdAt(), last.id());
     }
 
     /**
@@ -300,7 +303,12 @@ public class PaymentService {
         }
 
         // 6. Tiền đã về cổng thành công -> intent chuyển sang SUCCEEDED
+        boolean secondPayment = repository.hasOtherSucceededIntent(orderId, intent.id());
         repository.updateIntentStatus(intent.id(), "SUCCEEDED", now);
+        if (secondPayment) {
+            if (!"NEEDS_REVIEW".equals(order.status())) booking.markDuplicatePaymentForReview(orderId);
+            return PaymentResult.of("00", "Confirm Success");
+        }
 
         // 7. Đối chiếu số tiền với đơn trong DB
         if (amountVnd != order.totalAmount()) {
@@ -310,7 +318,7 @@ public class PaymentService {
                 log.atError().addKeyValue(LogKeys.ORDER_ID, orderId).addKeyValue("txn_ref", txnRef)
                         .log("Amount mismatch on order already in state {}", order.status());
             }
-            return PaymentResult.of("04", "Invalid amount");
+            return PaymentResult.of("00", "Confirm Success");
         }
 
         // 8. Xử lý theo trạng thái đơn và thời hạn giữ chỗ
