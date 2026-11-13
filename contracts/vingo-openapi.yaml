@@ -346,7 +346,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BuyerProfile' }
-        '404': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
     put:
       operationId: putBuyerProfile
       tags: [Me]
@@ -363,6 +363,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BuyerProfile' }
+        '400':
+          description: Dữ liệu trống hoặc email sai định dạng (VALIDATION_ERROR).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Dữ liệu trống hoặc email không đúng định dạng.
   /me/stream:
     get:
       operationId: streamMyEvents

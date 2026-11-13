@@ -73,7 +73,7 @@ class AuthController implements AuthApi {
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name())).status(User.StatusEnum.fromValue(account.status()));
         var result = new RefreshResult(session.accessToken(), session.expiresIn(), user)
-                .profileCompleted(auth.hasBuyerProfile(account.id()));
+                .profileCompleted(session.profileCompleted());
         var response = ResponseEntity.ok().cacheControl(CacheControl.noStore());
         if (useCookie) {
             response.header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString());

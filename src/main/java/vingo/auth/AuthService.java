@@ -59,8 +59,9 @@ public class AuthService {
                 .build();
         String accessToken = encoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
+        boolean profileCompleted = accounts.hasBuyerProfile(session.account().id());
         return new AuthResponse(accessToken, nextToken, session.expiresAt(),
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account());
+                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account(), profileCompleted);
     }
 
     /** Thu hồi phiên thuộc user hiện tại hoặc mọi phiên của user đó. */
