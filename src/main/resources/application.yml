@@ -80,6 +80,8 @@ vingo:
       resend-cooldown: ${AUTH_OTP_RESEND_COOLDOWN:PT60S}
       resend-max-per-window: ${AUTH_OTP_RESEND_MAX:3}
       resend-window: ${AUTH_OTP_RESEND_WINDOW:PT15M}
+      register-max-per-window: ${AUTH_OTP_REGISTER_MAX:10}
+      register-window: ${AUTH_OTP_REGISTER_WINDOW:PT1M}
   mail:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}

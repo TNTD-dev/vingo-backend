@@ -1,5 +1,6 @@
 package vingo.auth;
 
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -80,7 +81,9 @@ public class AuthService {
     /**
      * Đăng ký tài khoản BUYER ở trạng thái UNVERIFIED, tạo phiên OTP và gửi mã qua email ngoài transaction.
      */
-    public OtpSessionInfo register(String fullName, String email, String phone, String password) {
+    public OtpSessionInfo register(String fullName, String email, String phone, String password, String clientIp) {
+        rateLimiter.check(clientKey(clientIp), "auth-register",
+                otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
         String normalizedName = fullName == null ? "" : fullName.strip();
         String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
         String normalizedPhone = phone == null ? "" : phone.strip();
@@ -112,7 +115,13 @@ public class AuthService {
             throw mapRegistrationConflict(ex);
         }
 
-        notifications.sendOtpEmail(UUID.randomUUID(), normalizedEmail, rawOtp, created.expiresAt());
+        try {
+            notifications.sendOtpEmail(UUID.randomUUID(), normalizedEmail, rawOtp, created.expiresAt());
+        } catch (RuntimeException ex) {
+            tx.executeWithoutResult(status ->
+                    accounts.deleteUnverifiedRegistration(created.userId(), created.otpSessionId()));
+            throw ex;
+        }
         log.atInfo()
                 .addKeyValue("user_id", created.userId())
                 .addKeyValue("otp_session_id", created.otpSessionId())
@@ -218,6 +227,12 @@ public class AuthService {
 
     private static String generateOtp() {
         return String.format(Locale.ROOT, "%06d", OTP_RANDOM.nextInt(1_000_000));
+    }
+
+    /** Băm IP client thành UUID ổn định để không lưu IP thô trong khoá Redis. */
+    private static UUID clientKey(String remoteAddress) {
+        String address = remoteAddress == null ? "" : remoteAddress.strip();
+        return UUID.nameUUIDFromBytes(address.getBytes(StandardCharsets.UTF_8));
     }
 
     private static RuntimeException mapRegistrationConflict(DataIntegrityViolationException ex) {
