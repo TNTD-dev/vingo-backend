@@ -49,15 +49,110 @@ public class AuthRepository {
     }
 
     /** Lưu hash refresh token và thời điểm hết hạn của phiên mới. */
-    public void createSession(UUID userId, String tokenHash, OffsetDateTime expiresAt) {
+    /**
+     * Tìm và khoá bản ghi tài khoản theo email (không phân biệt hoa/thường) hoặc SĐT.
+     */
+    public Optional<PasswordAccount> findForPasswordLogin(String identifier) {
+        String predicate = identifier.contains("@") ? "lower(email) = lower(:identifier)" : "phone = :identifier";
+        return jdbc.sql("""
+                        SELECT id, email, phone, full_name, avatar_url, role, status, password_hash, locked_until
+                        FROM users
+                        WHERE %s
+                        FOR UPDATE
+                        """.formatted(predicate))
+                .param("identifier", identifier)
+                .query((rs, row) -> new PasswordAccount(account(rs, row), rs.getString("password_hash"),
+                        rs.getObject("locked_until", OffsetDateTime.class)))
+                .optional();
+    }
+
+    /**
+     * Ghi nhận một lần thử đăng nhập (thành công hoặc thất bại).
+     */
+    public void recordLoginAttempt(UUID userId, boolean success, OffsetDateTime at) {
         jdbc.sql("""
-                        INSERT INTO sessions (user_id, refresh_token_hash, expires_at)
-                        VALUES (:user, :hash, :expires)
+                        INSERT INTO login_attempt (user_id, success, at)
+                        VALUES (:user, :success, :at)
+                        """)
+                .param("user", userId)
+                .param("success", success)
+                .param("at", at)
+                .update();
+    }
+
+    /**
+     * Đếm số lần đăng nhập sai gần đây trong cửa sổ, tính từ sau lần thành công hoặc hết khoá gần nhất.
+     */
+    public int countRecentFailedAttempts(UUID userId, OffsetDateTime windowStart, OffsetDateTime lockedUntil) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                        FROM login_attempt
+                        WHERE user_id = :user
+                          AND success = false
+                          AND at >= GREATEST(
+                              :windowStart,
+                              COALESCE(CAST(:lockedUntil AS timestamptz), '-infinity'::timestamptz),
+                              COALESCE((SELECT max(at) FROM login_attempt WHERE user_id = :user AND success = true), '-infinity'::timestamptz)
+                          )
+                        """)
+                .param("user", userId)
+                .param("windowStart", windowStart)
+                .param("lockedUntil", lockedUntil)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * Khoá tạm tài khoản đến thời điểm chỉ định.
+     */
+    public void lockTemporarily(UUID userId, OffsetDateTime lockedUntil, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE users
+                        SET status = 'LOCKED', locked_until = :lockedUntil, updated_at = :now
+                        WHERE id = :user
+                        """)
+                .param("user", userId)
+                .param("lockedUntil", lockedUntil)
+                .param("now", now)
+                .update();
+    }
+
+    /**
+     * Mở khoá tài khoản sau khi hết thời gian khoá tạm và đăng nhập thành công.
+     */
+    public void unlockAfterExpiry(UUID userId, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE users
+                        SET status = 'ACTIVE', locked_until = NULL, updated_at = :now
+                        WHERE id = :user
+                        """)
+                .param("user", userId)
+                .param("now", now)
+                .update();
+    }
+
+    /**
+     * Lưu hash refresh token và thời điểm hết hạn của phiên mới.
+     */
+    public void createSession(UUID userId, String tokenHash, OffsetDateTime expiresAt) {
+        createSession(userId, tokenHash, null, expiresAt);
+    }
+
+    /**
+     * Lưu hash refresh token kèm tên thiết bị và trả về id phiên vừa tạo.
+     */
+    public UUID createSession(UUID userId, String tokenHash, String device, OffsetDateTime expiresAt) {
+        return jdbc.sql("""
+                        INSERT INTO sessions (user_id, refresh_token_hash, device, expires_at)
+                        VALUES (:user, :hash, :device, :expires)
+                        RETURNING id
                         """)
                 .param("user", userId)
                 .param("hash", tokenHash)
+                .param("device", device)
                 .param("expires", expiresAt)
-                .update();
+                .query(UUID.class)
+                .single();
     }
 
     /** Thay hash một cách nguyên tử nếu phiên và tài khoản còn hiệu lực. */
@@ -101,5 +196,8 @@ public class AuthRepository {
     }
 
     public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
+    }
+
+    public record PasswordAccount(AuthUser user, String passwordHash, OffsetDateTime lockedUntil) {
     }
 }
