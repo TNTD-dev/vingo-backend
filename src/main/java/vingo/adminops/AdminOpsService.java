@@ -13,6 +13,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.adminops.internal.AuditLogRepository;
@@ -67,7 +68,8 @@ public class AdminOpsService {
     }
 
     /** Kiểm quyền admin rồi tra cứu đơn mọi buyer qua API booking. */
-    @Transactional(readOnly = true)
+    // REPEATABLE_READ: chọn id trang và đọc chi tiết cùng một snapshot, không lẫn đơn/vé vừa đổi trạng thái.
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ListMyOrders200Response adminListOrders(
             OrderStatus status, UUID eventId, UUID showtimeId, String q, String cursor, Integer limit) {
         requireAdmin();
@@ -75,14 +77,14 @@ public class AdminOpsService {
     }
 
     /** Kiểm quyền admin rồi ghép chi tiết đơn, history và payments không chứa URL thanh toán. */
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public AdminGetOrder200Response adminGetOrder(UUID orderId) {
         requireAdmin();
         return booking.adminGetOrder(orderId).payments(payments.readPayments(orderId));
     }
 
     /** Kiểm quyền admin rồi tra cứu vé qua API ticketing luôn ẩn QR. */
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ListMyTickets200Response adminListTickets(
             String code, UUID orderId, UUID showtimeId, TicketStatus status, String cursor, Integer limit) {
         requireAdmin();
