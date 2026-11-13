@@ -5,3 +5,10 @@ vingo:
     rate-limit:
       # Đủ lớn để test thường không chạm giới hạn; test rate limit tự đặt giá trị nhỏ.
       per-minute: 100000
+  vnpay:
+    tmn-code: TESTTMN1
+    hash-secret: test-vnpay-secret-only-for-tests
+    pay-url: https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
+    api-url: http://vnpay.invalid/querydr
+    return-url: http://localhost:8080/api/v1/payments/vnpay/return
+    frontend-return-url: http://localhost:5173/payment/result
