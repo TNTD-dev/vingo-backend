@@ -52,7 +52,7 @@ class PaymentCreateApiTest extends PaymentTestSupport {
         assertThat(queryParams.get("vnp_TmnCode")).isEqualTo(TEST_TMN_CODE);
         assertThat(queryParams.get("vnp_ReturnUrl"))
                 .isEqualTo("http://localhost:8080/api/v1/payments/vnpay/return");
-        assertThat(queryParams.get("vnp_BankCode")).isEqualTo("VNPAYQR");
+        assertThat(queryParams).doesNotContainKey("vnp_BankCode");
         assertThat(queryParams.get("vnp_SecureHash")).isEqualToIgnoringCase(signForTest(queryParams));
     }
 
