@@ -96,6 +96,10 @@ public class VnpayClient {
         public static QueryResult unavailable() {
             return new QueryResult(QueryStatus.UNAVAILABLE, 0L, null, null, null, "{}");
         }
+
+        public static QueryResult unavailable(String responseCode, String rawJson) {
+            return new QueryResult(QueryStatus.UNAVAILABLE, 0L, responseCode, null, null, rawJson);
+        }
     }
 
     public QueryResult querydr(String txnRef, OffsetDateTime transactionDate, String clientIp) {
@@ -136,6 +140,15 @@ public class VnpayClient {
             }
 
             JsonNode root = jsonMapper.readTree(rawBody);
+            String unsignedCode = textOrNull(root, "vnp_ResponseCode");
+            if (isBlank(textOrNull(root, "vnp_SecureHash")) && unsignedCode != null && !"00".equals(unsignedCode)) {
+                // VNPay trả lỗi (vd. 99 Unexpected error, 03 Invalid data format) không kèm chữ ký:
+                // đây là querydr bị từ chối, không phải phản hồi bị giả mạo. Giữ OPEN để đối soát lại sau.
+                log.atWarn().addKeyValue("txn_ref", txnRef).addKeyValue("response_code", unsignedCode)
+                        .addKeyValue("vnp_message", textOrEmpty(root, "vnp_Message"))
+                        .log("VNPay querydr returned an unsigned error response");
+                return QueryResult.unavailable(unsignedCode, rawBody);
+            }
             if (!verifyResponseSignature(root)) {
                 log.atWarn().addKeyValue("txn_ref", txnRef)
                         .log("Rejected VNPay querydr response due to invalid signature");
@@ -216,6 +229,10 @@ public class VnpayClient {
         byte[] expectedBytes = expectedHash.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
         byte[] receivedBytes = receivedHash.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
         return MessageDigest.isEqual(expectedBytes, receivedBytes);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static String textOrNull(JsonNode node, String field) {

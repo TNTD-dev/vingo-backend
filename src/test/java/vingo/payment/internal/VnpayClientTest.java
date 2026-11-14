@@ -156,6 +156,27 @@ class VnpayClientTest {
     }
 
     @Test
+    void querydr_returnsUnavailableWithResponseCode_whenGatewayReturnsUnsignedError() {
+        respondJson(200, "{\"vnp_ResponseCode\":\"99\",\"vnp_Message\":\"Unexpected error\"}", new AtomicReference<>());
+
+        QueryResult result = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
+
+        assertThat(result.status()).isEqualTo(QueryStatus.UNAVAILABLE);
+        assertThat(result.responseCode()).isEqualTo("99");
+    }
+
+    @Test
+    void querydr_returnsUnavailable_whenSuccessResponseHasNoSignature() {
+        Map<String, String> respFields = baseResponseFields("8F3K2Q-1", "00", "00", "40000000", "14567890");
+        respondJson(200, jsonMapper.writeValueAsString(respFields), new AtomicReference<>());
+
+        QueryResult result = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
+
+        assertThat(result.status()).isEqualTo(QueryStatus.UNAVAILABLE);
+        assertThat(result.responseCode()).isNull();
+    }
+
+    @Test
     void querydr_returnsUnavailable_whenHttpErrorOrTimeout() {
         respondJson(500, "{\"error\":\"Internal Server Error\"}", new AtomicReference<>());
         QueryResult httpError = client.querydr("8F3K2Q-1", OffsetDateTime.parse("2026-11-13T03:00:00Z"), "127.0.0.1");
