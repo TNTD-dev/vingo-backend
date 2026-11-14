@@ -844,6 +844,12 @@ paths:
       operationId: getTicketQr
       tags: [Tickets]
       summary: Ảnh mã QR vào cổng
+      description: |
+        Chỉ chủ vé ISSUED được lấy ảnh PNG 320x320, nội dung là qr_token hiện tại.
+        Trả Cache-Control: no-store vì ảnh chứa token vào cổng; reissue-qr làm token trong ảnh cũ mất hiệu lực.
+        QR có lề 2 module và mức sửa lỗi M.
+        Vé không tồn tại hoặc không thuộc người gọi trả 404 NOT_FOUND, kể cả ADMIN không phải chủ vé.
+        Vé USED trả 409 TICKET_USED; vé VOID trả 409 TICKET_NOT_VALID. Chưa đăng nhập trả 401 UNAUTHORIZED.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '200':
@@ -851,8 +857,10 @@ paths:
           content:
             image/png:
               schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Vé không còn hiệu lực (TICKET_NOT_VALID)
+          description: Vé đã dùng (TICKET_USED) hoặc đã vô hiệu (TICKET_NOT_VALID)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
