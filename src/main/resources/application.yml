@@ -86,6 +86,8 @@ vingo:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}
     base-url: ${MAIL_BASE_URL:https://api.resend.com}
+    # Địa chỉ web Vingo cho nút "Xem vé" trong email
+    web-url: ${WEB_BASE_URL:http://localhost:3000}
 
 logging:
   structured:
