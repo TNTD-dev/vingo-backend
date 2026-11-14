@@ -99,9 +99,8 @@ public class AdminOpsService {
             OffsetDateTime now = now();
             Order order = booking.resolveReview(orderId, adminId, request.getAction(), request.getReason(), now);
             if (request.getAction() == ActionEnum.ISSUE_TICKETS) {
-                var ticketIds = ticketing.issueForOrder(orderId);
+                ticketing.issueForOrder(orderId);
                 booking.publishOrderPaid(orderId);
-                booking.buyerEmailForOrder(orderId).ifPresent(email -> notifications.enqueueTickets(email, ticketIds));
             }
             auditLogs.insert(adminId, "RESOLVE_REVIEW", "order", orderId, request.getReason(), now,
                     Map.of("status", "NEEDS_REVIEW"), Map.of("status", order.getStatus().getValue()));

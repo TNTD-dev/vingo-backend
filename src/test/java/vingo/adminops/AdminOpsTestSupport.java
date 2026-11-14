@@ -297,6 +297,12 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
                         rs.getString("template"), rs.getString("recipient"), rs.getString("payload"))).list();
     }
 
+    protected void clearSetupTicketEmails() {
+        // Test thao tác vé chỉ đo email phát sinh từ thao tác, không tính email phát vé của setup.
+        jdbc.sql("DELETE FROM outbox_message WHERE template = 'TICKETS' AND recipient = :email")
+                .param("email", buyerEmail).update();
+    }
+
     protected UUID assertOutbox(List<UUID> ids) {
         var rows = outbox();
         assertThat(rows).hasSize(1);

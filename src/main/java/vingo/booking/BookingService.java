@@ -198,6 +198,7 @@ public class BookingService {
         if (!order.status().equals("PENDING")) {
             throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Chỉ được bán đơn PENDING");
         }
+        repository.snapshotBuyer(orderId);
         // Kiểm hết tồn kho dưới khoá trước khi bán để đơn có cả ghế và khu đứng không bị bán dở.
         boolean seatsAvailable = repository.lockSeatsForSale(orderId, order.showtimeId());
         boolean standingAvailable = repository.lockStandingForSale(orderId, order.showtimeId());
@@ -254,6 +255,7 @@ public class BookingService {
             throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đơn không thể chuyển sang NEEDS_REVIEW");
         }
         Objects.requireNonNull(reason, "reason");
+        repository.snapshotBuyer(orderId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         if (order.status().equals("PENDING")) {
             repository.releaseSeats(orderId);
