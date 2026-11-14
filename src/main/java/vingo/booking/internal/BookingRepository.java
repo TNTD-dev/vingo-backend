@@ -48,6 +48,65 @@ public class BookingRepository {
                         rs.getObject("expires_at", OffsetDateTime.class))).optional();
     }
 
+    /** Đọc email trong transaction đang xử lý đơn hoặc vé, không khoá ngược từ vé về đơn. */
+    public Optional<String> buyerEmailForOrder(UUID orderId) {
+        return jdbc.sql("SELECT buyer_email FROM orders WHERE id = :order")
+                .param("order", orderId).query(String.class).optional();
+    }
+
+    /** Cho phép xử lý review sau khi đóng bán nhưng không phát vé cho suất đã kết thúc hoặc huỷ. */
+    public boolean canIssueReviewedOrder(UUID showtimeId, OffsetDateTime now) {
+        return jdbc.sql("SELECT status <> 'CANCELLED' AND ends_at > :now FROM showtime WHERE id = :showtime")
+                .param("showtime", showtimeId).param("now", now).query(Boolean.class).optional().orElse(false);
+    }
+
+    /** Lấy lại đúng ghế cũ bằng UPDATE có điều kiện, khoá theo seat_id và trả số ghế đã bán. */
+    public int reclaimReviewSeats(UUID orderId, UUID showtimeId, OffsetDateTime now) {
+        return jdbc.sql("""
+                        UPDATE showtime_seat ss SET status = 'SOLD', order_id = :order, held_until = NULL
+                        FROM (
+                            SELECT showtime_id, seat_id FROM showtime_seat
+                            WHERE showtime_id = :showtime AND seat_id IN (
+                                SELECT seat_id FROM order_item WHERE order_id = :order AND seat_id IS NOT NULL
+                            ) ORDER BY seat_id FOR UPDATE
+                        ) locked
+                        WHERE ss.showtime_id = locked.showtime_id AND ss.seat_id = locked.seat_id
+                          AND (ss.status = 'AVAILABLE' OR (ss.status = 'HELD' AND ss.held_until < :now))
+                        RETURNING ss.seat_id
+                        """)
+                .param("order", orderId).param("showtime", showtimeId).param("now", now)
+                .query(UUID.class).list().size();
+    }
+
+    /** Cộng sold từng khu theo thứ tự zone_id; caller rollback toàn bộ khi một khu không đủ chỗ. */
+    public boolean reclaimReviewStanding(UUID orderId, UUID showtimeId) {
+        var quantities = jdbc.sql("""
+                        SELECT zone_id, sum(quantity)::integer AS quantity FROM order_item
+                        WHERE order_id = :order AND seat_id IS NULL GROUP BY zone_id ORDER BY zone_id
+                        """)
+                .param("order", orderId).query((rs, row) -> new StandingQuantity(
+                        rs.getObject("zone_id", UUID.class), rs.getInt("quantity"))).list();
+        for (var item : quantities) {
+            int updated = jdbc.sql("""
+                            UPDATE showtime_zone_stock SET sold = sold + :quantity
+                            WHERE showtime_id = :showtime AND zone_id = :zone
+                              AND capacity - sold - held >= :quantity
+                            """)
+                    .param("showtime", showtimeId).param("zone", item.zoneId())
+                    .param("quantity", item.quantity()).update();
+            if (updated != 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Đánh dấu hoàn thủ công, không nhả lại tồn kho của đơn NEEDS_REVIEW. */
+    public void markRefunded(UUID orderId, OffsetDateTime now) {
+        jdbc.sql("UPDATE orders SET status = 'REFUNDED', updated_at = :now WHERE id = :order")
+                .param("order", orderId).param("now", now).update();
+    }
+
     public List<OrderLine> orderLines(UUID orderId) {
         return jdbc.sql("""
                         SELECT item.id, orders.showtime_id, item.zone_id, item.seat_id, item.quantity
@@ -146,6 +205,40 @@ public class BookingRepository {
                 .param("user", userId).param("limit", limit);
         if (status != null) {
             query.param("status", status);
+        }
+        if (after != null) {
+            query.param("created", after.createdAt()).param("id", after.id());
+        }
+        return query.query((rs, row) -> new OrderPosition(rs.getObject("id", UUID.class),
+                rs.getObject("created_at", OffsetDateTime.class))).list();
+    }
+
+    /** Chọn trang đơn mọi buyer theo bộ lọc chính xác và keyset created_at/id giảm dần. */
+    // Mã đơn luôn viết hoa: so cột trần với upper(:q)::bpchar để dùng unique index (bpchar không độ dài nên không cắt q dài).
+    public List<OrderPosition> adminListOrders(String status, UUID eventId, UUID showtimeId, String q,
+                                               OrderPosition after, int limit) {
+        var query = jdbc.sql("""
+                        SELECT o.id, o.created_at FROM orders o JOIN showtime s ON s.id = o.showtime_id
+                        WHERE true
+                        """
+                        + (status == null ? "" : " AND o.status = :status")
+                        + (eventId == null ? "" : " AND s.event_id = :event")
+                        + (showtimeId == null ? "" : " AND o.showtime_id = :showtime")
+                        + (q == null ? "" : " AND (o.code = upper(:q)::bpchar OR lower(o.buyer_email) = lower(:q) OR o.buyer_phone = :q)")
+                        + (after == null ? "" : " AND (o.created_at, o.id) < (:created, :id)")
+                        + " ORDER BY o.created_at DESC, o.id DESC LIMIT :limit")
+                .param("limit", limit);
+        if (status != null) {
+            query.param("status", status);
+        }
+        if (eventId != null) {
+            query.param("event", eventId);
+        }
+        if (showtimeId != null) {
+            query.param("showtime", showtimeId);
+        }
+        if (q != null) {
+            query.param("q", q);
         }
         if (after != null) {
             query.param("created", after.createdAt()).param("id", after.id());
@@ -318,12 +411,17 @@ public class BookingRepository {
     }
 
     public void insertHistory(UUID orderId, String from, String to, UUID actorId, OffsetDateTime now) {
+        insertHistory(orderId, from, to, actorId, null, now);
+    }
+
+    /** Ghi lý do riêng trong history cùng actor và thời điểm của transaction admin. */
+    public void insertHistory(UUID orderId, String from, String to, UUID actorId, String reason, OffsetDateTime now) {
         jdbc.sql("""
-                        INSERT INTO order_status_history (order_id, from_status, to_status, actor_id, at)
-                        VALUES (:order, :from, :to, :actor, :now)
+                        INSERT INTO order_status_history (order_id, from_status, to_status, actor_id, reason, at)
+                        VALUES (:order, :from, :to, :actor, :reason, :now)
                         """)
                 .param("order", orderId).param("from", from, Types.VARCHAR).param("to", to)
-                .param("actor", actorId, Types.OTHER).param("now", now).update();
+                .param("actor", actorId, Types.OTHER).param("reason", reason, Types.VARCHAR).param("now", now).update();
     }
 
     public void releaseSeats(UUID orderId) {
@@ -378,4 +476,6 @@ public class BookingRepository {
     public record PendingOrder(UUID id, UUID userId, UUID showtimeId, boolean overdue) {}
 
     public record HoldItem(UUID seatId, UUID zoneId, UUID priceTierId, int quantity, long unitPrice) {}
+
+    private record StandingQuantity(UUID zoneId, int quantity) {}
 }

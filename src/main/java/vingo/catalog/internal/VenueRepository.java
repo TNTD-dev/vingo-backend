@@ -34,14 +34,14 @@ public class VenueRepository {
             BigDecimal lat,
             BigDecimal lng,
             String infoJson
-    ) {}
+            ) {}
 
     public record VenueRow(
             UUID id,
             VenueData data,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt
-    ) {}
+            ) {}
 
     public record VenuePosition(OffsetDateTime createdAt, UUID id) {}
 
@@ -64,6 +64,7 @@ public class VenueRepository {
                 rs.getObject("updated_at", OffsetDateTime.class)
         );
     }
+
     public VenueRow insert(VenueData venue) {
         return bindVenue(jdbc.sql("""
                 INSERT INTO venue (name, type, address, city, district, lat, lng, info)
@@ -90,6 +91,7 @@ public class VenueRepository {
                 .param("lng", venue.lng())
                 .param("info", venue.infoJson());
     }
+
     public List<VenueRow> findActive(
             String query,
             String city,
@@ -124,6 +126,7 @@ public class VenueRepository {
                 .query(VenueRepository::mapRow)
                 .list();
     }
+
     public Optional<VenueRow> findActiveByIdForUpdate(UUID venueId) {
         return jdbc.sql("""
                 SELECT
@@ -157,6 +160,7 @@ public class VenueRepository {
                 .query(VenueRepository::mapRow)
                 .optional();
     }
+
     public boolean hasUnfinishedScheduledShowtime(UUID venueId, OffsetDateTime now) {
         return jdbc.sql("""
                 SELECT EXISTS (
@@ -184,7 +188,7 @@ public class VenueRepository {
                 .param("now", now)
                 .update() == 1;
     }
-    
+
     public record HallRow(UUID id, UUID venueId, String name) {}
 
     public Optional<HallRow> insertHall(UUID venueId, String name) {
@@ -202,5 +206,27 @@ public class VenueRepository {
                         rs.getString("name")
                 ))
                 .optional();
+    }
+
+    public List<HallRow> findHallsForVenues(List<UUID> venueIds) {
+        if (venueIds.isEmpty()) {
+            return List.of();
+        }
+
+        return jdbc.sql("""
+                SELECT h.id, h.venue_id, h.name
+                FROM hall h
+                JOIN venue v ON v.id = h.venue_id
+                WHERE h.venue_id IN (:venueIds)
+                AND v.deleted_at IS NULL
+                ORDER BY h.name, h.id
+                """)
+                .param("venueIds", venueIds)
+                .query((rs, row) -> new HallRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("venue_id", UUID.class),
+                        rs.getString("name")
+                ))
+                .list();
     }
 }

@@ -58,7 +58,8 @@ vingo:
     hash-secret: ${VNPAY_HASH_SECRET:}
     pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
     api-url: ${VNPAY_API_URL:https://sandbox.vnpayment.vn/merchant_webapi/api/transaction}
-    return-url: ${VNPAY_RETURN_URL:http://localhost:5173/payment/result}
+    return-url: ${VNPAY_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}
+    frontend-return-url: ${VNPAY_FRONTEND_RETURN_URL:http://localhost:5173/payment/result}
   google:
     enabled: ${GOOGLE_LOGIN_ENABLED:false}
     client-id: ${GOOGLE_CLIENT_ID:}
@@ -69,9 +70,24 @@ vingo:
     frontend-return-url: ${AUTH_FRONTEND_RETURN_URL:http://localhost:3000/auth/google}
     secure-cookies: ${AUTH_SECURE_COOKIES:true}
     refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:P30D}
+    login:
+      max-attempts: ${AUTH_LOGIN_MAX_ATTEMPTS:5}
+      attempt-window: ${AUTH_LOGIN_ATTEMPT_WINDOW:PT15M}
+      lock-duration: ${AUTH_LOGIN_LOCK_DURATION:PT15M}
+    otp:
+      ttl: ${AUTH_OTP_TTL:PT5M}
+      max-attempts: ${AUTH_OTP_MAX_ATTEMPTS:5}
+      resend-cooldown: ${AUTH_OTP_RESEND_COOLDOWN:PT60S}
+      resend-max-per-window: ${AUTH_OTP_RESEND_MAX:3}
+      resend-window: ${AUTH_OTP_RESEND_WINDOW:PT15M}
+      register-max-per-window: ${AUTH_OTP_REGISTER_MAX:10}
+      register-window: ${AUTH_OTP_REGISTER_WINDOW:PT1M}
   mail:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}
+    base-url: ${MAIL_BASE_URL:https://api.resend.com}
+    # Địa chỉ web Vingo cho nút "Xem vé" trong email
+    web-url: ${WEB_BASE_URL:http://localhost:3000}
 
 logging:
   structured:

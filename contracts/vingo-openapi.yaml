@@ -339,6 +339,7 @@ paths:
       operationId: getBuyerProfile
       tags: [Me]
       summary: Hồ sơ người mua dùng để điền sẵn khi thanh toán
+      description: Đọc hồ sơ của người đang đăng nhập; chưa khai báo trả 404 NOT_FOUND.
       responses:
         '200':
           description: OK
@@ -350,6 +351,7 @@ paths:
       operationId: putBuyerProfile
       tags: [Me]
       summary: Tạo hoặc cập nhật hồ sơ người mua
+      description: Lưu hồ sơ của người đang đăng nhập; dữ liệu trống hoặc email sai trả 400 VALIDATION_ERROR.
       requestBody:
         required: true
         content:
@@ -361,6 +363,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BuyerProfile' }
+        '400':
+          description: Dữ liệu trống hoặc email sai định dạng (VALIDATION_ERROR).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Dữ liệu trống hoặc email không đúng định dạng.
   /me/stream:
     get:
       operationId: streamMyEvents
@@ -762,7 +775,7 @@ paths:
       security: []
       parameters:
         - { name: vnp_TxnRef, in: query, required: true, schema: { type: string } }
-        - { name: vnp_Amount, in: query, required: true, schema: { type: integer, format: int64 } }
+        - { name: vnp_Amount, in: query, required: false, schema: { type: string } }
         - { name: vnp_ResponseCode, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionStatus, in: query, required: true, schema: { type: string } }
         - { name: vnp_TransactionNo, in: query, schema: { type: string } }
@@ -848,9 +861,28 @@ paths:
       operationId: resendMyTicket
       tags: [Tickets]
       summary: Gửi lại vé tới email trên đơn (rate limit 3 lần / giờ)
+      description: |
+        Chỉ chủ vé được gửi lại; vé không tồn tại hoặc khác chủ đều trả 404.
+        Khoá vé trước khi kiểm trạng thái; chỉ vé ISSUED được gửi. USED → TICKET_USED,
+        VOID → TICKET_NOT_VALID; đơn không có buyer_email → ORDER_STATE_INVALID.
+        Giới hạn 3 lần/giờ/user (RATE_LIMITED); ghi email vé qua outbox, không ghi audit_log.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '202': { description: Đã đưa vào hàng đợi gửi }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED, TICKET_NOT_VALID hoặc ORDER_STATE_INVALID khi đơn không có email.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ gửi lại vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
+                noEmail:
+                  value: { title: Đơn không có email, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không có buyer_email để gửi vé. }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   # ------------------------------------------------------------------ Check-in
@@ -1142,7 +1174,7 @@ paths:
       operationId: listSeatLayouts
       tags: [Admin Catalog]
       summary: Liệt kê phiên bản sơ đồ của hall
-      description: Trả các phiên bản sơ đồ của hall, mới nhất trước.
+      description: Trả tên và phiên bản sơ đồ của hall, mới nhất trước. Chọn bằng id cụ thể khi tạo suất, không tự lấy bản mới nhất.
       parameters:
         - name: hall_id
           in: path
@@ -1202,6 +1234,8 @@ paths:
         Giới hạn file 10 MiB và tổng request 11 MiB, áp dụng cho mọi profile.
         Nhập một SVG xuất từ Figma theo quy ước v1.
         File hợp lệ tạo một phiên bản sơ đồ DRAFT thuộc hall.
+        Bắt buộc nhập name không trắng, tối đa 200 ký tự. Tên được bỏ khoảng trắng hai đầu.
+        Các phiên bản được phép dùng cùng tên.
       parameters:
         - name: hall_id
           in: path
@@ -1213,9 +1247,10 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required: [file, name]
               properties:
                 file: { type: string, format: binary }
+                name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*', example: 'Concert – sân khấu đầu B' }
             encoding:
               file: { contentType: image/svg+xml }
       responses:
@@ -1274,11 +1309,37 @@ paths:
   /admin/seat-layouts/{layout_id}:
     parameters:
       - { name: layout_id, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: renameSeatLayout
+      tags: [Admin Catalog]
+      summary: Đổi tên cấu hình sơ đồ nháp
+      description: Chỉ đổi tên phiên bản DRAFT thuộc sân đang hoạt động. Không đổi khu, ghế, số phiên bản hoặc liên kết của suất. Bản PUBLISHED bị khóa tên.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeatLayoutNameInput' }
+      responses:
+        '200':
+          description: Cấu hình sơ đồ với tên mới.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatLayout' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Phiên bản đã công bố (SEAT_LAYOUT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sơ đồ đã công bố, status: 409, code: SEAT_LAYOUT_LOCKED, detail: Chỉ được đổi tên sơ đồ DRAFT. }
     get:
       operationId: getSeatLayout
       tags: [Admin Catalog]
       summary: Đọc tổng quan sơ đồ sân
-      description: Trả thông tin phiên bản, hệ tọa độ và danh sách khu để dựng bản đồ và mini map.
+      description: Trả tên cấu hình, thông tin phiên bản, hệ tọa độ và danh sách khu để dựng bản đồ và mini map.
       responses:
         '200':
           description: Tổng quan sơ đồ
@@ -1412,63 +1473,241 @@ paths:
               schema: { $ref: '#/components/schemas/SeatLayout' }
         '404': { $ref: '#/components/responses/NotFound' }
   /admin/events:
+    get:
+      operationId: listAdminEvents
+      tags: [Admin Catalog]
+      summary: Liệt kê sự kiện cho admin
+      description: >
+        Admin liệt kê sự kiện ở mọi trạng thái, gồm DRAFT.
+        Có thể lọc theo tên, trạng thái và loại sự kiện.
+        q tìm chuỗi con trong title, không phân biệt hoa thường.
+        Sắp xếp created_at giảm dần, sau đó id giảm dần.
+        Dùng next_cursor để đọc trang tiếp theo với cùng bộ lọc.
+        Không thay đổi dữ liệu.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/EventStatus'
+        - name: category
+          in: query
+          schema:
+            $ref: '#/components/schemas/EventCategory'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Danh sách sự kiện.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminEventPage'
+        '400':
+          description: Bộ lọc, cursor hoặc limit không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Cursor sự kiện không hợp lệ.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       operationId: createEvent
       tags: [Admin Catalog]
-      summary: Tạo sự kiện (DRAFT)
+      summary: Tạo sự kiện nháp
+      description: >
+        Admin tạo sự kiện ở trạng thái DRAFT.
+        Bắt buộc title không trắng và category hợp lệ.
+        Nếu không gửi max_tickets_per_order thì mặc định 10.
+        Hai poster được lưu độc lập và phải là URL tuyệt đối
+        dùng HTTP hoặc HTTPS khi được cung cấp.
+        Thao tác này chưa tạo suất, giá hoặc tồn kho.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EventInput' }
+            schema:
+              $ref: '#/components/schemas/EventCreateInput'
       responses:
         '201':
-          description: OK
+          description: Đã tạo sự kiện DRAFT.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/EventDetail' }
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '400':
+          description: Thiếu trường bắt buộc hoặc dữ liệu không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Tên sự kiện không được để trống.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /admin/events/{event_id}:
+    get:
+      operationId: getAdminEvent
+      tags: [Admin Catalog]
+      summary: Đọc chi tiết sự kiện cho admin
+      description: >
+        Admin đọc thông tin sự kiện để xem và tiếp tục chỉnh sửa.
+        Trả cả sự kiện DRAFT, PUBLISHED, ENDED và CANCELLED.
+        Bao gồm thông tin chung, hai poster, hạng giá và các suất,
+        kể cả suất DRAFT.
+        Không thay đổi trạng thái hoặc dữ liệu sự kiện.
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: Chi tiết sự kiện.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Không tìm thấy sự kiện.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Không tìm thấy
+                status: 404
+                code: NOT_FOUND
+                detail: Không tìm thấy sự kiện.
     patch:
       operationId: updateEvent
       tags: [Admin Catalog]
-      summary: Sửa thông tin chung (không đổi sơ đồ, khu, giá khi đã có suất ON_SALE)
+      summary: Sửa thông tin chung của sự kiện
+      description: >
+        Admin sửa thông tin chung của sự kiện DRAFT hoặc PUBLISHED.
+        Chỉ cập nhật trường có giá trị khác null; trường không gửi hoặc null giữ nguyên.
+        attributes khác null thay thế toàn bộ object thuộc tính.
+        Body rỗng là thao tác không thay đổi dữ liệu.
+        Không sửa trạng thái, sơ đồ, suất, hạng giá, giá khu hoặc tồn kho qua endpoint này.
+        Sự kiện ENDED hoặc CANCELLED bị khóa (EVENT_LOCKED).
+        Sau khi cập nhật thành công, Search làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EventInput' }
+            schema: { $ref: '#/components/schemas/EventPatchInput' }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
+        '400':
+          description: Tên, loại, poster, tuổi hoặc giới hạn vé không hợp lệ (VALIDATION_ERROR).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Tên sự kiện không được để trống. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Sự kiện đã kết thúc hoặc hủy (EVENT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện bị khóa, status: 409, code: EVENT_LOCKED, detail: Không thể sửa sự kiện đã kết thúc hoặc hủy. }
   /admin/events/{event_id}/price-tiers:
     put:
       operationId: putPriceTiers
       tags: [Admin Catalog]
-      summary: Đặt toàn bộ hạng vé và giá của sự kiện
-      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      summary: Đặt toàn bộ hạng giá của sự kiện
+      description: >
+        Admin đặt toàn bộ danh sách hạng giá.
+        Event phải là DRAFT hoặc PUBLISHED, không có đơn
+        và không có suất chưa hủy đã tới giờ mở bán.
+        Nếu có id, hạng phải thuộc đúng sự kiện.
+        Nếu không có id, dùng lại hạng cùng tên đã bỏ khoảng trắng,
+        hoặc tạo mới nếu chưa có.
+        Không chấp nhận trùng id hoặc tên.
+        Hạng bị bỏ khỏi danh sách chỉ được xóa nếu không còn
+        được gán khu hoặc tham chiếu bởi dòng đơn hàng.
+        Mọi thay đổi trong cùng transaction; lỗi thì rollback toàn bộ.
+        Search làm mới cache sau commit.
+      parameters:
+        - $ref: '#/components/parameters/EventId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: array
-              items: { $ref: '#/components/schemas/PriceTier' }
+              items:
+                $ref: '#/components/schemas/PriceTierInput'
       responses:
-        '200': { description: OK }
-        '409':
-          description: Đã có suất ON_SALE (EVENT_LOCKED)
+        '200':
+          description: Đã lưu danh sách hạng giá.
+        '400':
+          description: Dữ liệu hạng giá hoặc tham chiếu không hợp lệ.
           content:
             application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Hạng giá không thuộc sự kiện hoặc tên bị trùng.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cấu hình giá đã bị khóa.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Sự kiện không cho phép chỉnh sửa
+                status: 409
+                code: EVENT_LOCKED
+                detail: Sự kiện đã bắt đầu bán, có đơn hoặc không còn cho chỉnh sửa.
   /admin/events/{event_id}/zone-prices:
     put:
       operationId: putZonePrices
       tags: [Admin Catalog]
       summary: Gán hạng vé cho từng khu (mỗi khu một hạng)
+      description: >
+        Admin thay toàn bộ danh sách gán hạng giá cho khu.
+        Áp dụng cùng quy tắc khóa như PUT price-tiers:
+        event DRAFT hoặc PUBLISHED, chưa có đơn và không có
+        suất chưa hủy đã tới giờ mở bán.
+        Mỗi zone_id chỉ xuất hiện một lần.
+        Khu phải thuộc layout đang được suất chưa hủy của sự kiện sử dụng.
+        Hạng giá phải thuộc đúng sự kiện.
+        Cho phép cấu hình chưa đủ khu trước bước công bố.
+        Toàn bộ thay đổi trong cùng transaction; lỗi thì rollback.
+        Search làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
@@ -1477,18 +1716,49 @@ paths:
             schema:
               type: array
               items:
-                type: object
-                required: [zone_id, price_tier_id]
-                properties:
-                  zone_id: { type: string, format: uuid }
-                  price_tier_id: { type: string, format: uuid }
+                $ref: '#/components/schemas/ZonePriceInput'
       responses:
         '200': { description: OK }
+        '400':
+          description: Dữ liệu khu hoặc tham chiếu hạng giá không hợp lệ.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Dữ liệu không hợp lệ
+                status: 400
+                code: VALIDATION_ERROR
+                detail: Khu hoặc hạng giá không thuộc cấu hình của sự kiện.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cấu hình giá đã bị khóa.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                title: Sự kiện không cho phép chỉnh sửa
+                status: 409
+                code: EVENT_LOCKED
+                detail: Sự kiện đã bắt đầu bán, có đơn hoặc không còn cho chỉnh sửa.
   /admin/events/{event_id}/publish:
     post:
       operationId: publishEvent
       tags: [Admin Catalog]
       summary: DRAFT → PUBLISHED; các suất chuyển SCHEDULED
+      description: >
+        Công bố nguyên tử sự kiện DRAFT khi có ít nhất một suất chưa hủy, layout đã công bố,
+        sân còn hoạt động, thời gian suất hợp lệ và mọi khu có hạng giá thuộc sự kiện.
+        Thiếu cấu hình trả 422 EVENT_INCOMPLETE. Suất DRAFT chuyển SCHEDULED;
+        giữ nguyên tồn kho hiện có, kể cả BLOCKED, chỉ bổ sung dòng thiếu.
+        Gửi lại sự kiện PUBLISHED trả dữ liệu hiện tại. ENDED/CANCELLED trả EVENT_LOCKED.
+        Cache làm mới sau commit. Hệ thống tính ON_SALE khi tới giờ, không lưu trạng thái đó.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       responses:
         '200':
@@ -1496,6 +1766,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: EVENT_LOCKED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện đã khóa, status: 409, code: EVENT_LOCKED, detail: Sự kiện đã kết thúc hoặc hủy. }
         '422':
           description: Thiếu suất, thiếu giá hoặc khu chưa có hạng (EVENT_INCOMPLETE)
           content:
@@ -1520,7 +1799,11 @@ paths:
       operationId: createShowtime
       tags: [Admin Catalog]
       summary: Tạo suất
-      description: Tạo suất diễn gắn với hall_id và seat_layout_id đã PUBLISHED thuộc đúng hall đó.
+      description: >
+        Tạo suất diễn gắn với hall_id và seat_layout_id đã PUBLISHED thuộc đúng hall đó.
+        Chọn địa điểm riêng cho từng suất, có thể dùng nhiều sân trong cùng sự kiện.
+        Sự kiện phải là DRAFT hoặc PUBLISHED; trạng thái ENDED/CANCELLED trả EVENT_LOCKED.
+        Tạo tồn kho của phiên bản đã chọn trong cùng transaction và làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
         required: true
@@ -1535,6 +1818,12 @@ paths:
               schema: { $ref: '#/components/schemas/Showtime' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Sự kiện đã kết thúc hoặc hủy (EVENT_LOCKED).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện không cho phép chỉnh sửa, status: 409, code: EVENT_LOCKED, detail: Không thể thêm suất vào sự kiện đã kết thúc hoặc hủy. }
         '422':
           description: Sơ đồ sân chưa công bố hoặc không thuộc hall được chọn (INVALID_SEAT_LAYOUT)
           content:
@@ -1550,7 +1839,12 @@ paths:
       operationId: updateShowtime
       tags: [Admin Catalog]
       summary: Sửa suất (chỉ trước sale_opens_at)
-      description: Cập nhật thông tin suất diễn trước thời điểm mở bán. Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
+      description: >
+        Cập nhật thông tin suất diễn trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
+        Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc đã tới giờ mở bán trả SHOWTIME_LOCKED.
+        Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
+        Đổi sơ đồ chỉ được khi chưa có đơn hoặc tồn kho HELD/SOLD/BLOCKED.
+        Metadata, tồn kho và sự kiện làm mới cache được xử lý trong cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1566,7 +1860,7 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: SHOWTIME_LOCKED
+          description: SHOWTIME_LOCKED hoặc EVENT_LOCKED
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1603,7 +1897,14 @@ paths:
     post:
       operationId: blockSeats
       tags: [Admin Catalog]
-      summary: Khoá ghế (AVAILABLE → BLOCKED)
+      summary: block seats
+      description: >
+        ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
+        AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
+        Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
+        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Event ENDED/CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
+        Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1613,20 +1914,40 @@ paths:
               type: object
               required: [seat_ids, reason]
               properties:
-                seat_ids: { type: array, items: { type: string, format: uuid } }
-                reason: { type: string }
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { type: string, format: uuid }
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+                  pattern: '[\s\S]*\S[\s\S]*'
       responses:
         '200': { description: OK }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Có ghế đang HELD hoặc SOLD (SEAT_TAKEN)
+          description: SEAT_TAKEN, EVENT_LOCKED hoặc SHOWTIME_LOCKED.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Ghế đang giữ hoặc đã bán, status: 409, code: SEAT_TAKEN, detail: Danh sách chưa được thay đổi. }
   /admin/showtimes/{showtime_id}/seats/unblock:
     post:
       operationId: unblockSeats
       tags: [Admin Catalog]
-      summary: Mở khoá ghế (BLOCKED → AVAILABLE)
+      summary: unblock seats
+      description: >
+        ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
+        AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
+        Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
+        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Event ENDED/CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
+        Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
       requestBody:
         required: true
@@ -1636,9 +1957,23 @@ paths:
               type: object
               required: [seat_ids]
               properties:
-                seat_ids: { type: array, items: { type: string, format: uuid } }
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { type: string, format: uuid }
       responses:
         '200': { description: OK }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: SEAT_TAKEN, EVENT_LOCKED hoặc SHOWTIME_LOCKED.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Ghế đang giữ hoặc đã bán, status: 409, code: SEAT_TAKEN, detail: Danh sách chưa được thay đổi. }
 
   # ------------------------------------------------------------------ Admin Operations
   /admin/orders:
@@ -1646,11 +1981,23 @@ paths:
       operationId: adminListOrders
       tags: [Admin Operations]
       summary: Tra cứu đơn
+      description: |
+        Chỉ ADMIN; đọc đơn của mọi buyer, không thay đổi dữ liệu. Các bộ lọc kết hợp bằng AND;
+        event_id lọc theo showtime.event_id. Sắp xếp created_at DESC, id DESC;
+        phân trang keyset như GET /orders, next_cursor null ở trang cuối, limit từ 1 đến 100.
+        q sau trim phải dài 3–254 ký tự và khớp CHÍNH XÁC một trong: mã đơn
+        (upper(code) = upper(q)), email (lower(buyer_email) = lower(q)),
+        hoặc SĐT (buyer_phone = q, giữ nguyên định dạng). Không dùng LIKE; % và _ là ký tự thường.
+        Không log q. q sai độ dài, cursor hỏng hoặc limit ngoài khoảng → 400 VALIDATION_ERROR.
+        Ví dụ lỗi q: {"status":400,"code":"VALIDATION_ERROR","detail":"q sau trim phải dài 3–254 ký tự"}.
+        Ví dụ cursor hỏng: {"status":400,"code":"VALIDATION_ERROR","detail":"Cursor không hợp lệ"}.
+        Ví dụ limit sai: {"status":400,"code":"VALIDATION_ERROR","detail":"limit phải từ 1 đến 100"}.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
         - { name: event_id, in: query, schema: { type: string, format: uuid } }
         - { name: showtime_id, in: query, schema: { type: string, format: uuid } }
-        - { name: q, in: query, description: 'Mã đơn, email hoặc SĐT', schema: { type: string } }
+        - { name: q, in: query, description: 'Khớp chính xác mã đơn/email không phân biệt hoa thường hoặc SĐT nguyên văn; trim rồi kiểm tra 3–254 ký tự', schema: { type: string } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -1666,11 +2013,23 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /admin/orders/{order_id}:
     get:
       operationId: adminGetOrder
       tags: [Admin Operations]
       summary: Chi tiết đơn, lịch sử trạng thái và các giao dịch
+      description: |
+        Chỉ ADMIN; đọc đơn của mọi buyer gồm items, buyer, payments và history, không thay đổi dữ liệu.
+        payments sắp xếp created_at ASC, id ASC; last_response_code lấy từ payment_transaction
+        mới nhất theo received_at của từng intent. Không có payment thì payments là mảng rỗng.
+        Không trả payment_url của PaymentIntent (không có trường hoặc null), không lộ URL thanh toán.
+        history sắp xếp at ASC, id ASC; actor là email của order_status_history.actor_id
+        (JOIN users), hoặc "SYSTEM" khi actor_id NULL.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
+        Đơn không tồn tại: {"status":404,"code":"NOT_FOUND","detail":"Không tìm thấy đơn"}.
       parameters: [ { $ref: '#/components/parameters/OrderId' } ]
       responses:
         '200':
@@ -1693,11 +2052,28 @@ paths:
                             status: { $ref: '#/components/schemas/OrderStatus' }
                             at: { type: string, format: date-time }
                             actor: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /admin/orders/{order_id}/resolve-review:
     post:
       operationId: resolveReview
       tags: [Admin Operations]
       summary: Xử lý đơn NEEDS_REVIEW
+      description: |
+        Chỉ ADMIN; bắt buộc Idempotency-Key và reason. Khoá đơn FOR UPDATE, chỉ xử lý NEEDS_REVIEW.
+        Cùng key và body trả kết quả cũ; cùng key khác body → IDEMPOTENCY_CONFLICT.
+        ISSUE_TICKETS phải lấy lại toàn bộ tồn kho cũ theo order_item, không đổi ghế:
+        ghế AVAILABLE hoặc HELD quá hạn (held_until < now) → SOLD với order_id của đơn;
+        khu đứng tăng sold theo quantity khi capacity - sold - held đủ. Thiếu ghế → SEAT_TAKEN
+        (không kèm gợi ý ghế), thiếu khu đứng → NOT_ENOUGH_STOCK; rollback toàn bộ thao tác.
+        Suất đã diễn (ends_at <= now) hoặc CANCELLED → ORDER_STATE_INVALID; đã đóng bán
+        nhưng chưa diễn vẫn được xử lý. Thành công chuyển đơn PAID, paid_at = now, ghi history
+        NEEDS_REVIEW → PAID với actor_id admin và reason, phát vé cùng ticket.issued,
+        order.paid và email vé qua outbox nếu có buyer_email; thiếu email vẫn thành công.
+        REFUND chỉ đánh dấu REFUNDED sau khi admin hoàn thủ công trên VNPay, ghi history;
+        không gọi API hoàn tiền và không giải phóng tồn kho vì đơn không còn giữ.
+        Mọi thay đổi, history, audit_log trước/sau, outbox và realtime nằm trong cùng transaction.
       parameters:
         - $ref: '#/components/parameters/OrderId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1717,11 +2093,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Ghế không còn trống để xuất vé (SEAT_TAKEN)
+          description: ORDER_STATE_INVALID (đơn không NEEDS_REVIEW hoặc suất đã diễn/huỷ), SEAT_TAKEN, NOT_ENOUGH_STOCK hoặc IDEMPOTENCY_CONFLICT.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                invalidOrder:
+                  value: { title: Trạng thái đơn không hợp lệ, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không ở trạng thái NEEDS_REVIEW. }
+                finishedOrCancelled:
+                  value: { title: Suất không thể phát vé, status: 409, code: ORDER_STATE_INVALID, detail: Suất đã diễn hoặc đã bị huỷ. }
+                seatTaken:
+                  value: { title: Ghế không còn trống, status: 409, code: SEAT_TAKEN, detail: Không thể lấy lại toàn bộ ghế cũ của đơn. }
+                notEnoughStock:
+                  value: { title: Khu đứng không đủ chỗ, status: 409, code: NOT_ENOUGH_STOCK, detail: Tồn kho còn lại nhỏ hơn quantity của đơn. }
+                idempotencyConflict:
+                  value: { title: Idempotency-Key xung đột, status: 409, code: IDEMPOTENCY_CONFLICT, detail: Key đã được dùng với body khác. }
   /admin/orders/{order_id}/reconcile:
     post:
       operationId: reconcileOrder
@@ -1739,6 +2130,16 @@ paths:
       operationId: adminListTickets
       tags: [Admin Operations]
       summary: Tra cứu vé
+      description: |
+        Chỉ ADMIN; đọc vé của mọi buyer, không thay đổi dữ liệu. Các bộ lọc kết hợp bằng AND;
+        code khớp chính xác, không phân biệt hoa thường, không dùng LIKE.
+        Sắp xếp issued_at DESC, id DESC; phân trang keyset như GET /tickets,
+        next_cursor null ở trang cuối, limit từ 1 đến 100.
+        Admin KHÔNG BAO GIỜ nhận qr_token: mọi vé đều không có trường hoặc null,
+        kể cả vé ISSUED và kể cả admin là chủ vé.
+        Ví dụ cursor hỏng: {"status":400,"code":"VALIDATION_ERROR","detail":"Cursor không hợp lệ"}.
+        Ví dụ limit sai: {"status":400,"code":"VALIDATION_ERROR","detail":"limit phải từ 1 đến 100"}.
+        Thiếu token: {"status":401,"code":"UNAUTHORIZED"}; BUYER: {"status":403,"code":"FORBIDDEN"}.
       parameters:
         - { name: code, in: query, schema: { type: string } }
         - { name: order_id, in: query, schema: { type: string, format: uuid } }
@@ -1759,11 +2160,19 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /admin/tickets/{ticket_id}/void:
     post:
       operationId: voidTicket
       tags: [Admin Operations]
       summary: Vô hiệu vé (bắt buộc lý do)
+      description: |
+        Chỉ ADMIN; reason ít nhất 3 ký tự. Khoá vé FOR UPDATE trước khi kiểm trạng thái.
+        Chỉ ISSUED → VOID, đặt voided_at, không trả qr_token; ghế vẫn SOLD, không mở bán lại.
+        USED → TICKET_USED, VOID → TICKET_NOT_VALID. Ghi audit VOID_TICKET cùng transaction,
+        gồm admin, thời điểm, reason và status trước/sau; QR cũ không còn dùng để vào cổng.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
@@ -1772,11 +2181,30 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED nếu vé đã dùng; TICKET_NOT_VALID nếu vé VOID.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ vô hiệu vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
   /admin/tickets/{ticket_id}/reissue-qr:
     post:
       operationId: reissueTicketQr
       tags: [Admin Operations]
       summary: Sinh qr_token mới, QR cũ mất hiệu lực
+      description: |
+        Chỉ ADMIN; reason ít nhất 3 ký tự. Khoá vé FOR UPDATE; chỉ vé ISSUED được cấp lại QR.
+        Chỉ đổi qr_token bằng 32 byte SecureRandom mã hoá base64url; Ticket trả về KHÔNG có qr_token
+        (admin không nhận QR vào cổng), khách nhận QR mới qua gửi lại vé. QR cũ không còn tìm thấy. USED → TICKET_USED, VOID → TICKET_NOT_VALID.
+        Ghi audit REISSUE_QR cùng transaction với status ISSUED trước/sau, không lưu qr_token.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
@@ -1785,19 +2213,54 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED nếu vé đã dùng; TICKET_NOT_VALID nếu vé VOID.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ cấp lại QR cho vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
   /admin/tickets/{ticket_id}/resend:
     post:
       operationId: adminResendTicket
       tags: [Admin Operations]
       summary: Gửi lại vé tới email trên đơn
+      description: |
+        Chỉ ADMIN, không rate limit. Khoá vé FOR UPDATE; chỉ vé ISSUED được gửi.
+        USED → TICKET_USED, VOID → TICKET_NOT_VALID; không có buyer_email → ORDER_STATE_INVALID.
+        Ghi email qua outbox và audit RESEND_TICKET trong cùng transaction:
+        before null, after chứa outbox_id, không lưu email trong audit.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '202': { description: Đã đưa vào hàng đợi }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: TICKET_USED, TICKET_NOT_VALID hoặc ORDER_STATE_INVALID khi đơn không có email.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                used:
+                  value: { title: Vé đã sử dụng, status: 409, code: TICKET_USED, detail: Chỉ gửi lại vé ISSUED. }
+                void:
+                  value: { title: Vé không còn hiệu lực, status: 409, code: TICKET_NOT_VALID, detail: Vé đã bị vô hiệu. }
+                noEmail:
+                  value: { title: Đơn không có email, status: 409, code: ORDER_STATE_INVALID, detail: Đơn không có buyer_email để gửi vé. }
   /admin/audit-logs:
     get:
       operationId: listAuditLogs
       tags: [Admin Operations]
       summary: Nhật ký thao tác của admin
+      description: Chỉ ADMIN; lọc entity và entity_id, mới nhất trước theo at DESC rồi id DESC. Phân trang keyset cursor, limit từ 1 đến 100; limit hoặc cursor sai trả 400.
       parameters:
         - { name: entity, in: query, schema: { type: string } }
         - { name: entity_id, in: query, schema: { type: string, format: uuid } }
@@ -1816,6 +2279,9 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/AuditLog' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ------------------------------------------------------------------ Admin Reports
   /admin/reports/metrics:
@@ -1946,7 +2412,7 @@ components:
                  EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
                  SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
-                 VENUE_IN_USE, HALL_NAME_TAKEN, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, EVENT_LOCKED, EVENT_INCOMPLETE,
+                 VENUE_IN_USE, HALL_NAME_TAKEN, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
                  SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
         errors:
           type: array
@@ -2011,6 +2477,7 @@ components:
       required: [access_token, expires_in, user]
       properties:
         access_token: { type: string }
+        profile_completed: { type: boolean, description: Đã khai báo đủ hồ sơ người mua để thanh toán }
         refresh_token: { type: string, description: Chỉ có khi refresh token được gửi trong JSON }
         expires_in: { type: integer, description: Giây }
         user: { $ref: '#/components/schemas/User' }
@@ -2093,8 +2560,9 @@ components:
         name: { type: string }
     SeatLayoutInput:
       type: object
-      required: [zones]
+      required: [name, zones]
       properties:
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*' }
         zones:
           type: array
           items:
@@ -2127,10 +2595,17 @@ components:
             minItems: 2
             maxItems: 2
             items: { type: string, description: 'Mã ghế, ví dụ "A-F9"' }
+    SeatLayoutNameInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '[\s\S]*\S[\s\S]*', example: 'Bóng đá' }
     SeatLayout:
       type: object
+      required: [name]
       properties:
         id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 200, description: Tên cấu hình; các phiên bản được phép trùng tên. }
         hall_id: { type: string, format: uuid }
         status: { type: string, enum: [DRAFT, PUBLISHED] }
         zone_count: { type: integer }
@@ -2207,19 +2682,115 @@ components:
             data:
               type: array
               items: { $ref: '#/components/schemas/SeatLayout' }
+    AdminEventSummary:
+      type: object
+      required: [id, title, category, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        poster_mobile_url:
+          type: string
+          format: uri
+        poster_desktop_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdminEventPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminEventSummary'
+        next_cursor:
+          type: [string, 'null']
+          description: Cursor trang tiếp theo; null khi hết dữ liệu.
     EventInput:
       type: object
       properties:
-        title: { type: string }
-        description: { type: string }
-        category: { $ref: '#/components/schemas/EventCategory' }
+        title:
+          type: string
+          minLength: 1
+          pattern: '[\s\S]*\S[\s\S]*'
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
         attributes:
           type: object
           description: 'Thuộc tính theo loại, ví dụ FOOTBALL: home_team, away_team, league, round'
-        poster_mobile_url: { type: string, format: uri }
-        poster_desktop_url: { type: string, format: uri }
-        age_limit: { type: integer }
-        max_tickets_per_order: { type: integer, minimum: 1, maximum: 20, default: 10 }
+        poster_mobile_url:
+          type: string
+          format: uri
+          description: URL tuyệt đối HTTP hoặc HTTPS của poster mobile.
+        poster_desktop_url:
+          type: string
+          format: uri
+          description: URL tuyệt đối HTTP hoặc HTTPS của poster desktop.
+        age_limit:
+          type: integer
+          minimum: 0
+          description: Độ tuổi tối thiểu hiển thị trên thông tin sự kiện.
+        max_tickets_per_order:
+          type: integer
+          minimum: 1
+          maximum: 20
+    EventPatchInput:
+      type: object
+      description: Không có default. Thuộc tính không gửi hoặc null được giữ nguyên; không hỗ trợ xóa giá trị bằng null.
+      properties:
+        title:
+          type: [string, 'null']
+          minLength: 1
+          pattern: '[\s\S]*\S[\s\S]*'
+        description:
+          type: [string, 'null']
+        category:
+          type: [string, 'null']
+          pattern: '^(FOOTBALL|CONCERT|THEATER|OTHER)$'
+          description: FOOTBALL, CONCERT, THEATER hoặc OTHER; null giữ nguyên.
+        attributes:
+          type: [object, 'null']
+        poster_mobile_url:
+          type: [string, 'null']
+          format: uri
+          description: URL tuyệt đối HTTP/HTTPS có host; null giữ nguyên.
+        poster_desktop_url:
+          type: [string, 'null']
+          format: uri
+          description: URL tuyệt đối HTTP/HTTPS có host; null giữ nguyên.
+        age_limit:
+          type: [integer, 'null']
+          minimum: 0
+        max_tickets_per_order:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 20
+    EventCreateInput:
+      allOf:
+        - $ref: '#/components/schemas/EventInput'
+        - type: object
+          required: [title, category]
+          properties:
+            max_tickets_per_order:
+              type: integer
+              minimum: 1
+              maximum: 20
+              default: 10
     EventSummary:
       type: object
       properties:
@@ -2247,6 +2818,46 @@ components:
             showtimes:
               type: array
               items: { $ref: '#/components/schemas/Showtime' }
+    PriceTierInput:
+      type: object
+      required: [name, price]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: >
+            ID hạng giá hiện có của sự kiện khi cập nhật.
+            Nếu không gửi, dùng lại hạng cùng tên sau khi bỏ
+            khoảng trắng hoặc tạo mới nếu chưa có.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '[\s\S]*\S[\s\S]*'
+          example: VIP
+        price:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Giá một vé, đơn vị VND.
+          example: 500000
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          example: '#C8A2C8'
+
+    ZonePriceInput:
+      type: object
+      required: [zone_id, price_tier_id]
+      properties:
+        zone_id:
+          type: string
+          format: uuid
+          description: Khu thuộc layout đang được suất chưa hủy của sự kiện sử dụng.
+        price_tier_id:
+          type: string
+          format: uuid
+          description: Hạng giá thuộc đúng sự kiện.
     PriceTier:
       type: object
       required: [name, price]
@@ -2346,7 +2957,7 @@ components:
         expires_at: { type: string, format: date-time, description: Hạn giữ ghế khi PENDING }
         paid_at: { type: [string, 'null'], format: date-time }
         buyer: { $ref: '#/components/schemas/BuyerProfile' }
-        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, null] }
+        review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, PAYMENT_SUSPECTED, null] }
         created_at: { type: string, format: date-time }
     PaymentIntent:
       type: object
@@ -2430,6 +3041,8 @@ components:
         reason: { type: string }
         via_agent: { type: boolean, description: Thao tác do Admin Copilot thực hiện sau khi được duyệt }
         at: { type: string, format: date-time }
+        before: { type: [object, 'null'], description: Trạng thái liên quan trước thao tác }
+        after: { type: [object, 'null'], description: Trạng thái liên quan sau thao tác }
     MetricResult:
       type: object
       properties:

@@ -106,6 +106,16 @@ Quy tắc:
 
 | HTTP | code | Khi nào |
 |---|---|---|
+| 400 | VALIDATION_ERROR | Dữ liệu đầu vào không hợp lệ |
+| 400 | OTP_INVALID | Mã hoặc phiên OTP không hợp lệ |
+| 400 | OTP_EXPIRED | OTP đã hết hạn |
+| 400 | OTP_TOO_MANY_ATTEMPTS | Nhập sai OTP quá số lần |
+| 401 | UNAUTHORIZED | Chưa đăng nhập hoặc refresh token không hợp lệ |
+| 401 | INVALID_CREDENTIALS | Sai thông tin đăng nhập |
+| 403 | FORBIDDEN | Không có quyền |
+| 404 | NOT_FOUND | Không tìm thấy |
+| 409 | EMAIL_TAKEN | Email đã tồn tại |
+| 409 | PHONE_TAKEN | Số điện thoại đã tồn tại |
 | 409 | SEAT_TAKEN | Ghế vừa bị giữ/bán (kèm gợi ý ghế khác) |
 | 409 | NOT_ENOUGH_STOCK | Khu đứng không đủ chỗ |
 | 409 | SHOWTIME_NOT_ON_SALE | Suất chưa mở / đã đóng bán |
@@ -113,6 +123,8 @@ Quy tắc:
 | 409 | HOLD_EXPIRED | Đơn quá hạn giữ ghế |
 | 409 | IDEMPOTENCY_CONFLICT | Trùng Idempotency-Key, khác body |
 | 409 | HALL_NAME_TAKEN | Tên hall đã tồn tại trong cùng sân |
+| 409 | SEAT_LAYOUT_LOCKED | Đổi tên cấu hình sơ đồ đã công bố |
+| 409 | EVENT_LOCKED | Không cho sửa thông tin sự kiện đã kết thúc hoặc hủy; cấu hình bán bị khóa theo contract |
 | 415 | UNSUPPORTED_MEDIA_TYPE | Tệp tải lên có định dạng không được hỗ trợ |
 | 422 | INVALID_SEAT_LAYOUT | SVG không đọc được, vi phạm quy ước nhập sơ đồ sân, hoặc sơ đồ chưa được publish hay không thuộc hall đã chọn |
 | 422 | PROFILE_REQUIRED | Chưa có hồ sơ người mua |

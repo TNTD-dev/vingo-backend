@@ -34,4 +34,11 @@ public class TicketsController implements TicketsApi {
     public ResponseEntity<Ticket> getTicket(UUID ticketId) {
         return ResponseEntity.ok(ticketing.getTicket(ticketId));
     }
+
+    /** Đưa vé của người gọi vào outbox sau khi kiểm giới hạn gửi lại. */
+    @Override
+    public ResponseEntity<Void> resendMyTicket(UUID ticketId) {
+        ticketing.resendMyTicket(ticketId);
+        return ResponseEntity.accepted().build();
+    }
 }

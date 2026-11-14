@@ -2,29 +2,43 @@ package vingo.catalog.web;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.UUID;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
 
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.InvalidMediaTypeException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import tools.jackson.databind.json.JsonMapper;
 import vingo.api.AdminCatalogApi;
+import vingo.api.model.AdminEventPage;
+import vingo.api.model.AdminEventSummary;
 import vingo.api.model.CityCode;
 import vingo.api.model.CreateHallRequest;
+import vingo.api.model.EventCategory;
+import vingo.api.model.EventCreateInput;
+import vingo.api.model.EventDetail;
+import vingo.api.model.EventPatchInput;
+import vingo.api.model.EventStatus;
 import vingo.api.model.Hall;
 import vingo.api.model.ListVenues200Response;
+import vingo.api.model.PriceTier;
+import vingo.api.model.PriceTierInput;
 import vingo.api.model.SeatLayout;
 import vingo.api.model.SeatLayoutBounds;
+import vingo.api.model.SeatLayoutNameInput;
 import vingo.api.model.SeatLayoutOverview;
 import vingo.api.model.SeatLayoutPage;
 import vingo.api.model.SeatLayoutZone;
@@ -38,7 +52,18 @@ import vingo.api.model.Venue;
 import vingo.api.model.VenueCreateInput;
 import vingo.api.model.VenueInfo;
 import vingo.api.model.VenueInput;
+import vingo.api.model.ZonePriceInput;
+import vingo.catalog.EventDetails;
+import vingo.shared.security.CurrentUser;
+import vingo.catalog.EventPublishingService;
+import vingo.catalog.SeatBlockingService;
+import vingo.api.model.BlockSeatsRequest;
+import vingo.api.model.UnblockSeatsRequest;
+import vingo.catalog.EventPricingService;
+import vingo.catalog.EventService;
+import vingo.catalog.PriceTierChange;
 import vingo.catalog.VenueService;
+import vingo.catalog.ZonePriceChange;
 import vingo.catalog.internal.SeatLayoutImportService;
 import vingo.catalog.internal.SeatLayoutRepository.LayoutHeaderRow;
 import vingo.catalog.internal.SeatLayoutRepository.ShowtimeData;
@@ -52,6 +77,7 @@ import vingo.shared.error.ErrorCode;
 
 @RestController
 class AdminVenueController implements AdminCatalogApi {
+
     private static final MediaType SVG = MediaType.parseMediaType("image/svg+xml");
     private static final MediaType CSV = new MediaType("text", "csv", StandardCharsets.UTF_8);
 
@@ -59,12 +85,32 @@ class AdminVenueController implements AdminCatalogApi {
     private final SeatLayoutImportService layouts;
     private final JsonMapper json;
     private final Clock clock;
+    private final EventService eventService;
+    private final EventPricingService eventPricing;
+    private final SeatBlockingService seatBlocking;
+    private final EventPublishingService publishing;
+    private final CurrentUser currentUser;
 
-    AdminVenueController(VenueService venues, SeatLayoutImportService layouts, JsonMapper json, Clock clock) {
+    AdminVenueController(
+            VenueService venues,
+            SeatLayoutImportService layouts,
+            JsonMapper json,
+            Clock clock,
+            EventService eventService,
+            EventPricingService eventPricing,
+            SeatBlockingService seatBlocking,
+            EventPublishingService publishing,
+            CurrentUser currentUser
+    ) {
         this.venues = venues;
         this.layouts = layouts;
         this.json = json;
         this.clock = clock;
+        this.eventService = eventService;
+        this.eventPricing = eventPricing;
+        this.seatBlocking = seatBlocking;
+        this.publishing = publishing;
+        this.currentUser = currentUser;
     }
 
     @Override
@@ -84,12 +130,71 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
+    public ResponseEntity<EventDetail> createEvent(EventCreateInput input) {
+        var created = eventService.create(new EventService.CreateEvent(
+                input.getTitle(),
+                input.getDescription(),
+                input.getCategory() == null
+                ? null : input.getCategory().getValue(),
+                input.getAttributes(),
+                input.getPosterMobileUrl(),
+                input.getPosterDesktopUrl(),
+                input.getAgeLimit(),
+                input.getMaxTicketsPerOrder()
+        ));
+
+        var data = created.data();
+
+        var response = new EventDetail()
+                .id(created.id())
+                .status(EventStatus.DRAFT)
+                .title(data.title())
+                .description(data.description())
+                .category(EventCategory.fromValue(data.category()))
+                .attributes(data.attributes())
+                .posterMobileUrl(data.posterMobileUrl())
+                .posterDesktopUrl(data.posterDesktopUrl())
+                .ageLimit(data.ageLimit())
+                .maxTicketsPerOrder(data.maxTicketsPerOrder())
+                .priceTiers(List.of())
+                .showtimes(List.of());
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @Override
     public ResponseEntity<ListVenues200Response> listVenues(
-            String q, String city, String cursor, Integer limit
+            String q,
+            String city,
+            String cursor,
+            Integer limit
     ) {
-        VenueService.VenuePage page = venues.list(q, city, cursor, limit);
+        VenueService.VenuePage page
+                = venues.list(q, city, cursor, limit);
+
+        var venueIds = page.data().stream()
+                .map(VenueRow::id)
+                .toList();
+
+        var hallsByVenue = venues.listHallsForVenues(venueIds);
+
+        var data = page.data().stream()
+                .map(row -> {
+                    var halls = hallsByVenue
+                            .getOrDefault(row.id(), List.of())
+                            .stream()
+                            .map(hall -> new Hall()
+                                    .id(hall.id())
+                                    .venueId(hall.venueId())
+                                    .name(hall.name()))
+                            .toList();
+
+                    return toApi(row).halls(halls);
+                })
+                .toList();
+
         return ResponseEntity.ok(new ListVenues200Response()
-                .data(page.data().stream().map(this::toApi).toList())
+                .data(data)
                 .nextCursor(page.nextCursor()));
     }
 
@@ -127,7 +232,7 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
-    public ResponseEntity<SeatLayout> importSeatLayoutSvg(UUID hallId, MultipartFile file) {
+    public ResponseEntity<SeatLayout> importSeatLayoutSvg(UUID hallId, MultipartFile file, String name) {
         if (file.isEmpty()) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "File SVG không được để trống.");
         }
@@ -142,10 +247,11 @@ class AdminVenueController implements AdminCatalogApi {
         } catch (IOException ex) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "Không đọc được file đã tải lên.");
         }
-        var created = layouts.importSvg(hallId, input);
+        var created = layouts.importSvg(hallId, name, input);
         return ResponseEntity.status(HttpStatus.CREATED).body(new SeatLayout()
                 .id(created.id())
                 .hallId(created.hallId())
+                .name(created.name())
                 .version(created.version())
                 .schemaVersion(created.schemaVersion())
                 .status(SeatLayout.StatusEnum.DRAFT)
@@ -182,7 +288,7 @@ class AdminVenueController implements AdminCatalogApi {
     private String toJson(Object value) {
         return value == null ? null : json.writeValueAsString(value);
     }
-    
+
     private static CityCode toCityCode(String storedCity) {
         for (CityCode code : CityCode.values()) {
             if (code.getValue().equals(storedCity)) {
@@ -197,9 +303,12 @@ class AdminVenueController implements AdminCatalogApi {
         CityCode city = toCityCode(data.city());
         // Tên hiển thị theo CityCode trong contract hiện hành; danh mục còn chờ catalog chốt.
         String cityName = city == null ? data.city() : switch (city) {
-            case HCM -> "TP. Hồ Chí Minh";
-            case HN -> "Hà Nội";
-            case DN -> "Đà Nẵng";
+            case HCM ->
+                "TP. Hồ Chí Minh";
+            case HN ->
+                "Hà Nội";
+            case DN ->
+                "Đà Nẵng";
         };
 
         return new Venue()
@@ -214,7 +323,7 @@ class AdminVenueController implements AdminCatalogApi {
                 .lng(data.lng())
                 .info(json.readValue(data.infoJson(), VenueInfo.class));
     }
-    
+
     @Override
     public ResponseEntity<SeatLayoutOverview> getSeatLayout(UUID layoutId) {
         var overview = layouts.getOverview(layoutId);
@@ -222,6 +331,7 @@ class AdminVenueController implements AdminCatalogApi {
         return ResponseEntity.ok(new SeatLayoutOverview()
                 .id(header.id())
                 .hallId(header.hallId())
+                .name(header.name())
                 .status(SeatLayoutOverview.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
                 .seatCount(header.seatCount())
@@ -299,6 +409,11 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
+    public ResponseEntity<SeatLayout> renameSeatLayout(UUID layoutId, SeatLayoutNameInput input) {
+        return ResponseEntity.ok(toSeatLayout(layouts.rename(layoutId, input.getName())));
+    }
+
+    @Override
     public ResponseEntity<SeatLayoutPage> listSeatLayouts(UUID hallId, String cursor, Integer limit) {
         var page = layouts.listByHall(hallId, cursor, limit);
         return ResponseEntity.ok(new SeatLayoutPage()
@@ -318,10 +433,58 @@ class AdminVenueController implements AdminCatalogApi {
         return ResponseEntity.ok(toShowtime(updated));
     }
 
+    @Override
+    public ResponseEntity<EventDetail> getAdminEvent(UUID eventId) {
+        return ResponseEntity.ok(toAdminEventDetail(eventService.getDetails(eventId)));
+    }
+
+    @Override
+    public ResponseEntity<EventDetail> updateEvent(UUID eventId, EventPatchInput input) {
+        var result = eventService.update(eventId, new EventService.UpdateEvent(
+                input.getTitle(), input.getDescription(), input.getCategory(), input.getAttributes(),
+                input.getPosterMobileUrl(), input.getPosterDesktopUrl(), input.getAgeLimit(),
+                input.getMaxTicketsPerOrder()
+        ));
+        return ResponseEntity.ok(toAdminEventDetail(result));
+    }
+
+    private EventDetail toAdminEventDetail(EventDetails result) {
+        var header = result.header();
+        var data = header.data();
+
+        OffsetDateTime now
+                = clock.instant().atOffset(ZoneOffset.UTC);
+
+        var response = new EventDetail()
+                .id(header.id())
+                .status(EventStatus.fromValue(header.status()))
+                .title(data.title())
+                .description(data.description())
+                .category(EventCategory.fromValue(data.category()))
+                .attributes(data.attributes())
+                .posterMobileUrl(data.posterMobileUrl())
+                .posterDesktopUrl(data.posterDesktopUrl())
+                .ageLimit(data.ageLimit())
+                .maxTicketsPerOrder(data.maxTicketsPerOrder())
+                .priceTiers(result.priceTiers().stream()
+                        .map(tier -> new PriceTier()
+                                .id(tier.id())
+                                .name(tier.name())
+                                .price(tier.price())
+                                .color(tier.color()))
+                        .toList())
+                .showtimes(result.showtimes().stream()
+                        .map(session -> toAdminShowtime(session, now))
+                        .toList());
+
+        return response;
+    }
+
     private static SeatLayout toSeatLayout(LayoutHeaderRow header) {
         return new SeatLayout()
                 .id(header.id())
                 .hallId(header.hallId())
+                .name(header.name())
                 .status(SeatLayout.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
                 .seatCount(header.seatCount())
@@ -355,5 +518,160 @@ class AdminVenueController implements AdminCatalogApi {
                 .endsAt(data.endsAt())
                 .saleOpensAt(data.saleOpensAt())
                 .saleClosesAt(data.saleClosesAt());
+    }
+
+    private Showtime toAdminShowtime(
+            EventDetails.Session session,
+            OffsetDateTime now
+    ) {
+        var status = vingo.catalog.ShowtimeStatus.of(
+                session.storedStatus(),
+                session.saleOpensAt(),
+                session.saleClosesAt(),
+                session.endsAt(),
+                now
+        );
+
+        return new Showtime()
+                .id(session.id())
+                .eventId(session.eventId())
+                .hallId(session.hallId())
+                .seatLayoutId(session.seatLayoutId())
+                .status(ShowtimeStatus.fromValue(status.name()))
+                .startsAt(session.startsAt())
+                .endsAt(session.endsAt())
+                .saleOpensAt(session.saleOpensAt())
+                .saleClosesAt(session.saleClosesAt())
+                .venue(toAdminEventVenue(session.venue()));
+    }
+
+    private Venue toAdminEventVenue(EventDetails.VenueInfo source) {
+        CityCode city = Arrays.stream(CityCode.values())
+                .filter(code -> code.getValue().equals(source.city()))
+                .findFirst()
+                .orElse(null);
+
+        String cityName = city == null
+                ? source.city()
+                : switch (city) {
+            case HCM ->
+                "TP. Hồ Chí Minh";
+            case HN ->
+                "Hà Nội";
+            case DN ->
+                "Đà Nẵng";
+        };
+
+        return new Venue()
+                .id(source.id())
+                .name(source.name())
+                .type(Venue.TypeEnum.fromValue(source.type()))
+                .address(source.address())
+                .city(city)
+                .cityName(cityName);
+    }
+
+    @Override
+    public ResponseEntity<AdminEventPage> listAdminEvents(
+            String q,
+            EventStatus status,
+            EventCategory category,
+            String cursor,
+            Integer limit
+    ) {
+        var page = eventService.list(
+                q,
+                status == null ? null : status.getValue(),
+                category == null ? null : category.getValue(),
+                cursor,
+                limit
+        );
+
+        var response = new AdminEventPage()
+                .data(page.data().stream()
+                        .map(item -> new AdminEventSummary()
+                                .id(item.id())
+                                .title(item.title())
+                                .category(EventCategory.fromValue(
+                                        item.category()
+                                ))
+                                .status(EventStatus.fromValue(
+                                        item.status()
+                                ))
+                                .posterMobileUrl(item.posterMobileUrl())
+                                .posterDesktopUrl(item.posterDesktopUrl())
+                                .createdAt(item.createdAt())
+                                .updatedAt(item.updatedAt()))
+                        .toList())
+                .nextCursor(page.nextCursor());
+
+        return ResponseEntity.ok(response);
+    }
+
+    @Override
+    public ResponseEntity<Void> putPriceTiers(
+            UUID eventId,
+            List<PriceTierInput> input
+    ) {
+        if (input == null
+                || input.stream().anyMatch(Objects::isNull)) {
+            throw new DomainException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Danh sách hạng giá không hợp lệ."
+            );
+        }
+
+        var changes = input.stream()
+                .map(item -> new PriceTierChange(
+                        item.getId(),
+                        item.getName(),
+                        item.getPrice(),
+                        item.getColor()
+                ))
+                .toList();
+
+        eventPricing.putPriceTiers(eventId, changes);
+
+        return ResponseEntity.ok().build();
+    }
+
+    @Override
+    public ResponseEntity<Void> putZonePrices(
+            UUID eventId,
+            List<ZonePriceInput> input
+    ) {
+        if (input == null
+                || input.stream().anyMatch(Objects::isNull)) {
+            throw new DomainException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Danh sách giá khu không hợp lệ."
+            );
+        }
+
+        var changes = input.stream()
+                .map(item -> new ZonePriceChange(
+                        item.getZoneId(),
+                        item.getPriceTierId()
+                ))
+                .toList();
+
+        eventPricing.putZonePrices(eventId, changes);
+
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<Void> blockSeats(UUID id, BlockSeatsRequest input) {
+        seatBlocking.block(id, input.getSeatIds(), input.getReason(), currentUser.require().id());
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<Void> unblockSeats(UUID id, UnblockSeatsRequest input) {
+        seatBlocking.unblock(id, input.getSeatIds(), currentUser.require().id());
+        return ResponseEntity.ok().build();
+    }
+    @Override
+    public ResponseEntity<EventDetail> publishEvent(UUID eventId) {
+        publishing.publish(eventId);
+        return ResponseEntity.ok(toAdminEventDetail(eventService.getDetails(eventId)));
     }
 }

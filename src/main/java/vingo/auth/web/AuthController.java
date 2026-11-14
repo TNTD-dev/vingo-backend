@@ -7,15 +7,23 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.AuthApi;
+import vingo.api.model.LoginRequest;
 import vingo.api.model.LogoutRequest;
+import vingo.api.model.OtpSession;
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
+import vingo.api.model.RegisterRequest;
+import vingo.api.model.ResendOtpRequest;
+import vingo.api.model.TokenPair;
 import vingo.api.model.User;
+import vingo.api.model.VerifyOtpRequest;
 import vingo.auth.AuthService;
+import vingo.auth.AuthUser;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.security.CurrentUser;
@@ -38,6 +46,51 @@ class AuthController implements AuthApi {
         this.cookies = cookies;
         this.web = web;
         this.request = request;
+    }
+
+    /** Đăng ký tài khoản UNVERIFIED và gửi OTP qua email. */
+    @Override
+    public ResponseEntity<OtpSession> register(RegisterRequest body) {
+        var session = auth.register(body.getFullName(), body.getEmail(), body.getPhone(),
+                body.getPassword(), request.getRemoteAddr());
+        var response = new OtpSession()
+                .otpSessionId(session.otpSessionId())
+                .expiresAt(session.expiresAt())
+                .channel(OtpSession.ChannelEnum.fromValue(session.channel()));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .cacheControl(CacheControl.noStore())
+                .body(response);
+    }
+
+    /** Xác thực OTP, kích hoạt tài khoản và cấp cặp token. */
+    @Override
+    public ResponseEntity<TokenPair> verifyOtp(VerifyOtpRequest body) {
+        var session = auth.verifyOtp(body.getOtpSessionId(), body.getOtp());
+        var result = new TokenPair(session.accessToken(), session.refreshToken(),
+                session.expiresIn(), toApiUser(session.user()));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString())
+                .body(result);
+    }
+
+    /** Gửi lại OTP cho phiên đang chờ xác thực. */
+    @Override
+    public ResponseEntity<Void> resendOtp(ResendOtpRequest body) {
+        auth.resendOtp(body.getOtpSessionId());
+        return ResponseEntity.accepted().build();
+    }
+
+    /** Đăng nhập bằng email/SĐT và mật khẩu, cấp TokenPair và đặt cookie refresh. */
+    @Override
+    public ResponseEntity<TokenPair> login(LoginRequest body) {
+        var session = auth.login(body.getIdentifier(), body.getPassword(), body.getDevice());
+        var result = new TokenPair(session.accessToken(), session.refreshToken(),
+                session.expiresIn(), toApiUser(session.user()));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString())
+                .body(result);
     }
 
     /** Trả 404 khi trang bắt đầu không được filter OAuth2 tiếp nhận. */
@@ -68,11 +121,7 @@ class AuthController implements AuthApi {
         }
 
         var session = auth.refresh(refreshToken);
-        var account = session.user();
-        var user = new User().id(account.id()).email(account.email()).phone(account.phone())
-                .fullName(account.fullName()).avatarUrl(account.avatar())
-                .role(User.RoleEnum.fromValue(account.role().name())).status(User.StatusEnum.fromValue(account.status()));
-        var result = new RefreshResult(session.accessToken(), session.expiresIn(), user);
+        var result = new RefreshResult(session.accessToken(), session.expiresIn(), toApiUser(session.user()));
         var response = ResponseEntity.ok().cacheControl(CacheControl.noStore());
         if (useCookie) {
             response.header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString());
@@ -95,6 +144,13 @@ class AuthController implements AuthApi {
         return ResponseEntity.noContent()
                 .header(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.REFRESH, "", Duration.ZERO).toString())
                 .build();
+    }
+
+    private static User toApiUser(AuthUser account) {
+        return new User().id(account.id()).email(account.email()).phone(account.phone())
+                .fullName(account.fullName()).avatarUrl(account.avatar())
+                .role(User.RoleEnum.fromValue(account.role().name()))
+                .status(User.StatusEnum.fromValue(account.status()));
     }
 
     /** Dùng chung ProblemDetail cho các đường dẫn Google khi tính năng tắt. */

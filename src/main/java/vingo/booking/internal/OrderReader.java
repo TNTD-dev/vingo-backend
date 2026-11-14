@@ -12,6 +12,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
+import tools.jackson.databind.json.JsonMapper;
+import vingo.api.model.AdminGetOrder200Response;
+import vingo.api.model.AdminGetOrder200ResponseAllOfHistoryInner;
 import vingo.api.model.BuyerProfile;
 import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
@@ -29,15 +32,36 @@ import vingo.shared.error.ErrorCode;
 public class OrderReader {
 
     private final JdbcClient jdbc;
+    private final JsonMapper json;
 
-    public OrderReader(JdbcClient jdbc) {
+    public OrderReader(JdbcClient jdbc, JsonMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
+    }
+
+    /** Đơn kèm history cho admin; chuyển qua JSON để field mới của Order tự có ở đây, không phải chép tay. */
+    public AdminGetOrder200Response readAdminOrder(UUID orderId, OffsetDateTime now) {
+        return json.convertValue(readOrder(orderId, now), AdminGetOrder200Response.class)
+                .history(readHistory(orderId));
     }
 
     // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
     public Order readOrder(UUID orderId, OffsetDateTime now) {
         return readOrders(List.of(orderId), now).stream().findFirst()
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
+    }
+
+    /** Đọc history theo at/id tăng dần, trả email actor hoặc SYSTEM bằng một query. */
+    public List<AdminGetOrder200ResponseAllOfHistoryInner> readHistory(UUID orderId) {
+        // shortcut: đọc thẳng bảng users của auth, đổi sang AuthService khi có
+        return jdbc.sql("""
+                        SELECT h.to_status, h.at, COALESCE(u.email, 'SYSTEM') AS actor
+                        FROM order_status_history h LEFT JOIN users u ON u.id = h.actor_id
+                        WHERE h.order_id = :order ORDER BY h.at, h.id
+                        """)
+                .param("order", orderId).query((rs, row) -> new AdminGetOrder200ResponseAllOfHistoryInner()
+                        .status(OrderStatus.fromValue(rs.getString("to_status")))
+                        .at(rs.getObject("at", OffsetDateTime.class)).actor(rs.getString("actor"))).list();
     }
 
     public List<Order> readOrders(List<UUID> orderIds, OffsetDateTime now) {
