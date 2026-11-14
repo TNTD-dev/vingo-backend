@@ -31,6 +31,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void voidTicket_invalidatesQrKeepsSeatSoldAndRecordsAudit() {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         String oldQr = qr(ticket);
         var seatBefore = seatRow(showtime.event().seat(1));
 
@@ -51,6 +52,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void reissueQr_changesOnlyTokenAndRecordsRedactedAudit() {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
         String oldQr = (String) before.get("qr_token");
         var seatBefore = seatRow(showtime.event().seat(1));
@@ -79,6 +81,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void adminResend_enqueuesOnlyRequestedTicketAndAuditsOutboxId() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
+        clearSetupTicketEmails();
         UUID ticket = ticketIds(order).getFirst();
         var before = ticketRow(ticket);
 
@@ -95,6 +98,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void adminResend_hasNoBuyerRateLimitAndAuditsEveryRequest() {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
 
         for (int attempt = 0; attempt < 4; attempt++) {
             ticketAction(adminToken, ticket, "resend", null).expectStatus().isEqualTo(202);
@@ -127,6 +131,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
             "resend,USED,TICKET_USED", "resend,VOID,TICKET_NOT_VALID"})
     void adminTicketOperations_rejectNonIssuedTicketsWithoutEffects(String action, String state, String code) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         setTicketState(ticket, state);
         var before = ticketRow(ticket);
 
@@ -150,6 +155,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @ValueSource(strings = {"void", "reissue-qr"})
     void adminTicketOperations_return400WithoutReason(String action) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(ticketAction(adminToken, ticket, action, "{}"), 400, "VALIDATION_ERROR");
@@ -161,6 +167,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @ValueSource(strings = {"void", "reissue-qr"})
     void adminTicketOperations_return400WhenReasonHasFewerThanThreeCharacters(String action) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(ticketAction(adminToken, ticket, action, "{\"reason\":\"ab\"}"), 400, "VALIDATION_ERROR");
@@ -172,6 +179,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @ValueSource(strings = {"void", "reissue-qr", "resend"})
     void adminTicketOperations_return403ForBuyer(String action) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(ticketAction(buyerToken, ticket, action, action.equals("resend") ? null : REASON_BODY), 403, "FORBIDDEN");
@@ -183,6 +191,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @ValueSource(strings = {"void", "reissue-qr", "resend"})
     void adminTicketOperations_return401WithoutToken(String action) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(ticketAction(null, ticket, action, action.equals("resend") ? null : REASON_BODY), 401, "UNAUTHORIZED");
@@ -193,6 +202,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void adminResend_returns409WithoutOrderEmail() {
         UUID order = paidSeats(showtime.event().seat(1));
+        clearSetupTicketEmails();
         UUID ticket = ticketIds(order).getFirst();
         removeEmail(order);
         var before = ticketRow(ticket);
@@ -205,6 +215,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_enqueuesOwnedTicketWithoutAdminAudit() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
+        clearSetupTicketEmails();
         UUID ticket = ticketIds(order).getFirst();
         var before = ticketRow(ticket);
 
@@ -219,6 +230,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_returns404ForAnotherOwnersTicket() {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(buyerResend(tokenFor(catalog.buyer(), Role.BUYER), ticket), 404, "NOT_FOUND");
@@ -239,6 +251,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_countsFailedRequestsTowardHourlyLimit() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
+        clearSetupTicketEmails();
         var tickets = ticketIds(order);
         jdbc.sql("UPDATE ticket SET status = 'USED', used_at = :now WHERE id = :id")
                 .param("now", catalog.now()).param("id", tickets.getLast()).update();
@@ -255,6 +268,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_fourthRequestPerUserWithinHourReturns429EvenAcrossTickets() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
+        clearSetupTicketEmails();
         var tickets = ticketIds(order);
         buyerResend(buyerToken, tickets.getFirst()).expectStatus().isEqualTo(202);
         buyerResend(buyerToken, tickets.getFirst()).expectStatus().isEqualTo(202);
@@ -276,6 +290,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @CsvSource({"USED,TICKET_USED", "VOID,TICKET_NOT_VALID"})
     void buyerResend_returns409ForNonIssuedTicket(String state, String code) {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         setTicketState(ticket, state);
         var before = ticketRow(ticket);
 
@@ -287,6 +302,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_returns409WithoutOrderEmail() {
         UUID order = paidSeats(showtime.event().seat(1));
+        clearSetupTicketEmails();
         UUID ticket = ticketIds(order).getFirst();
         removeEmail(order);
         var before = ticketRow(ticket);
@@ -299,6 +315,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     @Test
     void buyerResend_returns401WithoutToken() {
         UUID ticket = issuedTicket();
+        clearSetupTicketEmails();
         var before = ticketRow(ticket);
 
         problem(buyerResend(null, ticket), 401, "UNAUTHORIZED");

@@ -48,6 +48,18 @@ public class BookingRepository {
                         rs.getObject("expires_at", OffsetDateTime.class))).optional();
     }
 
+    /** Chụp hồ sơ vào đơn đã khoá khi chưa có email, giữ nguyên ảnh chụp đầu tiên. */
+    public void snapshotBuyer(UUID orderId) {
+        // shortcut: đọc thẳng bảng buyer_profile của auth, đổi sang AuthService khi có
+        jdbc.sql("""
+                        UPDATE orders o
+                        SET buyer_name = bp.full_name, buyer_email = bp.email, buyer_phone = bp.phone
+                        FROM buyer_profile bp
+                        WHERE o.id = :order AND bp.user_id = o.user_id AND o.buyer_email IS NULL
+                        """)
+                .param("order", orderId).update();
+    }
+
     /** Đọc email trong transaction đang xử lý đơn hoặc vé, không khoá ngược từ vé về đơn. */
     public Optional<String> buyerEmailForOrder(UUID orderId) {
         return jdbc.sql("SELECT buyer_email FROM orders WHERE id = :order")
