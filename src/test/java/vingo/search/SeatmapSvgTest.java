@@ -48,7 +48,41 @@ class SeatmapSvgTest extends IntegrationTest {
 
         assertThat(result.getResponseBody()).isEqualTo(SVG);
         String cache = result.getResponseHeaders().getFirst(HttpHeaders.CACHE_CONTROL);
-        assertThat(cache).contains("max-age=3600").contains("public");
+        assertThat(cache).contains("no-cache").doesNotContain("max-age");
+        assertThat(result.getResponseHeaders().getETag()).isNotBlank();
+    }
+
+    @Test
+    void getSeatmapSvg_returns304_whenEtagStillMatches() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3)).create().showtimeId();
+        insertSvg(showtime, SVG);
+        String etag = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg").exchange()
+                .expectStatus().isOk()
+                .returnResult(String.class).getResponseHeaders().getETag();
+
+        client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg")
+                .header(HttpHeaders.IF_NONE_MATCH, etag).exchange()
+                .expectStatus().isNotModified();
+    }
+
+    @Test
+    void getSeatmapSvg_returnsNewSvg_whenShowtimeLayoutChanged() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3)).create().showtimeId();
+        UUID other = fixtures.event().showtime(s -> s.onSale().seated(3)).create().showtimeId();
+        insertSvg(showtime, SVG);
+        String otherSvg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"OTHER\"/></svg>";
+        insertSvg(other, otherSvg);
+        String etag = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg").exchange()
+                .returnResult(String.class).getResponseHeaders().getETag();
+        jdbc.sql("UPDATE showtime SET seat_layout_id = (SELECT seat_layout_id FROM showtime WHERE id = :other) "
+                + "WHERE id = :id").param("other", other).param("id", showtime).update();
+
+        var body = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg")
+                .header(HttpHeaders.IF_NONE_MATCH, etag).exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
+
+        assertThat(body).isEqualTo(otherSvg);
     }
 
     @Test

@@ -1,7 +1,6 @@
 package vingo.search.web;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -10,6 +9,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.SearchApi;
@@ -98,10 +98,12 @@ class SearchController implements SearchApi {
     @Override
     public ResponseEntity<Resource> getSeatmapSvg(UUID showtimeId) {
         byte[] svg = searchService.getSeatmapSvg(showtimeId).getBytes(StandardCharsets.UTF_8);
-        // Layout đã PUBLISHED không đổi nên cho cache công khai 1 giờ.
+        // Suất có thể đổi seat_layout_id trước giờ mở bán, nên không cache theo thời gian: client hỏi lại bằng
+        // If-None-Match và Spring tự trả 304 khi ETag (băm nội dung SVG) không đổi.
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("image/svg+xml"))
-                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+                .cacheControl(CacheControl.noCache().cachePublic())
+                .eTag(DigestUtils.md5DigestAsHex(svg))
                 .body(new ByteArrayResource(svg));
     }
 
