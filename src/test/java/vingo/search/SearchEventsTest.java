@@ -140,6 +140,107 @@ class SearchEventsTest extends IntegrationTest {
         assertThat(search("q", "!!! ...").path("data")).isEmpty();
     }
 
+    // ------------------------------------------------------------------ Khớp theo sân và thành phố
+
+    @Test
+    void searchEvents_matchesVenueName_withAndWithoutDiacritics() {
+        UUID a = fixtures.event().title("Đêm nhạc Thu").city("HN").venue("Sân vận động Mỹ Đình").create().id();
+        UUID b = fixtures.event().title("Chung kết bóng đá").city("HN").venue("Sân vận động Mỹ Đình").create().id();
+        fixtures.event().title("Lễ hội Phú Thọ").city("HCM").venue("Sân Phú Thọ").create();
+
+        assertThat(ids(search("q", "Mỹ Đình"))).containsExactlyInAnyOrder(a, b);
+        assertThat(ids(search("q", "my dinh"))).containsExactlyInAnyOrder(a, b);
+        assertThat(ids(search("q", "MY DINH"))).containsExactlyInAnyOrder(a, b);
+        assertThat(ids(search("q", "my din"))).containsExactlyInAnyOrder(a, b); // gõ dở
+    }
+
+    @Test
+    void searchEvents_matchesCity_withAndWithoutDiacritics() {
+        UUID hn = fixtures.event().title("Show Hà Nội A").city("HN").create().id();
+        UUID hn2 = fixtures.event().title("Show B").city("HN").create().id();
+        UUID dn = fixtures.event().title("Show C").city("DN").create().id();
+        fixtures.event().title("Show D").city("HCM").create();
+
+        assertThat(ids(search("q", "Hà Nội"))).containsExactlyInAnyOrder(hn, hn2);
+        assertThat(ids(search("q", "ha noi"))).containsExactlyInAnyOrder(hn, hn2);
+        assertThat(ids(search("q", "Đà Nẵng"))).containsExactly(dn);
+        assertThat(ids(search("q", "da nang"))).containsExactly(dn);
+    }
+
+    @Test
+    void searchEvents_ranksTitleMatchAboveVenueMatch() {
+        // Tạo sự kiện khớp sân trước: nếu chỉ sắp theo id giảm dần thì sự kiện khớp tên sẽ đứng sau.
+        UUID byVenue = fixtures.event().title("Đêm nhạc Thu").city("HN").venue("Sân Mỹ Đình").create().id();
+        UUID byDescription = fixtures.event().title("Lễ hội mùa đông").description("Diễn ra gần Mỹ Đình")
+                .city("HCM").venue("Sân Phú Thọ").create().id();
+        UUID byTitle = fixtures.event().title("Mỹ Đình Live Concert").city("DN").venue("Sân Chi Lăng").create().id();
+
+        assertThat(ids(search("q", "my dinh"))).containsExactly(byTitle, byVenue, byDescription);
+    }
+
+    @Test
+    void searchEvents_shortQuery_doesNotReturnLooseTrigramMatches() {
+        UUID sky = fixtures.event().title("Sơn Tùng M-TP Sky Tour 2026").create().id();
+
+        assertThat(search("q", "x").path("data")).isEmpty();
+        assertThat(search("q", "xy").path("data")).isEmpty();
+        // Từ ngắn vẫn khớp tiền tố từ thật.
+        assertThat(ids(search("q", "sk"))).containsExactly(sky);
+    }
+
+    @Test
+    void searchEvents_typoInTitle_stillMatches() {
+        UUID target = fixtures.event().title("Sơn Tùng M-TP Sky Tour 2026").city("HN").create().id();
+        fixtures.event().title("Hòa nhạc Mùa Thu").city("HCM").create();
+
+        assertThat(ids(search("q", "son tungg"))).containsExactly(target);
+        assertThat(ids(search("q", "sky towr"))).containsExactly(target);
+    }
+
+    @Test
+    void searchEvents_venueMatch_combinesWithCityAndDateFilters() {
+        Instant hnShow = NOW.plus(Duration.ofDays(3));
+        Instant hcmShow = NOW.plus(Duration.ofDays(20));
+        UUID tour = fixtures.event().title("Tour Xuyên Việt")
+                .showtime(s -> s.city("HN").venue("Sân Mỹ Đình").startsAt(hnShow).seated(5))
+                .showtime(s -> s.city("HCM").venue("Sân Phú Thọ").startsAt(hcmShow).seated(5))
+                .create().id();
+        UUID hnOnly = fixtures.event().title("Đại nhạc hội").city("HN").venue("Sân Mỹ Đình")
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(40))).seated(5)).create().id();
+
+        assertThat(ids(search("q", "my dinh"))).containsExactlyInAnyOrder(tour, hnOnly);
+        // Lọc city=HCM: suất ở Mỹ Đình (HN) không tính, nên không ra.
+        assertThat(search("q", "my dinh", "city", "HCM").path("data")).isEmpty();
+        assertThat(ids(search("q", "phu tho", "city", "HCM"))).containsExactly(tour);
+        // Lọc ngày: suất Mỹ Đình của tour nằm ngoài khoảng.
+        assertThat(ids(search("q", "my dinh", "from", at(10), "to", at(30)))).isEmpty();
+        assertThat(ids(search("q", "my dinh", "from", at(35)))).containsExactly(hnOnly);
+        assertThat(ids(search("q", "ha noi", "to", at(10)))).containsExactly(tour);
+        // Thẻ hiện đúng sân vừa tìm, không phải suất sớm nhất ở nơi khác.
+        JsonNode phuTho = search("q", "phu tho").path("data");
+        assertThat(phuTho.get(0).path("venue_name").asString()).isEqualTo("Sân Phú Thọ");
+        assertThat(phuTho.get(0).path("city").asString()).isEqualTo("HCM");
+    }
+
+    @Test
+    void searchEvents_venueMatch_excludesDraftCancelledAndInactiveVenues() {
+        UUID visible = fixtures.event().title("Show A").city("HN").venue("Sân Mỹ Đình").create().id();
+        fixtures.event().title("Show B").city("HN").venue("Sân Mỹ Đình").draft().create();
+        fixtures.event().title("Show C").city("HN").venue("Sân Mỹ Đình").status("CANCELLED").create();
+        // Sự kiện có suất CANCELLED ở Mỹ Đình và suất hợp lệ ở nơi khác: không được lọt qua suất đã huỷ.
+        fixtures.event().title("Show D")
+                .showtime(s -> s.city("HN").venue("Sân Mỹ Đình").cancelled().seated(5))
+                .showtime(s -> s.city("HCM").venue("Sân Phú Thọ").seated(5)).create();
+        // Sân đã ngừng dùng.
+        fixtures.event().title("Show E").city("DN").venue("Sân Mỹ Đình Cũ").create();
+        jdbc.sql("UPDATE venue SET deleted_at = now() WHERE name = 'Sân Mỹ Đình Cũ'").update();
+        // Suất đã qua.
+        fixtures.event().title("Show F").city("HN").venue("Sân Mỹ Đình")
+                .showtime(s -> s.startsAt(NOW.minus(Duration.ofDays(1))).seated(5)).create();
+
+        assertThat(ids(search("q", "my dinh"))).containsExactly(visible);
+    }
+
     // ------------------------------------------------------------------ Phạm vi kết quả
 
     @Test

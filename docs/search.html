@@ -284,7 +284,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <text class="grplbl" x="800" y="352">booking</text>
       <text class="s" x="800" y="370">showtime_seat</text><text class="s" x="800" y="386">showtime_zone_stock</text>
       <text class="grplbl" x="800" y="414">search (index)</text>
-      <text class="s" x="800" y="432">event_title_fts_idx</text><text class="s" x="800" y="448">event_title_trgm_idx</text>
+      <text class="s" x="800" y="432">event_title_fts_idx · event_title_only_fts_idx</text><text class="s" x="800" y="448">event_title_trgm_idx · venue_search_fts_idx</text>
 
       <path class="edge" d="M196,122 C228,122 230,140 260,140" marker-end="url(#ar)"/>
       <path class="edge" d="M196,206 C228,206 230,162 260,162" marker-end="url(#ar)"/>
@@ -378,9 +378,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <ol class="steps">
         <li><div><b>Validate</b><span class="sub">limit 1..100, from ≤ to, price_min ≤ price_max, cursor khớp bộ lọc.</span><span class="err">Sai → 400 VALIDATION_ERROR</span></div></li>
         <li><div><b>Chuẩn hoá q</b><span class="sub">Bỏ dấu, viết thường → tsquery chặt <code>son:* &amp; tung:*</code> và tsquery lỏng <code>son:* | tung:*</code> (bỏ từ 1 ký tự).</span></div></li>
-        <li><div><b>Khớp chặt</b><span class="sub">FTS trên title + mô tả <code>@@</code> tsquery chặt (mọi từ phải có) hoặc <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề). Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Khớp chặt</b><span class="sub">Sự kiện là ứng viên nếu thoả một trong ba nhánh, mỗi nhánh có index riêng và gộp bằng <code>UNION</code>: (1) FTS trên title + mô tả <code>@@</code> tsquery chặt (mọi từ phải có); (2) <code>:q &lt;% immutable_unaccent(lower(title))</code> (gõ sai, một đoạn tiêu đề), chỉ khi từ dài nhất của q có từ 3 ký tự; (3) <b>tên sân + tên thành phố</b> của một suất <code>SCHEDULED</code> còn sắp tới, sân chưa xoá (<code>deleted_at IS NULL</code>), suất cũng phải thoả bộ lọc city/from/to. Không dùng <code>%</code>.</span></div></li>
+        <li><div><b>Vì sao chặn từ ngắn</b><span class="sub">Từ 1–2 ký tự chỉ có 2–3 trigram (kể cả đệm), mà <code>word_similarity</code> chỉ cần trùng một trigram là đủ ngưỡng nên <code>q=x</code> khớp gần như mọi tiêu đề (từng ra "Sơn Tùng M-TP Sky Tour 2026"). Nên q mà mọi từ đều ngắn hơn 3 ký tự thì bỏ nhánh trigram, chỉ còn tiền tố FTS (<code>sk:*</code> ra "Sky") và khớp sân. Chọn độ dài tối thiểu thay vì nâng ngưỡng similarity vì ngưỡng toàn cục làm hỏng cả ca gõ sai của từ dài. Sân và thành phố không dùng trigram, chỉ tiền tố, để "Hà" không kéo cả tên sân gần giống.</span></div></li>
+        <li><div><b>Sân và thành phố</b><span class="sub"><code>venue.city</code> lưu mã (HN, HCM, DN) nên hàm <code>immutable_city_text(code)</code> đổi mã thành tên ("Hà Nội Hanoi HN", "TP. Hồ Chí Minh Sài Gòn…", "Đà Nẵng Da Nang…") trước khi bỏ dấu; danh sách tạm, cùng nguồn với <code>CITY_NAMES</code> ở mapper. Tài liệu tìm kiếm của sân = tên sân + tên thành phố, nên "mỹ đình hà nội" khớp chặt một sân. Khớp từng trường riêng: "sơn tùng hà nội" (tên ở sự kiện, thành phố ở sân) không khớp chặt mà rơi xuống khớp lỏng.</span></div></li>
         <li><div><b>Nới khi rỗng</b><span class="sub">Trang đầu, q từ 2 từ trở lên, khớp chặt ra 0 dòng → chạy lại với tsquery lỏng, xếp theo relevance. <code>son tung concert</code> vẫn ra Sơn Tùng. Cursor ghi chế độ (<code>m</code>: STRICT/LOOSE) để các trang sau dùng đúng chế độ.</span></div></li>
-        <li><div><b>Card</b><span class="sub">venue, city, first_starts_at lấy từ suất sớm nhất <b>thoả bộ lọc</b>; price_from chỉ tính hạng đã gán khu qua zone_price.</span></div></li>
+        <li><div><b>Card</b><span class="sub">venue, city, first_starts_at lấy từ suất sớm nhất <b>thoả bộ lọc</b>; khi có q thì suất ở sân khớp q được ưu tiên trước (tìm "Mỹ Đình" thì thẻ hiện Mỹ Đình, không phải suất sớm hơn ở nơi khác). price_from chỉ tính hạng đã gán khu qua zone_price.</span></div></li>
         <li><div><b>Keyset</b><span class="sub"><code>(sort_key, id)</code>, lấy limit + 1 dòng để biết có next_cursor.</span></div></li>
       </ol>
     </div>
@@ -389,14 +391,14 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <table>
           <thead><tr><th>sort</th><th>Khoá</th></tr></thead>
           <tbody>
-            <tr><td class="mono">relevance</td><td>greatest(ts_rank, word_similarity). Mặc định khi có q; không có q → 400</td></tr>
+            <tr><td class="mono">relevance</td><td>mức + điểm: khớp tên sự kiện 4 + greatest(ts_rank tiêu đề, word_similarity); khớp sân/thành phố 2; chỉ khớp mô tả 0 + ts_rank. Điểm trong mức ≤ 1 nên không bao giờ vượt mức. Mặc định khi có q; không có q → 400</td></tr>
             <tr><td class="mono">starts_at</td><td>first_starts_at. Mặc định khi không có q</td></tr>
             <tr><td class="mono">price</td><td>price_from</td></tr>
             <tr><td class="mono">popularity</td><td>Tổng vé SOLD của các suất sắp tới</td></tr>
           </tbody>
         </table>
       </div>
-      <div class="note">Ghép WHERE động, không viết <code>:x IS NULL OR …</code>. Biểu thức phải giống hệt lúc tạo index, kiểm bằng <code>EXPLAIN</code>.</div>
+      <div class="note">Ghép WHERE động, không viết <code>:x IS NULL OR …</code>. Biểu thức phải giống hệt lúc tạo index, kiểm bằng <code>EXPLAIN</code>: cả ba nhánh ứng viên dùng index (<code>event_title_fts_idx</code>, <code>event_title_trgm_idx</code>, <code>venue_search_fts_idx</code> rồi <code>showtime_hall_scheduled_idx</code>); <code>event_title_only_fts_idx</code> phục vụ phép xếp hạng khớp tên. Kết quả tìm kiếm hiện không cache nên đổi tên sân hay thành phố có hiệu lực ngay; <code>VenueChanged</code> chỉ cần cho cache chi tiết sự kiện.</div>
       <div class="note info"><b>Agent điền q:</b> <code>q</code> chỉ chứa tên sự kiện, nghệ sĩ hoặc đội; loại sự kiện đưa vào <code>category</code>, thành phố vào <code>city</code>, thời gian vào <code>from</code>/<code>to</code> (đã ghi trong description của contract). Khớp lỏng là lưới an toàn khi người dùng hoặc agent vẫn gõ thừa từ.</div>
       <div class="note info"><b>Thành phố:</b> <code>city</code> là enum <code>CityCode</code> (HCM, HN, DN…). Backend không tự đổi "Sài Gòn" → HCM: web chọn dropdown, agent tự map nhờ description của enum.</div>
     </div>

@@ -68,4 +68,12 @@ class SearchQueryNormalizerTest {
         assertThat(onlyShort.looseTsQuery()).isEmpty();
         assertThat(onlyShort.canLoosen()).isFalse();
     }
+
+    @Test
+    void useTrigram_isFalse_whenEveryTermIsShorterThanThreeCharacters() {
+        assertThat(normalizer.normalize("x").orElseThrow().useTrigram()).isFalse();
+        assertThat(normalizer.normalize("xy m").orElseThrow().useTrigram()).isFalse();
+        assertThat(normalizer.normalize("son").orElseThrow().useTrigram()).isTrue();
+        assertThat(normalizer.normalize("x tung").orElseThrow().useTrigram()).isTrue();
+    }
 }
