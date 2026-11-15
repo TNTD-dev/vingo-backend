@@ -1,9 +1,9 @@
 name: ci
 
+# Chỉ chạy trên PR. main và develop bắt buộc qua PR có check `verify` xanh (ruleset),
+# nên push vào main sau khi merge không cần chạy lại: deploy.yml chỉ build image và deploy.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}

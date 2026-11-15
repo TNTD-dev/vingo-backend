@@ -17,17 +17,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import vingo.catalog.CatalogChanged;
 import vingo.search.SearchService;
 import vingo.support.CatalogFixtures;
-import vingo.support.IntegrationTest;
 
 /** Lần nạp cache bắt đầu trước khi catalog đổi không được ghi đè dữ liệu cũ sau khi đã xoá. */
-class StaleLoadCacheTest extends IntegrationTest {
+class StaleLoadCacheTest extends SearchRepositorySpyTest {
 
     @Autowired
     private SearchService searchService;
@@ -35,8 +33,6 @@ class StaleLoadCacheTest extends IntegrationTest {
     private ApplicationEventPublisher publisher;
     @Autowired
     private PlatformTransactionManager txManager;
-    @MockitoSpyBean
-    private EventDetailRepository details;
 
     private CatalogFixtures fixtures;
 
