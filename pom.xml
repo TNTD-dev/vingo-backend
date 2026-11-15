@@ -129,6 +129,12 @@
             <artifactId>sentry-spring-boot-4-starter</artifactId>
             <version>${sentry.version}</version>
         </dependency>
+        <!-- Span cho từng câu SQL trong trace (qua P6Spy) -->
+        <dependency>
+            <groupId>io.sentry</groupId>
+            <artifactId>sentry-jdbc</artifactId>
+            <version>${sentry.version}</version>
+        </dependency>
 
         <!-- Mã QR vé -->
         <dependency>
