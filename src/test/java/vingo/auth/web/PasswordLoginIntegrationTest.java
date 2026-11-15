@@ -18,7 +18,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.TestPropertySource;
 
 import vingo.api.model.LoginRequest;
 import vingo.api.model.RefreshResult;
@@ -28,12 +27,7 @@ import vingo.api.model.User;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
 
-@TestPropertySource(properties = {
-        "vingo.auth.secure-cookies=false",
-        "vingo.auth.login.max-attempts=3",
-        "vingo.auth.login.attempt-window=PT15M",
-        "vingo.auth.login.lock-duration=PT15M"
-})
+/** Dùng cấu hình chung trong application-test.yml: secure-cookies=false, khóa sau 3 lần sai trong 15 phút. */
 class PasswordLoginIntegrationTest extends IntegrationTest {
 
     private static final String LOGIN = "/api/v1/auth/login";

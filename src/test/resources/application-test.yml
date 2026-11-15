@@ -1,4 +1,12 @@
 vingo:
+  # Giá trị chung cho mọi test, để test không phải tự đặt @TestPropertySource
+  # (mỗi bộ property khác nhau là Spring dựng thêm một context, làm CI chậm).
+  google:
+    enabled: false
+  auth:
+    secure-cookies: false
+    login:
+      max-attempts: 3
   jwt:
     secret: test-secret-for-integration-tests-only-32b
   realtime:

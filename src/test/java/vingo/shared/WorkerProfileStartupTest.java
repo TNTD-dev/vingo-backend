@@ -8,6 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 
 import net.javacrumbs.shedlock.core.LockProvider;
@@ -18,6 +19,8 @@ import vingo.support.TestcontainersConfig;
  * App vẫn phải khởi động được và có LockProvider cho job nền.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+// Đóng context sau class: job nền của worker không được chạy tiếp trên DB dùng chung khi test khác đang chạy.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @ActiveProfiles({"worker", "test"})
 @Import(TestcontainersConfig.class)
 class WorkerProfileStartupTest {

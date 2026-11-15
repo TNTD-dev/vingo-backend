@@ -2,12 +2,10 @@ package vingo.auth.web.oauth2;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.test.context.TestPropertySource;
 
 import vingo.support.IntegrationTest;
 
-/** Contract của các endpoint Google khi tính năng bị tắt. */
-@TestPropertySource(properties = "vingo.google.enabled=false")
+/** Contract của các endpoint Google khi tính năng bị tắt (application-test.yml đặt vingo.google.enabled=false). */
 class GoogleLoginDisabledIntegrationTest extends IntegrationTest {
 
     /** Trang bắt đầu và callback cùng trả ProblemDetail 404 khi Google bị tắt. */
