@@ -23,7 +23,7 @@ public class EventPublishingRepository {
               JOIN hall h ON h.id=s.hall_id JOIN venue v ON v.id=h.venue_id
               WHERE s.event_id=:event AND s.status<>'CANCELLED' AND (
                 l.status<>'PUBLISHED' OR l.hall_id<>s.hall_id OR v.deleted_at IS NOT NULL
-                OR s.ends_at<=:now OR s.ends_at<=s.starts_at
+                OR s.ends_at<=:now OR s.sale_closes_at<=:now OR s.ends_at<=s.starts_at
                 OR s.sale_closes_at<=s.sale_opens_at OR s.sale_closes_at>s.ends_at
                 OR NOT EXISTS(SELECT 1 FROM zone z WHERE z.seat_layout_id=l.id)
                 OR EXISTS (

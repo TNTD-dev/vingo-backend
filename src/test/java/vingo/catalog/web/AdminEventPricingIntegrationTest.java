@@ -303,6 +303,45 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void pricingEndpoints_allowChanges_whenDraftEventSaleOpensAtInPast() {
+        var event = catalog.event(
+                EventSpec.defaults()
+                        .withCity("HN")
+                        .withStatus("DRAFT")
+        );
+
+        // Suất DRAFT có giờ mở bán đã qua: sự kiện chưa công bố nên chưa ai mua được.
+        catalog.showtime(event, Window.draft());
+
+        var tiers = tierRows(event.id()).stream()
+                .map(row -> Map.of(
+                        "id", row.get("id"),
+                        "name", row.get("name"),
+                        "price", ((Number) row.get("price")).longValue() + 1000
+                ))
+                .toList();
+
+        put(event.id(), "price-tiers", tiers)
+                .expectStatus().isOk();
+
+        put(event.id(), "zone-prices", List.of(
+                Map.of(
+                        "zone_id", event.seatedZoneId(),
+                        "price_tier_id", event.vipPriceTierId()
+                ),
+                Map.of(
+                        "zone_id", event.standingZoneId(),
+                        "price_tier_id", event.vipPriceTierId()
+                )
+        )).expectStatus().isOk();
+
+        assertThat(zoneRows(event.id())).allSatisfy(row
+                -> assertThat(row.get("price_tier_id"))
+                        .isEqualTo(event.vipPriceTierId())
+        );
+    }
+
+    @Test
     void pricingEndpoints_rejectChangesWhenExpiredOrderExists() {
         var event = catalog.event(
                 EventSpec.defaults()

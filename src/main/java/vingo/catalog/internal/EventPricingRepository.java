@@ -29,7 +29,8 @@ public class EventPricingRepository {
                     SELECT 1
                     FROM showtime
                     WHERE event_id = :eventId
-                      AND status <> 'CANCELLED'
+                      -- Chỉ suất đã công bố mới bán được; suất DRAFT qua giờ mở bán vẫn sửa được.
+                      AND status = 'SCHEDULED'
                       AND sale_opens_at <= :now
                 )
                 OR EXISTS (
