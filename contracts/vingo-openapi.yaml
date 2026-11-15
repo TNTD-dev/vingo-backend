@@ -440,8 +440,12 @@ paths:
       parameters:
         - name: q
           in: query
-          description: "Tên sự kiện, nghệ sĩ hoặc đội. Không đưa loại sự kiện (dùng `category`), thành phố (dùng `city`) hay thời gian (dùng `from`/`to`) vào đây. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`."
+          description: "Từ khoá tìm trên tên sự kiện, nghệ sĩ hoặc đội, mô tả, tên sân và tên thành phố của các suất còn bán (suất đã huỷ, đã qua và sân ngừng dùng không tính). Có dấu hay không dấu đều khớp ('Mỹ Đình' = 'my dinh', 'Hà Nội' = 'ha noi'), gõ dở một đoạn đầu từ vẫn ra, gõ sai nhẹ tên sự kiện vẫn ra. Thứ tự xếp: khớp tên sự kiện trên khớp sân/thành phố, khớp sân/thành phố trên khớp mô tả. Từ khoá chỉ 1 đến 2 ký tự chỉ khớp đầu từ (ví dụ 'sk' ra 'Sky'), không dò gần đúng nên 'x' không ra sự kiện nào chỉ vì giống chữ. Muốn lọc chính xác theo loại sự kiện, thành phố hay thời gian thì dùng `category`, `city`, `from`/`to` thay vì đưa vào `q`. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`; người dùng nói 'sự kiện ở sân Mỹ Đình' → `q=Mỹ Đình`."
           schema: { type: string }
+          examples:
+            artist: { summary: "Tên nghệ sĩ (không dấu vẫn được)", value: son tung }
+            venue: { summary: Tên sân, value: Mỹ Đình }
+            city: { summary: Thành phố, value: Hà Nội }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
         - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }

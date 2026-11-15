@@ -24,14 +24,29 @@ import vingo.search.internal.SearchQueryNormalizer.NormalizedQuery;
 @Repository
 class EventSearchRepository {
 
-    // Giống hệt biểu thức của event_title_fts_idx và event_title_trgm_idx.
+    // Giống hệt biểu thức của các index trong V20261110_1010__search_init.sql và V20261115_1000__search_venue_city_index.sql.
     private static final String FTS_DOC =
             "to_tsvector('simple', immutable_unaccent(coalesce(e.title, '') || ' ' || coalesce(e.description, '')))";
+    private static final String TITLE_DOC = "to_tsvector('simple', immutable_unaccent(coalesce(e.title, '')))";
     private static final String TRGM_DOC = "immutable_unaccent(lower(e.title))";
-    private static final String FTS_MATCH = FTS_DOC + " @@ to_tsquery('simple', :ts_query)";
+    private static final String TS_QUERY = "to_tsquery('simple', :ts_query)";
+    private static final String FTS_MATCH = FTS_DOC + " @@ " + TS_QUERY;
+    private static final String TITLE_MATCH = TITLE_DOC + " @@ " + TS_QUERY;
     private static final String TRGM_MATCH = "CAST(:q_norm AS text) <% " + TRGM_DOC;
-    private static final String RELEVANCE = "CAST(greatest(ts_rank(" + FTS_DOC + ", to_tsquery('simple', :ts_query)), "
-            + "word_similarity(CAST(:q_norm AS text), " + TRGM_DOC + ")) AS float8)";
+
+    // Mức xếp hạng: khớp tên sự kiện > khớp sân/thành phố > khớp mô tả. Điểm trong mức nằm trong [0, 1].
+    private static final int TIER_TITLE = 4;
+    private static final int TIER_VENUE = 2;
+
+    /** Tài liệu tìm kiếm của sân (tên sân + tên thành phố), giống hệt biểu thức của venue_search_fts_idx. */
+    private static String venueDoc(String v) {
+        return "to_tsvector('simple', immutable_unaccent(coalesce(" + v + ".name, '') || ' ' || immutable_city_text("
+                + v + ".city)))";
+    }
+
+    private static String venueMatch(String v) {
+        return venueDoc(v) + " @@ " + TS_QUERY;
+    }
 
     private static final String MAX_BIGINT = "9223372036854775807";
 
@@ -43,7 +58,7 @@ class EventSearchRepository {
 
     /**
      * Lấy tối đa {@code fetchSize} dòng của trang kế tiếp. {@code mode} chọn tsquery chặt hoặc lỏng; trigram giữ
-     * nguyên ở cả hai chế độ.
+     * nguyên ở cả hai chế độ (và chỉ bật khi từ khoá đủ dài).
      */
     List<EventSummaryResult> search(EventSearchCriteria c, NormalizedQuery q, MatchMode mode, OffsetDateTime now,
             int fetchSize) {
@@ -71,10 +86,32 @@ class EventSearchRepository {
             where.append(" AND e.category = :category");
             params.put("category", c.category());
         }
+        boolean trigram = q != null && q.useTrigram();
+        String venueRank = "0";
+        String venueFirst = "";
+        String venueFlag = "false";
         if (q != null) {
-            where.append(" AND (").append(FTS_MATCH).append(" OR ").append(TRGM_MATCH).append(')');
+            // Ứng viên gộp từ ba nhánh, mỗi nhánh có index riêng: FTS sự kiện, trigram tiêu đề, sân/thành phố của suất.
+            // Nhánh sân dùng cùng bộ lọc suất (city, from, to) với thẻ nên suất khớp sân phải là suất thật sự hiện ra.
+            StringBuilder cand = new StringBuilder("SELECT e.id FROM event e WHERE ").append(FTS_MATCH);
+            if (trigram) {
+                cand.append(" UNION SELECT e.id FROM event e WHERE ").append(TRGM_MATCH);
+            }
+            cand.append("""
+                     UNION SELECT s.event_id FROM venue v
+                           JOIN hall h ON h.venue_id = v.id
+                           JOIN showtime s ON s.hall_id = h.id
+                           WHERE v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now
+                             AND\s""").append(venueMatch("v")).append(showtimeFilter);
+            where.append(" AND e.id IN (").append(cand).append(')');
             params.put("ts_query", q.tsQuery(mode));
             params.put("q_norm", q.text());
+            // Suất khớp sân nằm trong cùng bộ lọc; thẻ ưu tiên suất đó để hiện đúng sân người dùng vừa tìm.
+            venueFlag = "(v0.deleted_at IS NULL AND " + venueMatch("v0") + ")";
+            venueFirst = "CASE WHEN v.matched THEN 0 ELSE 1 END, ";
+            venueRank = "EXISTS (SELECT 1 FROM venue v JOIN hall h ON h.venue_id = v.id JOIN showtime s ON s.hall_id = h.id"
+                    + " WHERE s.event_id = e.id AND v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now"
+                    + " AND " + venueMatch("v") + showtimeFilter + ")";
         }
         if (c.priceMin() != null || c.priceMax() != null) {
             where.append("""
@@ -93,7 +130,7 @@ class EventSearchRepository {
 
         String popularityJoin = c.sort() == Sort.POPULARITY ? POPULARITY_JOIN : "";
         String sortKey = switch (c.sort()) {
-            case RELEVANCE -> RELEVANCE;
+            case RELEVANCE -> relevance(trigram, venueRank);
             case STARTS_AT -> "CAST(floor(extract(epoch FROM nx.first_starts_at) * 1000000) AS bigint)";
             case PRICE -> "coalesce(pf.price_from, " + MAX_BIGINT + ")";
             case POPULARITY -> "pop.sold";
@@ -122,10 +159,14 @@ class EventSearchRepository {
                     JOIN LATERAL (
                         SELECT v.name AS venue_name, v.city, s.starts_at AS first_starts_at
                         FROM showtime s
-                        JOIN hall h ON h.id = s.hall_id
-                        JOIN venue v ON v.id = h.venue_id
+                        CROSS JOIN LATERAL (
+                            SELECT v0.name, v0.city, %s AS matched
+                            FROM hall h JOIN venue v0 ON v0.id = h.venue_id
+                            WHERE h.id = s.hall_id
+                            OFFSET 0
+                        ) v
                         WHERE s.event_id = e.id AND s.status = 'SCHEDULED' AND s.starts_at >= :now%s
-                        ORDER BY s.starts_at, s.id
+                        ORDER BY %s s.starts_at, s.id
                         LIMIT 1
                     ) nx ON true
                     LEFT JOIN LATERAL (
@@ -138,7 +179,7 @@ class EventSearchRepository {
                 ) r%s
                 ORDER BY r.sort_key %s, r.id %s
                 LIMIT :fetch_size
-                """.formatted(sortKey, showtimeFilter, popularityJoin, where, keyset, dir, dir);
+                """.formatted(sortKey, venueFlag, showtimeFilter, venueFirst, popularityJoin, where, keyset, dir, dir);
 
         boolean relevance = c.sort() == Sort.RELEVANCE;
         return jdbc.sql(sql).params(params).query((rs, i) -> new EventSummaryResult(
@@ -163,6 +204,22 @@ class EventSearchRepository {
                      + (SELECT coalesce(sum(zs.sold), 0) FROM showtime_zone_stock zs JOIN showtime s4 ON s4.id = zs.showtime_id
                         WHERE s4.event_id = e.id AND s4.status = 'SCHEDULED' AND s4.starts_at >= :now) AS sold
             ) pop ON true""";
+
+    /**
+     * Độ liên quan = mức (khớp tên 4, khớp sân/thành phố 2, chỉ khớp mô tả 0) cộng điểm trong mức (0..1). Điểm trong
+     * mức: tên lấy max(ts_rank, word_similarity), mô tả lấy ts_rank.
+     */
+    private static String relevance(boolean trigram, String venueRank) {
+        String titleScore = "least(1.0, ts_rank(" + TITLE_DOC + ", " + TS_QUERY + "))";
+        String titleMatch = TITLE_MATCH;
+        if (trigram) {
+            titleScore = "greatest(" + titleScore + ", word_similarity(CAST(:q_norm AS text), " + TRGM_DOC + "))";
+            titleMatch = "(" + titleMatch + " OR " + TRGM_MATCH + ")";
+        }
+        return "CAST(CASE WHEN " + titleMatch + " THEN " + TIER_TITLE + " + " + titleScore
+                + " WHEN " + venueRank + " THEN " + TIER_VENUE
+                + " ELSE least(1.0, ts_rank(" + FTS_DOC + ", " + TS_QUERY + ")) END AS float8)";
+    }
 
     private static Object parseKey(Sort sort, String key) {
         try {
