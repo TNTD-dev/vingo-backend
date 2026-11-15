@@ -1,8 +1,14 @@
 package vingo.search.web;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -87,6 +93,16 @@ class SearchController implements SearchApi {
     @Override
     public ResponseEntity<SeatMap> getSeatmap(UUID showtimeId, UUID zoneId) {
         return ResponseEntity.ok(mapper.toSeatMap(searchService.getSeatmap(showtimeId, zoneId)));
+    }
+
+    @Override
+    public ResponseEntity<Resource> getSeatmapSvg(UUID showtimeId) {
+        byte[] svg = searchService.getSeatmapSvg(showtimeId).getBytes(StandardCharsets.UTF_8);
+        // Layout đã PUBLISHED không đổi nên cho cache công khai 1 giờ.
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("image/svg+xml"))
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+                .body(new ByteArrayResource(svg));
     }
 
     @Override

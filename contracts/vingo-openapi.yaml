@@ -558,6 +558,34 @@ paths:
               schema: { $ref: '#/components/schemas/SeatMap' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /showtimes/{showtime_id}/seatmap.svg:
+    get:
+      operationId: getSeatmapSvg
+      tags: [Search]
+      summary: Ảnh SVG sơ đồ sân của suất
+      description: |
+        Gọi khi giao diện cần vẽ sơ đồ sân cho trang chọn ghế. Trả SVG đã chuẩn hóa của sơ đồ sân gắn với suất, dùng cùng dữ liệu ghế và trạng thái của `getSeatmap` (ghép theo `svg_id` của khu).
+        Chỉ trả khi suất không phải DRAFT, sự kiện đang PUBLISHED và sơ đồ đã PUBLISHED. SVG không đổi sau khi publish nên có thể cache dài: phản hồi có `Cache-Control: public, max-age=3600`.
+
+        Ví dụ lỗi 404 (suất không tồn tại, suất DRAFT, sự kiện chưa PUBLISHED, hoặc sơ đồ không có SVG):
+        ```json
+        { "title": "Không tìm thấy suất", "status": 404, "code": "NOT_FOUND", "detail": "Suất không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+      responses:
+        '200':
+          description: Nội dung SVG
+          content:
+            image/svg+xml:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/availability:
     get:
       operationId: getAvailability

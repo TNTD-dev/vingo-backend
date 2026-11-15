@@ -41,6 +41,15 @@ public interface SearchService {
     SeatmapResult getSeatmap(UUID showtimeId, UUID zoneId);
 
     /**
+     * SVG đã chuẩn hóa của sơ đồ sân gắn với suất, để giao diện vẽ cùng dữ liệu của {@link #getSeatmap}. Chỉ trả
+     * khi sơ đồ đã PUBLISHED.
+     *
+     * @throws vingo.shared.error.DomainException NOT_FOUND khi suất không tồn tại, là DRAFT, sự kiện chưa PUBLISHED,
+     *         hoặc sơ đồ không có SVG
+     */
+    String getSeatmapSvg(UUID showtimeId);
+
+    /**
      * Số chỗ còn theo khu và cờ {@code soldOut}. Nhẹ hơn {@link #getSeatmap}.
      *
      * @throws vingo.shared.error.DomainException NOT_FOUND khi suất không tồn tại, là DRAFT hoặc sự kiện chưa PUBLISHED
