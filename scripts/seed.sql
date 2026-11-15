@@ -210,23 +210,31 @@ SELECT pg_temp.add_seats(pg_temp.sid(151), ARRAY['A', 'B'], 10);
 SELECT pg_temp.add_seats(pg_temp.sid(161), ARRAY['A', 'B', 'C', 'D'], 10, couple_rows => ARRAY['D']);
 
 -- ------------------------------------------------------------------ Sự kiện, giá
+-- Poster lấy từ Wikimedia Commons (picsum.photos hay bị timeout nên bỏ). Nguồn và giấy phép:
+--   201 IRN-VIETNAM_20190112_Asian_Cup_5.jpg (CC BY 4.0) · 202 Beach-Please-2022-crowd-stage-lights-night-performance.jpg (CC BY-SA 4.0)
+--   203 Inside_Hanoi_Opera_House.JPG (CC BY-SA 4.0) · 204 CBSO_Youth_Orchestra_in_Symphony_Hall_-_geograph.org.uk_-_7422392.jpg (CC BY-SA 2.0)
+--   205 Reggae_2_Jungle_Beach_stage,_Beats_for_Love_2019_02.jpg (CC BY-SA 4.0) · 209 Sân_vận_động_Hàng_Đẫy.jpg (public domain)
+--   210 2012-13_Europa_League_final_-_Chelsea_FC_vs._SL_Benfica,_Amsterdam_ArenA,_kick-off.jpg (CC BY-SA 3.0)
+--   Sự kiện sinh hàng loạt: Concert_of_classical_guitar_in_Ivry-sur-Seine.jpg, Sitcom_Live_(141520).jpg,
+--   Pragati_Maidan_Book_Fair_4.jpg, DZ6_0930_Skewers_….jpg (CC BY-SA 4.0); LAKE_playing_at_The_Hideout_….jpg (CC0).
+--   Trang gốc: https://commons.wikimedia.org/wiki/File:<tên file>. 206 (gốm) cố ý để NULL để test nhánh không có poster.
 
 INSERT INTO event (id, title, description, category, attributes, poster_url, status, max_tickets_per_order, published_at) VALUES
     (pg_temp.sid(201), 'Việt Nam vs Thái Lan', 'Vòng loại Asian Cup, sân Mỹ Đình', 'FOOTBALL',
      '{"home_team": "Việt Nam", "away_team": "Thái Lan", "competition": "Vòng loại Asian Cup"}',
-     'https://picsum.photos/seed/vingo201/600/800', 'PUBLISHED', 6, now() - interval '20 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/IRN-VIETNAM_20190112_Asian_Cup_5.jpg/960px-IRN-VIETNAM_20190112_Asian_Cup_5.jpg', 'PUBLISHED', 6, now() - interval '20 days'),
     (pg_temp.sid(202), 'Sơn Tùng M-TP Sky Tour 2026', 'Tour diễn xuyên Việt của Sơn Tùng M-TP', 'CONCERT',
      '{"artists": ["Sơn Tùng M-TP"], "genre": "V-Pop"}',
-     'https://picsum.photos/seed/vingo202/600/800', 'PUBLISHED', 4, now() - interval '15 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Beach-Please-2022-crowd-stage-lights-night-performance.jpg/960px-Beach-Please-2022-crowd-stage-lights-night-performance.jpg', 'PUBLISHED', 4, now() - interval '15 days'),
     (pg_temp.sid(203), 'Kịch: Lôi Vũ', 'Vở kịch kinh điển của Tào Ngu', 'THEATER',
      '{"director": "NSND Lê Hùng", "duration_minutes": 150}',
-     'https://picsum.photos/seed/vingo203/600/800', 'PUBLISHED', 8, now() - interval '30 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/0/01/Inside_Hanoi_Opera_House.JPG/960px-Inside_Hanoi_Opera_House.JPG', 'PUBLISHED', 8, now() - interval '30 days'),
     (pg_temp.sid(204), 'Hòa nhạc Giao hưởng Mùa Thu', 'Dàn nhạc Giao hưởng TP.HCM', 'CONCERT',
      '{"artists": ["HBSO"], "genre": "Cổ điển"}',
-     'https://picsum.photos/seed/vingo204/600/800', 'PUBLISHED', 10, now() - interval '40 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/CBSO_Youth_Orchestra_in_Symphony_Hall_-_geograph.org.uk_-_7422392.jpg/960px-CBSO_Youth_Orchestra_in_Symphony_Hall_-_geograph.org.uk_-_7422392.jpg', 'PUBLISHED', 10, now() - interval '40 days'),
     (pg_temp.sid(205), 'Đêm nhạc Trịnh Công Sơn', 'Đêm nhạc ngoài trời bên biển', 'CONCERT',
      '{"artists": ["Hồng Nhung", "Quang Dũng"], "genre": "Nhạc Trịnh"}',
-     'https://picsum.photos/seed/vingo205/600/800', 'PUBLISHED', 10, now() - interval '10 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Reggae_2_Jungle_Beach_stage%2C_Beats_for_Love_2019_02.jpg/960px-Reggae_2_Jungle_Beach_stage%2C_Beats_for_Love_2019_02.jpg', 'PUBLISHED', 10, now() - interval '10 days'),
     (pg_temp.sid(206), 'Workshop làm gốm Bát Tràng', 'Tự tay nặn gốm cùng nghệ nhân', 'OTHER',
      '{"level": "Người mới"}', NULL, 'PUBLISHED', 2, now() - interval '10 days'),
     (pg_temp.sid(207), 'Sự kiện nháp chưa công bố', 'Không được hiện ở search', 'FOOTBALL',
@@ -235,10 +243,10 @@ INSERT INTO event (id, title, description, category, attributes, poster_url, sta
      '{}', NULL, 'CANCELLED', 10, now() - interval '50 days'),
     (pg_temp.sid(209), 'Hà Nội FC vs Hải Phòng FC', 'V-League vòng 8', 'FOOTBALL',
      '{"home_team": "Hà Nội FC", "away_team": "Hải Phòng FC", "competition": "V-League"}',
-     'https://picsum.photos/seed/vingo209/600/800', 'PUBLISHED', 10, now() - interval '5 days'),
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/S%C3%A2n_v%E1%BA%ADn_%C4%91%E1%BB%99ng_H%C3%A0ng_%C4%90%E1%BA%ABy.jpg/960px-S%C3%A2n_v%E1%BA%ADn_%C4%91%E1%BB%99ng_H%C3%A0ng_%C4%90%E1%BA%ABy.jpg', 'PUBLISHED', 10, now() - interval '5 days'),
     (pg_temp.sid(210), 'SHB Đà Nẵng vs Hoàng Anh Gia Lai', 'V-League vòng 8', 'FOOTBALL',
      '{"home_team": "SHB Đà Nẵng", "away_team": "Hoàng Anh Gia Lai", "competition": "V-League"}',
-     'https://picsum.photos/seed/vingo210/600/800', 'PUBLISHED', 10, now() - interval '5 days');
+     'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/2012-13_Europa_League_final_-_Chelsea_FC_vs._SL_Benfica%2C_Amsterdam_ArenA%2C_kick-off.jpg/960px-2012-13_Europa_League_final_-_Chelsea_FC_vs._SL_Benfica%2C_Amsterdam_ArenA%2C_kick-off.jpg', 'PUBLISHED', 10, now() - interval '5 days');
 
 INSERT INTO price_tier (id, event_id, name, price, color) VALUES
     (pg_temp.sid(301), pg_temp.sid(201), 'Hạng A',    500000, '#E4572E'),
@@ -331,7 +339,14 @@ SELECT pg_temp.sid(1000 + n),
            || ' #' || n,
        'Sự kiện mẫu số ' || n,
        (ARRAY['CONCERT', 'OTHER', 'OTHER', 'CONCERT', 'OTHER'])[(n - 1) % 5 + 1],
-       'https://picsum.photos/seed/vingo' || (1000 + n) || '/600/800', 'PUBLISHED', 10, now() - n * interval '1 day'
+       (ARRAY[
+           'https://upload.wikimedia.org/wikipedia/commons/0/01/Concert_of_classical_guitar_in_Ivry-sur-Seine.jpg',
+           'https://upload.wikimedia.org/wikipedia/commons/a/a3/Sitcom_Live_%28141520%29.jpg',
+           'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/DZ6_0930_Skewers_of_sizzling_street_food_glow_under_neon_lights_as_a_bustling_night_market_hums_in_the_background.jpg/960px-DZ6_0930_Skewers_of_sizzling_street_food_glow_under_neon_lights_as_a_bustling_night_market_hums_in_the_background.jpg',
+           'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/LAKE_playing_at_The_Hideout_in_Chicago%2C_Illinois%2C_USA_%282025-04-20%29.jpg/960px-LAKE_playing_at_The_Hideout_in_Chicago%2C_Illinois%2C_USA_%282025-04-20%29.jpg',
+           'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Pragati_Maidan_Book_Fair_4.jpg/960px-Pragati_Maidan_Book_Fair_4.jpg'
+       ])[(n - 1) % 5 + 1],
+       'PUBLISHED', 10, now() - n * interval '1 day'
 FROM generate_series(1, 15) n;
 
 INSERT INTO price_tier (id, event_id, name, price)
