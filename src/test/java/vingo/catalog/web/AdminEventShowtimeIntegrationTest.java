@@ -120,11 +120,37 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         assertInventory(showB, layoutB, 6699);
         assertThat(jdbc.sql("SELECT count(*) FROM seat s JOIN zone z ON z.id = s.zone_id WHERE z.seat_layout_id = :id")
                 .param("id", layoutA).query(Integer.class).single()).isEqualTo(6699);
+        // Suất đã công bố (SCHEDULED) và tới giờ mở bán thì khóa.
+        jdbc.sql("UPDATE showtime SET status = 'SCHEDULED' WHERE id = :id").param("id", showA).update();
         clock.set(NOW.plusSeconds(2 * 86400));
         client.patch().uri(ADMIN + "/showtimes/{id}", showA).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layoutA))
                 .exchange().expectStatus().isEqualTo(409).expectBody()
                 .jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
+    }
+
+    @Test
+    void updateShowtime_succeeds_whenDraftShowtimeSaleOpensAtInPast() {
+        var event = catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
+        // Window.draft: suất DRAFT, giờ mở bán đã qua 1 ngày.
+        var showtime = catalog.showtime(event, Window.draft());
+        client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("sale_opens_at", atDays(1)))
+                .exchange().expectStatus().isOk();
+        assertThat(jdbc.sql("SELECT sale_opens_at FROM showtime WHERE id = :id").param("id", showtime.id())
+                .query(OffsetDateTime.class).single().toInstant()).isEqualTo(NOW.plusSeconds(86400));
+    }
+
+    @Test
+    void updateShowtime_returns409_whenScheduledShowtimeSaleOpened() {
+        var event = catalog.event(EventSpec.defaults().withCity("HN"));
+        var showtime = catalog.showtime(event, Window.onSale());
+        var before = showtimeSnapshot(showtime.id());
+        client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("sale_opens_at", atDays(1)))
+                .exchange().expectStatus().isEqualTo(409).expectBody()
+                .jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
+        assertThat(showtimeSnapshot(showtime.id())).isEqualTo(before);
     }
 
     @Test
