@@ -1678,7 +1678,8 @@ paths:
       description: >
         Admin đặt toàn bộ danh sách hạng giá.
         Event phải là DRAFT hoặc PUBLISHED, không có đơn
-        và không có suất chưa hủy đã tới giờ mở bán.
+        và không có suất đã công bố (SCHEDULED) đã tới giờ mở bán.
+        Suất DRAFT chưa bán được nên không khóa, kể cả khi đã qua sale_opens_at.
         Nếu có id, hạng phải thuộc đúng sự kiện.
         Nếu không có id, dùng lại hạng cùng tên đã bỏ khoảng trắng,
         hoặc tạo mới nếu chưa có.
@@ -1737,7 +1738,7 @@ paths:
         Admin thay toàn bộ danh sách gán hạng giá cho khu.
         Áp dụng cùng quy tắc khóa như PUT price-tiers:
         event DRAFT hoặc PUBLISHED, chưa có đơn và không có
-        suất chưa hủy đã tới giờ mở bán.
+        suất đã công bố (SCHEDULED) đã tới giờ mở bán.
         Mỗi zone_id chỉ xuất hiện một lần.
         Khu phải thuộc layout đang được suất chưa hủy của sự kiện sử dụng.
         Hạng giá phải thuộc đúng sự kiện.
@@ -1790,7 +1791,7 @@ paths:
       summary: DRAFT → PUBLISHED; các suất chuyển SCHEDULED
       description: >
         Công bố nguyên tử sự kiện DRAFT khi có ít nhất một suất chưa hủy, layout đã công bố,
-        sân còn hoạt động, thời gian suất hợp lệ và mọi khu có hạng giá thuộc sự kiện.
+        sân còn hoạt động, thời gian suất hợp lệ (chưa qua giờ đóng bán) và mọi khu có hạng giá thuộc sự kiện.
         Thiếu cấu hình trả 422 EVENT_INCOMPLETE. Suất DRAFT chuyển SCHEDULED;
         giữ nguyên tồn kho hiện có, kể cả BLOCKED, chỉ bổ sung dòng thiếu.
         Gửi lại sự kiện PUBLISHED trả dữ liệu hiện tại. ENDED/CANCELLED trả EVENT_LOCKED.
@@ -1874,10 +1875,10 @@ paths:
     patch:
       operationId: updateShowtime
       tags: [Admin Catalog]
-      summary: Sửa suất (chỉ trước sale_opens_at)
+      summary: Sửa suất (suất DRAFT, hoặc suất SCHEDULED trước sale_opens_at)
       description: >
-        Cập nhật thông tin suất diễn trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
-        Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc đã tới giờ mở bán trả SHOWTIME_LOCKED.
+        Cập nhật thông tin suất diễn DRAFT, hoặc suất SCHEDULED trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
+        Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc suất SCHEDULED đã tới giờ mở bán trả SHOWTIME_LOCKED.
         Nếu đổi hall_id hoặc seat_layout_id thì sơ đồ phải đã PUBLISHED và thuộc đúng hall.
         Đổi sơ đồ chỉ được khi chưa có đơn hoặc tồn kho HELD/SOLD/BLOCKED.
         Metadata, tồn kho và sự kiện làm mới cache được xử lý trong cùng transaction.
