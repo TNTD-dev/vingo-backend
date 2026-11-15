@@ -18,6 +18,12 @@ class SearchQueryNormalizer {
 
     static final int MAX_TERMS = 8;
     static final int MAX_TERM_LENGTH = 40;
+    /**
+     * Từ dài nhất phải đạt độ dài này thì mới dùng trigram. Từ 1 đến 2 ký tự chỉ có 2 đến 3 trigram (kể cả đệm),
+     * ngưỡng {@code word_similarity} chỉ cần trùng một trigram là qua, nên "x" khớp gần như mọi tiêu đề. Từ ngắn vẫn
+     * khớp bằng tiền tố của full-text ({@code sk:*} ra "Sky").
+     */
+    static final int MIN_TRIGRAM_LENGTH = 3;
 
     /**
      * @param text    từ khoá đã chuẩn hoá, các từ cách nhau một dấu cách (dùng cho trigram)
@@ -25,6 +31,11 @@ class SearchQueryNormalizer {
      * @param looseTsQuery tsquery khớp lỏng (nối bằng {@code |}, bỏ từ 1 ký tự); rỗng khi không nới được
      */
     record NormalizedQuery(String text, String tsQuery, String looseTsQuery) {
+
+        /** Chỉ dùng khớp gần đúng (trigram) khi có ít nhất một từ đủ dài, xem {@link #MIN_TRIGRAM_LENGTH}. */
+        boolean useTrigram() {
+            return java.util.Arrays.stream(text.split(" ")).anyMatch(t -> t.length() >= MIN_TRIGRAM_LENGTH);
+        }
 
         /** Nới được khi có ít nhất 2 từ và tsquery lỏng không rỗng. */
         boolean canLoosen() {
