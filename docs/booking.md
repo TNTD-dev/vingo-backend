@@ -69,6 +69,7 @@ Luồng đi theo **controller → service → repository → PostgreSQL**. Modul
 - **Khu đứng** dùng `UPDATE showtime_zone_stock SET held = held + :n WHERE capacity - sold - held >= :n`. Update không khớp dòng nào thì trả `NOT_ENOUGH_STOCK` kèm số chỗ còn lại.
 - **Ghế đôi** tự thêm ghế cặp trước khi tính số vé và giá. Số vé tính cả ghế được thêm.
 - **Hạn giữ** lấy từ `vingo.hold.ttl`, mặc định `PT10M`.
+- **Cooldown giữ lại ghế**: user đã giữ rồi nhả không thanh toán (đơn `EXPIRED` hoặc `CANCELLED`) cùng một ghế từ `vingo.hold.rehold-max` lần (mặc định 3) trong `vingo.hold.rehold-window` (mặc định 1 giờ) thì lần giữ sau phải chờ `vingo.hold.rehold-cooldown` (mặc định 10 phút) kể từ lần nhả gần nhất. Chỉ một ghế vướng cooldown là cả yêu cầu bị từ chối với `429 RATE_LIMITED` kèm `Retry-After`. Đơn hết hạn tính từ `expires_at`, đơn huỷ tính từ `updated_at`. Khu đứng không áp dụng.
 - **Một đơn `PENDING` cho mỗi user và suất**: service kiểm tra, unique index `orders_one_pending_per_showtime_uk` chặn hai request song song.
 - **Thứ tự khoá** luôn là đơn trước, tồn kho sau, để hold, cancel, IPN và job hết hạn không khoá chéo nhau.
 
