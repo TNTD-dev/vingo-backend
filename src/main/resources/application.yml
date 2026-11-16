@@ -42,6 +42,11 @@ vingo:
     access-token-ttl: PT15M
   hold:
     ttl: PT10M
+    # Chống giữ lại cùng ghế liên tục mà không thanh toán: giữ rồi nhả (hết hạn hoặc huỷ) đủ rehold-max lần
+    # trong rehold-window thì phải chờ rehold-cooldown kể từ lần nhả gần nhất.
+    rehold-max: 3
+    rehold-window: PT1H
+    rehold-cooldown: PT10M
   realtime:
     replay-window: PT5M
     replay-overlap: PT10S
