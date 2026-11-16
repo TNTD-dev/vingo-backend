@@ -367,6 +367,31 @@ public class BookingRepository {
                         rs.getObject("price_tier_id", UUID.class), quantity, rs.getLong("price"))).optional();
     }
 
+    /**
+     * Thời điểm nhả gần nhất trong các ghế mà user đã giữ rồi nhả không thanh toán ({@code EXPIRED} hoặc
+     * {@code CANCELLED}) từ {@code maxReleases} lần trở lên kể từ {@code since}. Rỗng nếu không ghế nào chạm ngưỡng.
+     * Đơn hết hạn tính từ {@code expires_at} (lúc ghế thật sự trống), đơn huỷ tính từ {@code updated_at}.
+     */
+    public Optional<OffsetDateTime> lastReleaseOfOverheldSeats(UUID userId, UUID showtimeId, List<UUID> seatIds,
+                                                               OffsetDateTime since, int maxReleases) {
+        var rows = jdbc.sql("""
+                        SELECT max(last_release) FROM (
+                            SELECT item.seat_id,
+                                   max(CASE WHEN o.status = 'EXPIRED' THEN o.expires_at ELSE o.updated_at END) AS last_release
+                            FROM orders o JOIN order_item item ON item.order_id = o.id
+                            WHERE o.user_id = :user AND o.showtime_id = :showtime
+                              AND item.seat_id = ANY(:ids) AND o.status IN ('EXPIRED', 'CANCELLED')
+                              AND CASE WHEN o.status = 'EXPIRED' THEN o.expires_at ELSE o.updated_at END >= :since
+                            GROUP BY item.seat_id HAVING count(*) >= :max
+                        ) overheld
+                        """)
+                .param("user", userId).param("showtime", showtimeId)
+                .param("ids", new SqlArrayValue("uuid", seatIds.toArray()))
+                .param("since", since).param("max", maxReleases)
+                .query(OffsetDateTime.class).list();
+        return rows.stream().filter(java.util.Objects::nonNull).findFirst();
+    }
+
     public Optional<UUID> insertOrder(String code, UUID userId, UUID showtimeId, long total,
                                       OffsetDateTime expiresAt, OffsetDateTime now) {
         return jdbc.sql("""

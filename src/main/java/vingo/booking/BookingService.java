@@ -47,6 +47,7 @@ import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.idempotency.IdempotencyService;
 import vingo.shared.logging.LogKeys;
+import vingo.shared.ratelimit.RateLimitedException;
 import vingo.shared.security.CurrentUser;
 
 /** Xử lý giữ chỗ và chuyển trạng thái đơn trong transaction nghiệp vụ. */
@@ -67,12 +68,18 @@ public class BookingService {
     private final ApplicationEventPublisher events;
     private final Clock clock;
     private final Duration holdTtl;
+    private final int reholdMax;
+    private final Duration reholdWindow;
+    private final Duration reholdCooldown;
 
     public BookingService(BookingRepository repository, OrderReader orders, CurrentUser currentUser,
                           RealtimeService realtime, IdempotencyService idempotency,
                           SearchService search, PlatformTransactionManager transactionManager,
                           ApplicationEventPublisher events, Clock clock,
-                          @Value("${vingo.hold.ttl}") String holdTtl) {
+                          @Value("${vingo.hold.ttl}") String holdTtl,
+                          @Value("${vingo.hold.rehold-max:3}") int reholdMax,
+                          @Value("${vingo.hold.rehold-window:PT1H}") String reholdWindow,
+                          @Value("${vingo.hold.rehold-cooldown:PT10M}") String reholdCooldown) {
         this.repository = repository;
         this.orders = orders;
         this.currentUser = currentUser;
@@ -83,6 +90,9 @@ public class BookingService {
         this.events = events;
         this.clock = clock;
         this.holdTtl = Duration.parse(holdTtl);
+        this.reholdMax = reholdMax;
+        this.reholdWindow = Duration.parse(reholdWindow);
+        this.reholdCooldown = Duration.parse(reholdCooldown);
     }
 
     /** Tra cứu đơn cho adminops, kiểm q/limit và đọc cả trang theo keyset created_at/id. */
@@ -445,6 +455,8 @@ public class BookingService {
                 items = repository.seatItems(showtimeId, seatIds);
                 requireAllSeats(items, seatIds.size());
             }
+            // Sau khi đơn cũ quá hạn đã được đóng ở trên, để lần hết hạn vừa rồi cũng được tính.
+            enforceReholdCooldown(userId, showtimeId, items, now);
         } else {
             items = List.of(repository.standingItem(showtimeId, request.getZoneId(), request.getQuantity())
                     .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR,
@@ -490,6 +502,24 @@ public class BookingService {
         Order order = orders.readOrder(orderId, now);
         logTransition(orderId, userId, null, "PENDING");
         return order;
+    }
+
+    /**
+     * Chặn giữ lại ghế mà user đã giữ rồi nhả không thanh toán (hết hạn hoặc huỷ) từ {@code reholdMax} lần trở lên
+     * trong {@code reholdWindow}: phải chờ {@code reholdCooldown} kể từ lần nhả gần nhất. Chỉ cần một ghế trong
+     * yêu cầu vướng cooldown là cả yêu cầu bị từ chối. Dùng chung mã {@code RATE_LIMITED} (429, kèm Retry-After).
+     */
+    private void enforceReholdCooldown(UUID userId, UUID showtimeId, List<HoldItem> items, OffsetDateTime now) {
+        var seatIds = items.stream().map(HoldItem::seatId).toList();
+        repository.lastReleaseOfOverheldSeats(userId, showtimeId, seatIds, now.minus(reholdWindow), reholdMax)
+                .map(lastRelease -> lastRelease.plus(reholdCooldown))
+                .filter(until -> until.isAfter(now))
+                .ifPresent(until -> {
+                    long seconds = (Duration.between(now, until).toMillis() + 999) / 1000;
+                    log.atInfo().addKeyValue(LogKeys.USER_ID, userId).addKeyValue("showtime_id", showtimeId)
+                            .log("Chặn giữ lại ghế trong thời gian cooldown, còn {}s", seconds);
+                    throw new RateLimitedException(seconds);
+                });
     }
 
     private static void validate(HoldRequest request) {
