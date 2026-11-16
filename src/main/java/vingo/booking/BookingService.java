@@ -425,9 +425,14 @@ public class BookingService {
     }
 
     private Order createHold(UUID userId, UUID showtimeId, HoldRequest request) {
-        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         validate(request);
         boolean seated = request.getSeatIds() != null && !request.getSeatIds().isEmpty();
+        if (seated) {
+            // Lấy khoá trước khi đọc đồng hồ: yêu cầu có thể phải chờ yêu cầu khác của cùng user trên cùng suất,
+            // nên mọi mốc thời gian (mở bán, quá hạn, cooldown, expiresAt) phải tính sau khi đã có khoá.
+            repository.lockReholdScope(userId, showtimeId);
+        }
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
 
         var sale = repository.findSale(showtimeId, now)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy suất diễn"));
@@ -511,8 +516,6 @@ public class BookingService {
      */
     private void enforceReholdCooldown(UUID userId, UUID showtimeId, List<HoldItem> items, OffsetDateTime now) {
         var seatIds = items.stream().map(HoldItem::seatId).toList();
-        // Tuần tự hoá các yêu cầu của cùng user trên cùng suất, kẻo hai yêu cầu cùng đọc lịch sử nhả cũ.
-        repository.lockReholdScope(userId, showtimeId);
         repository.lastReleaseOfOverheldSeats(userId, showtimeId, seatIds, now.minus(reholdWindow), reholdMax)
                 .map(lastRelease -> lastRelease.plus(reholdCooldown))
                 .filter(until -> until.isAfter(now))

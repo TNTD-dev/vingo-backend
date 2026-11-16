@@ -183,6 +183,32 @@ class HoldReholdCooldownTest extends BookingTestSupport {
     }
 
     @Test
+    void holdSeats_readsClockAfterWaitingForLock_whenCooldownEndsWhileWaiting() throws Exception {
+        var showtime = catalog.onSaleShowtime();
+        UUID buyer = catalog.buyer();
+        UUID seat = showtime.event().seat(1);
+        // Kết thúc ở T0 + 33 phút; cooldown của ghế kéo dài tới T0 + 42 phút.
+        holdAndLetExpireThreeTimes(buyer, showtime, seat);
+        String token = buyerToken(buyer);
+        Connection lock = holdScopeLock(buyer, showtime.id());
+        try {
+            var pending = CompletableFuture.supplyAsync(() -> hold(token, showtime.id(), seats(seat)));
+            assertThatThrownBy(() -> pending.get(1500, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+
+            // Trong lúc yêu cầu đang chờ khoá, cooldown hết (T0 + 43 phút).
+            clock.advance(Duration.ofMinutes(10));
+            releaseHoldScopeLock(lock, buyer, showtime.id());
+            lock = null;
+
+            body(pending.get(15, TimeUnit.SECONDS), 201);
+        } finally {
+            if (lock != null) {
+                releaseHoldScopeLock(lock, buyer, showtime.id());
+            }
+        }
+    }
+
+    @Test
     void holdSeats_doesNotWaitForLockOfAnotherBuyerOrShowtime() throws Exception {
         var showtime = catalog.onSaleShowtime();
         UUID locked = catalog.buyer();
