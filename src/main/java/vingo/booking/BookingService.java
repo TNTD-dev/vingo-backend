@@ -511,6 +511,8 @@ public class BookingService {
      */
     private void enforceReholdCooldown(UUID userId, UUID showtimeId, List<HoldItem> items, OffsetDateTime now) {
         var seatIds = items.stream().map(HoldItem::seatId).toList();
+        // Tuần tự hoá các yêu cầu của cùng user trên cùng suất, kẻo hai yêu cầu cùng đọc lịch sử nhả cũ.
+        repository.lockReholdScope(userId, showtimeId);
         repository.lastReleaseOfOverheldSeats(userId, showtimeId, seatIds, now.minus(reholdWindow), reholdMax)
                 .map(lastRelease -> lastRelease.plus(reholdCooldown))
                 .filter(until -> until.isAfter(now))

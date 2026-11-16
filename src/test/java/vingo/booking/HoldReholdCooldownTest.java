@@ -1,14 +1,23 @@
 package vingo.booking;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import vingo.support.CatalogFixture.Showtime;
 
@@ -19,6 +28,9 @@ import vingo.support.CatalogFixture.Showtime;
 class HoldReholdCooldownTest extends BookingTestSupport {
 
     private static final Instant T0 = Instant.parse("2026-11-16T03:00:00Z");
+
+    @Autowired
+    private DataSource dataSource;
 
     @BeforeEach
     void setUp() {
@@ -126,5 +138,63 @@ class HoldReholdCooldownTest extends BookingTestSupport {
                 assertThat(Integer.parseInt(value)).isBetween(599, 601));
         problem(blocked, 429, "RATE_LIMITED");
         assertThat(orderCount(buyer)).isEqualTo(3);
+    }
+
+    /** Giữ khoá advisory của đúng cặp (user, suất) trên một kết nối riêng, cùng khoá mà service lấy. */
+    private Connection holdScopeLock(UUID buyer, UUID showtimeId) throws Exception {
+        Connection connection = dataSource.getConnection();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT pg_advisory_lock(hashtextextended(?, 0))")) {
+            statement.setString(1, "hold-cooldown:" + buyer + ":" + showtimeId);
+            statement.execute();
+        }
+        return connection;
+    }
+
+    private void releaseHoldScopeLock(Connection connection, UUID buyer, UUID showtimeId) throws Exception {
+        try (connection; PreparedStatement statement = connection.prepareStatement(
+                "SELECT pg_advisory_unlock(hashtextextended(?, 0))")) {
+            statement.setString(1, "hold-cooldown:" + buyer + ":" + showtimeId);
+            statement.execute();
+        }
+    }
+
+    @Test
+    void holdSeats_waitsForSameBuyerAndShowtimeLock_beforeCheckingCooldown() throws Exception {
+        var showtime = catalog.onSaleShowtime();
+        UUID buyer = catalog.buyer();
+        String token = buyerToken(buyer);
+        UUID seat = showtime.event().seat(1);
+        Connection lock = holdScopeLock(buyer, showtime.id());
+        try {
+            var pending = CompletableFuture.supplyAsync(() -> holdOk(token, showtime.id(), seats(seat)));
+
+            assertThatThrownBy(() -> pending.get(1500, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            assertThat(orderCount(buyer)).isZero();
+
+            releaseHoldScopeLock(lock, buyer, showtime.id());
+            lock = null;
+            assertThat(orderId(pending.get(15, TimeUnit.SECONDS))).isNotNull();
+        } finally {
+            if (lock != null) {
+                releaseHoldScopeLock(lock, buyer, showtime.id());
+            }
+        }
+    }
+
+    @Test
+    void holdSeats_doesNotWaitForLockOfAnotherBuyerOrShowtime() throws Exception {
+        var showtime = catalog.onSaleShowtime();
+        UUID locked = catalog.buyer();
+        UUID other = catalog.buyer();
+        Connection lock = holdScopeLock(locked, showtime.id());
+        try {
+            holdOk(buyerToken(other), showtime.id(), seats(showtime.event().seat(2)));
+
+            var otherShowtime = catalog.onSaleShowtime();
+            holdOk(buyerToken(locked), otherShowtime.id(), seats(otherShowtime.event().seat(1)));
+        } finally {
+            releaseHoldScopeLock(lock, locked, showtime.id());
+        }
     }
 }

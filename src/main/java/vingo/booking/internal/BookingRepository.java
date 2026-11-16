@@ -368,6 +368,15 @@ public class BookingRepository {
     }
 
     /**
+     * Khoá advisory theo (user, suất) tới hết transaction, để các yêu cầu giữ ghế đồng thời của cùng user trên cùng
+     * suất chạy tuần tự quanh bước kiểm tra cooldown. Yêu cầu sau chờ rồi đọc được lần nhả đã commit.
+     */
+    public void lockReholdScope(UUID userId, UUID showtimeId) {
+        jdbc.sql("SELECT count(*) FROM (SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))) locked")
+                .param("key", "hold-cooldown:" + userId + ":" + showtimeId).query(Integer.class).single();
+    }
+
+    /**
      * Thời điểm nhả gần nhất trong các ghế mà user đã giữ rồi nhả không thanh toán ({@code EXPIRED} hoặc
      * {@code CANCELLED}) từ {@code maxReleases} lần trở lên kể từ {@code since}. Rỗng nếu không ghế nào chạm ngưỡng.
      * Đơn hết hạn tính từ {@code expires_at} (lúc ghế thật sự trống), đơn huỷ tính từ {@code updated_at}.
