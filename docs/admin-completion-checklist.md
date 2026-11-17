@@ -109,7 +109,7 @@ DB local đã migrate và đối chiếu dữ liệu thành công; xem [biên b�
 - [ ] Chạy `./mvnw verify` backend và `npm run check` frontend đạt.
 - [x] Sao lưu DB local, chạy Flyway và đối chiếu nội dung/ID/liên kết dữ liệu trước–sau; migrate lại no-op.
 - [ ] Hoàn tất backend/UI tương thích trước khi triển khai đồng bộ và kích hoạt migration trên môi trường khác.
-- [ ] Trước khi khởi động API/worker của bản này, dừng backend cũ, sao lưu DB đích và chạy đủ migration sân v2 theo thứ tự Flyway (1900, 1910, 0100, 0200). Xác nhận cả bốn migration thành công trong flyway_schema_history và kiểm tra schema đích. Compose và Docker image mặc định chưa tự nạp thư mục deploy/migrations-pending.
+- [ ] Trước khi khởi động API/worker của bản này, dừng backend cũ, sao lưu DB đích và chạy đủ migration sân v2 theo thứ tự Flyway (1900, 1910, 0100, 0200). Xác nhận cả bốn migration thành công trong flyway_schema_history và kiểm tra schema đích. Các migration đã nằm trong thư mục Flyway chính nên API tự áp khi khởi động.
 - [ ] Sau khi xác nhận schema v2, triển khai backend/UI đồng bộ và kiểm tra luồng vé, quét vé, đọc đơn và tìm kiếm. Nếu migration thất bại, dùng kế hoạch khôi phục trước khi khởi động lại backend.
 - [ ] Xác nhận schema trên DBeaver sau migrate, số lượng bản ghi và liên kết không bị sai.
 - [ ] Nghiệm thu local/staging: tạo sân → thêm layout → phát hành → tạo showtime → đặt vé.

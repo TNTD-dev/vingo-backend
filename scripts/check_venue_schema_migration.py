@@ -15,7 +15,7 @@ import check_remove_hall_migration as base
 
 ROOT = Path(__file__).resolve().parents[1]
 base.CONTAINER = "vingo-venue-v2-check-" + uuid.uuid4().hex[:12]
-NEW_MIGRATION = ROOT / "deploy/migrations-pending/V20261116_1910__catalog_venue_svg_v2.sql"
+NEW_MIGRATION = base.MIGRATIONS / "V20261116_1910__catalog_venue_svg_v2.sql"
 
 
 def sql(db, query):
@@ -234,7 +234,7 @@ def main():
         base.command("docker", "cp", str(base.PENDING), base.CONTAINER + ":/remove-hall.sql")
         base.command("docker", "cp", str(NEW_MIGRATION), base.CONTAINER + ":/svg-v2.sql")
         sql("postgres", "CREATE DATABASE venue_template")
-        for migration in sorted((ROOT / "src/main/resources/db/migration").glob("V*.sql")):
+        for migration in base.history_before(base.PENDING.name):
             apply("venue_template", "/migrations/" + migration.name)
         check_preservation()
         db = clone("venue_fresh")

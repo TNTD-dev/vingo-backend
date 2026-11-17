@@ -6,10 +6,10 @@
 
 Đã soạn schema/migration chờ và bộ kiểm tra DB riêng. Contract/backend mục 1.3 đã nối vào schema này, xem [venue-import-api.md](venue-import-api.md); UI mục 1.4 chưa triển khai. Chưa áp dụng lên DB local. Hai migration phải được triển khai cùng phiên bản ứng dụng đã bỏ hall, không chạy riêng trên app cũ:
 
-1. `deploy/migrations-pending/V20261116_1900__catalog_remove_hall.sql`.
-2. `deploy/migrations-pending/V20261116_1910__catalog_venue_svg_v2.sql`.
+1. `src/main/resources/db/migration/V20261116_1900__catalog_remove_hall.sql`.
+2. `src/main/resources/db/migration/V20261116_1910__catalog_venue_svg_v2.sql`.
 
-File chờ nằm ngoài `classpath:db/migration` nên Flyway của app không tự chạy. Không sửa migration lịch sử. Phải chốt lại số phiên bản khi đưa vào thư mục chính thức vì có thể phát sinh migration khác trong thời gian chờ.
+Cả hai (cùng `V20261117_0100` và `V20261117_0200`) đã nằm trong thư mục Flyway chính từ 17/11/2026, Flyway tự áp khi API khởi động. Không sửa migration lịch sử; muốn đổi thì tạo file mới.
 
 ## 1. Bảng và quan hệ
 

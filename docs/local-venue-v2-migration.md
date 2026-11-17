@@ -43,7 +43,9 @@ Hall đã được loại bỏ. Cả 7 layout cũ giữ nguyên ID/status/versio
 
 ## Cấu hình local và xem trên DBeaver
 
-Hai SQL vẫn nằm trong `deploy/migrations-pending`, chưa chuyển vào Flyway mặc định cho mọi môi trường. Đã bổ sung riêng vào `.env.local` (gitignore):
+> **Cập nhật 17/11/2026:** các migration sân v2 đã chuyển vào `src/main/resources/db/migration`, thư mục `deploy/migrations-pending` đã bỏ. Không cần dòng cấu hình dưới đây nữa; xoá khỏi `.env.local` nếu còn. Phần còn lại giữ làm biên bản.
+
+Tại thời điểm migrate, hai SQL còn nằm trong `deploy/migrations-pending`, chưa chuyển vào Flyway mặc định cho mọi môi trường. Đã bổ sung riêng vào `.env.local` (gitignore):
 
 ```properties
 spring.flyway.locations=classpath:db/migration,filesystem:deploy/migrations-pending

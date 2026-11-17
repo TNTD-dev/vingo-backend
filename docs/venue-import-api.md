@@ -106,9 +106,9 @@ Showtime chỉ nhận `seat_layout_id` cùng các mốc thời gian; venue đư�
 
 ## Chạy thử và triển khai
 
-Hai SQL vẫn ở `deploy/migrations-pending`, **chưa chạy lên DB local**. Backend mới cần schema mới; không chạy bản backend này với schema hall cũ. Test profile tự áp dụng cả migration chính và migration chờ trên PostgreSQL Testcontainers.
+Các SQL sân v2 đã nằm trong `src/main/resources/db/migration` và được Flyway tự áp khi API khởi động; sao lưu DB trước lần chạy đầu vì migration bỏ hall không quay ngược được. Test áp dụng chúng như mọi migration khác trên PostgreSQL Testcontainers.
 
-Để chủ động thử trên DB thử nghiệm đã sao lưu, có thể thêm profile `venue-v2` vào `api,local,venue-v2` khi chạy từ thư mục repo. Profile này dùng thêm `filesystem:deploy/migrations-pending`; không tự bật ở local/default. Khi đóng gói triển khai chính thức, cần hoàn thành UI, đưa SQL đã chốt version vào Flyway chính thức và triển khai đồng bộ theo mục 1.5. Worker chỉ khởi động sau khi schema mới đã được API/Flyway áp dụng.
+Profile `venue-v2` đã bỏ vì không còn cần. Khi triển khai lên staging/production, triển khai đồng bộ backend và UI theo mục 1.5. Worker chỉ khởi động sau khi schema mới đã được API/Flyway áp dụng.
 
 Contract còn cần PR review theo CLAUDE.md và nghiệm thu Swagger staging; không đánh dấu hai việc đó đã xong từ kết quả test local.
 
