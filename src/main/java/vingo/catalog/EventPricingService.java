@@ -108,6 +108,22 @@ public class EventPricingService {
             ));
         }
 
+        if (events.findSelection(eventId).isPresent()) {
+            Map<Long, String> colors = new HashMap<>();
+            for (var tier : existing) {
+                if (tier.color() != null) colors.putIfAbsent(tier.price(), tier.color());
+            }
+            for (int i = 0; i < normalized.size(); i++) {
+                var tier = normalized.get(i);
+                String color = colors.computeIfAbsent(tier.price(), price -> {
+                    if (tier.color() != null) return tier.color();
+                    String[] palette = {"#86BDF6", "#A4CC83", "#F5BF70", "#B6A1E5", "#F49CAB", "#70C8C1"};
+                    return palette[Math.floorMod(Long.hashCode(price), palette.length)];
+                });
+                normalized.set(i, new PriceTierChange(tier.id(), tier.name(), tier.price(), color));
+            }
+        }
+
         var removed = existing.stream()
                 .filter(tier -> !retainedIds.contains(tier.id()))
                 .toList();
@@ -285,6 +301,9 @@ public class EventPricingService {
                 );
             }
 
+            if (item.displayName() != null && (item.displayName().isBlank() || item.displayName().strip().length() > 200)) {
+                throw invalid("Tên khu phải có từ 1 đến 200 ký tự.");
+            }
             if (!submittedZones.add(item.zoneId())) {
                 throw invalid(
                         "Một khu xuất hiện nhiều lần."

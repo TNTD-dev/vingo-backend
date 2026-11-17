@@ -45,7 +45,7 @@ class CatalogFixtureTest extends IntegrationTest {
                           AND v.city LIKE 'City-%'
                         FROM showtime s JOIN event e ON e.id = s.event_id
                         JOIN seat_layout l ON l.id = s.seat_layout_id
-                        JOIN hall h ON h.id = s.hall_id JOIN venue v ON v.id = h.venue_id
+                        JOIN seat_layout vl ON vl.id=s.seat_layout_id JOIN venue v ON v.id=vl.venue_id
                         WHERE s.id = :showtime
                         """)
                 .param("showtime", showtime.id()).query(Boolean.class).single()).isTrue();
@@ -65,15 +65,15 @@ class CatalogFixtureTest extends IntegrationTest {
         var second = catalog.event(spec);
         var showtime = catalog.showtime(second, Window.draft());
 
-        assertThat(List.of(second.id(), second.venueId(), second.hallId(), second.layoutId(),
+        assertThat(List.of(second.id(), second.venueId(), second.layoutId(),
                         second.seatedZoneId(), second.standingZoneId(), second.vipPriceTierId(), second.gaPriceTierId()))
-                .doesNotContainAnyElementsOf(List.of(first.id(), first.venueId(), first.hallId(), first.layoutId(),
+                .doesNotContainAnyElementsOf(List.of(first.id(), first.venueId(), first.layoutId(),
                         first.seatedZoneId(), first.standingZoneId(), first.vipPriceTierId(), first.gaPriceTierId()));
         assertThat(second.seats()).hasSize(10).doesNotContainAnyElementsOf(first.seats());
         assertThat(jdbc.sql("""
                         SELECT e.title, e.category, e.status, e.max_tickets_per_order, v.city, stock.capacity
                         FROM showtime s JOIN event e ON e.id = s.event_id
-                        JOIN hall h ON h.id = s.hall_id JOIN venue v ON v.id = h.venue_id
+                        JOIN seat_layout vl ON vl.id=s.seat_layout_id JOIN venue v ON v.id=vl.venue_id
                         JOIN showtime_zone_stock stock ON stock.showtime_id = s.id
                         WHERE s.id = :showtime
                         """)

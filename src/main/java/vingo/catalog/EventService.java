@@ -74,6 +74,11 @@ public class EventService {
 
     @Transactional
     public CreatedEvent create(CreateEvent input) {
+        return create(input, null, null);
+    }
+
+    @Transactional
+    public CreatedEvent create(CreateEvent input, UUID venue, UUID layout) {
         validateInput(input, true);
         int maxTickets = input.maxTicketsPerOrder() == null
                 ? 10 : input.maxTicketsPerOrder();
@@ -91,6 +96,10 @@ public class EventService {
 
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
         UUID id = repository.insertDraft(normalized, now);
+        if (venue != null || layout != null) {
+            validateSelection(venue, layout, normalized.category());
+            repository.selectLayout(id, venue, layout);
+        }
         events.publishEvent(new CatalogChanged(id, Set.of()));
 
         try (var ignored = MDC.putCloseable("event_id", id.toString())) {
@@ -130,6 +139,11 @@ public class EventService {
 
     @Transactional
     public EventDetails update(UUID eventId, UpdateEvent patch) {
+        return update(eventId, patch, null, null);
+    }
+
+    @Transactional
+    public EventDetails update(UUID eventId, UpdateEvent patch, UUID venue, UUID layout) {
         validateInput(new CreateEvent(
                 patch.title(), patch.description(), patch.category(), patch.attributes(),
                 patch.posterMobileUrl(), patch.posterDesktopUrl(), patch.ageLimit(),
@@ -143,6 +157,28 @@ public class EventService {
                     "Không thể sửa sự kiện đã kết thúc hoặc hủy.");
         }
 
+        if ("FOOTBALL".equals(patch.category()) && repository.hasMultipleActiveShowtimes(eventId)) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR,
+                    "Chỉ có thể đổi sang Bóng đá khi sự kiện có tối đa một suất chưa hủy.");
+        }
+
+        var currentSelection = repository.findSelection(eventId).orElse(null);
+        String category = patch.category() == null ? current.data().category() : patch.category();
+        boolean categoryChanged = !category.equals(current.data().category());
+        boolean selectionSent = venue != null || layout != null;
+        var wanted = selectionSent ? new EventDetails.LayoutSelection(venue, layout) : currentSelection;
+        boolean selectionChanged = selectionSent && !wanted.equals(currentSelection);
+        if ((selectionChanged || (currentSelection != null && categoryChanged)) && !"DRAFT".equals(current.status())) {
+            throw new DomainException(ErrorCode.EVENT_LOCKED, "Không đổi sân, loại hoặc layout sau công bố.");
+        }
+        if (wanted != null && (categoryChanged || selectionChanged)) {
+            validateSelection(wanted.venueId(), wanted.layoutId(), category);
+            if (repository.hasConflictingShowtimes(eventId, wanted.layoutId())) {
+                throw invalid("Hủy các suất dùng layout cũ trước khi đổi layout của sự kiện.");
+            }
+        }
+        if (selectionChanged) repository.selectLayout(eventId, venue, layout);
+
         var normalized = new UpdateEvent(
                 patch.title() == null ? null : patch.title().strip(),
                 patch.description(), patch.category(), patch.attributes(),
@@ -151,13 +187,23 @@ public class EventService {
         );
         boolean changed = repository.updateFields(eventId, normalized,
                 clock.instant().atOffset(ZoneOffset.UTC));
-        if (changed) {
+        if (changed || selectionChanged) {
             events.publishEvent(new CatalogChanged(eventId, repository.findShowtimeIds(eventId)));
             try (var ignored = MDC.putCloseable("event_id", eventId.toString())) {
                 log.info("Đã cập nhật thông tin sự kiện");
             }
         }
         return getDetails(eventId);
+    }
+
+    private void validateSelection(UUID venue, UUID layout, String category) {
+        if (venue == null || layout == null) {
+            throw invalid("Chọn sân và layout của sự kiện.");
+        }
+        if (!repository.isPublishedLayout(venue, layout, category)) {
+            throw new DomainException(ErrorCode.INVALID_SEAT_LAYOUT,
+                    "Chọn layout đã phát hành, đúng sân đang hoạt động và đúng loại sự kiện.");
+        }
     }
 
     private static void validatePoster(URI url, String field) {
@@ -198,7 +244,9 @@ public class EventService {
         return new EventDetails(
                 header,
                 List.copyOf(repository.findPriceTiers(eventId)),
-                List.copyOf(repository.findShowtimes(eventId))
+                List.copyOf(repository.findShowtimes(eventId)),
+                repository.findSelection(eventId).orElse(null),
+                repository.findZonePrices(eventId)
         );
     }
 

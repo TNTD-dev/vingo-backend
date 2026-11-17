@@ -76,29 +76,26 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         String prefix = "EV3-" + UUID.randomUUID();
         UUID venueA = createVenue(prefix + " A", "HN");
         UUID venueB = createVenue(prefix + " B", "DN");
-        UUID hallA = id(post(ADMIN + "/venues/" + venueA + "/halls", Map.of("name", "Sân chính A"), 201));
-        UUID hallB = id(post(ADMIN + "/venues/" + venueB + "/halls", Map.of("name", "Sân chính B"), 201));
+        UUID hallA = venueA;
+        UUID hallB = venueB;
         String listed = client.get().uri(builder -> builder.path(ADMIN + "/venues")
                         .queryParam("q", prefix).build()).headers(h -> h.setBearerAuth(token))
                 .exchange().expectStatus().isOk().expectBody(String.class).returnResult().getResponseBody();
-        assertThat(JsonPath.<List<String>>read(listed,
-                "$.data[?(@.id == '" + venueA + "')].halls[*].id")).containsExactly(hallA.toString());
-        assertThat(JsonPath.<List<String>>read(listed,
-                "$.data[?(@.id == '" + venueB + "')].halls[*].id")).containsExactly(hallB.toString());
+        assertThat(listed).contains(venueA.toString(),venueB.toString()).doesNotContain("halls");
 
-        String svg = Files.readString(Path.of("sources/LAYOUT__THIEN-TRUONG.svg"));
+        String svg = vingo.support.VenueImportHttpFixture.SAMPLE_DETAIL;
         UUID layoutA = importLayout(hallA, "  Bóng đá  ", svg);
         UUID layoutB = importLayout(hallB, "Concert – sân khấu đầu B", svg);
         String overview = get(ADMIN + "/seat-layouts/" + layoutA);
         assertThat(JsonPath.<String>read(overview, "$.name")).isEqualTo("Bóng đá");
-        assertThat(JsonPath.<Integer>read(overview, "$.seat_count")).isEqualTo(6699);
+        assertThat(JsonPath.<Integer>read(overview, "$.seat_count")).isEqualTo(4);
         assertThat(get(ADMIN + "/seat-layouts/" + layoutA + "/svg")).contains("ZONE__B3-T1__SEATED");
         String zone = JsonPath.<List<String>>read(overview, "$.zones[?(@.code == 'B3-T1')].id").getFirst();
         assertThat(JsonPath.<String>read(get(ADMIN + "/seat-layouts/" + layoutA + "/zones/" + zone),
                 "$.pitch_side_svg_id")).isEqualTo("PITCH_SIDE__B3-T1");
-        String layouts = get(ADMIN + "/halls/" + hallA + "/seat-layouts");
+        String layouts = get(ADMIN + "/venues/" + hallA + "/seat-layouts");
         assertThat(JsonPath.<String>read(layouts, "$.data[0].name")).isEqualTo("Bóng đá");
-        UUID event = id(post(ADMIN + "/events", Map.of("title", prefix, "category", "FOOTBALL"), 201));
+        UUID event = id(post(ADMIN + "/events", Map.of("title", prefix, "category", "CONCERT"), 201));
         publish(layoutA);
         publish(layoutB);
         UUID showA = createShowtime(event, hallA, layoutA);
@@ -107,26 +104,79 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         assertThat(JsonPath.<List<String>>read(detail, "$.showtimes[*].status")).containsOnly("DRAFT");
         assertThat(JsonPath.<List<String>>read(detail, "$.showtimes[*].venue.id"))
                 .containsExactlyInAnyOrder(venueA.toString(), venueB.toString());
-        assertInventory(showA, layoutA, 6699);
-        assertInventory(showB, layoutB, 6699);
+        assertInventory(showA, layoutA, 4);
+        assertInventory(showB, layoutB, 4);
 
         UUID layoutA2 = importLayout(hallA, "Bóng đá", SMALL_SVG.replace("STANDING__10", "STANDING__11"));
         publish(layoutA2);
-        assertInventory(showA, layoutA, 6699);
+        assertInventory(showA, layoutA, 4);
         client.patch().uri(ADMIN + "/showtimes/{id}", showA).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layoutA2))
                 .exchange().expectStatus().isOk();
         assertInventory(showA, layoutA2, 0);
-        assertInventory(showB, layoutB, 6699);
+        assertInventory(showB, layoutB, 4);
         assertThat(jdbc.sql("SELECT count(*) FROM seat s JOIN zone z ON z.id = s.zone_id WHERE z.seat_layout_id = :id")
-                .param("id", layoutA).query(Integer.class).single()).isEqualTo(6699);
-        // Suất đã công bố (SCHEDULED) và tới giờ mở bán thì khóa.
-        jdbc.sql("UPDATE showtime SET status = 'SCHEDULED' WHERE id = :id").param("id", showA).update();
+                .param("id", layoutA).query(Integer.class).single()).isEqualTo(4);
         clock.set(NOW.plusSeconds(2 * 86400));
         client.patch().uri(ADMIN + "/showtimes/{id}", showA).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layoutA))
-                .exchange().expectStatus().isEqualTo(409).expectBody()
-                .jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
+                .exchange().expectStatus().isOk();
+        assertInventory(showA, layoutA, 4);
+    }
+
+    @Test
+    void selectedFootballLayout_acceptsPricingBeforeShowtimeAndOnlyOneActiveShow() {
+        UUID venue = createVenue("Sân " + UUID.randomUUID(), "HN");
+        UUID otherVenue = createVenue("Sân " + UUID.randomUUID(), "DN");
+        UUID layout = importLayout(venue, "Bóng đá", vingo.support.VenueImportHttpFixture.SAMPLE_DETAIL);
+        UUID otherLayout = importLayout(otherVenue, "Bóng đá", vingo.support.VenueImportHttpFixture.SAMPLE_DETAIL);
+        publish(layout);
+        publish(otherLayout);
+        String path = ADMIN + "/events";
+        var selection = Map.of("title", "Trận đấu " + UUID.randomUUID(), "category", "FOOTBALL",
+                "venue_id", venue, "seat_layout_id", layout);
+        String invalidLayout = post(path, Map.of("title", "Sai loại", "category", "CONCERT",
+                "venue_id", venue, "seat_layout_id", layout), 422);
+        assertThat(JsonPath.<String>read(invalidLayout, "$.code")).isEqualTo("INVALID_SEAT_LAYOUT");
+        UUID event = id(post(path, selection, 201));
+        path += "/" + event;
+        client.patch().uri(path).headers(h -> h.setBearerAuth(token))
+                .body(Map.of("venue_id", otherVenue, "seat_layout_id", layout))
+                .exchange().expectStatus().isEqualTo(422)
+                .expectBody().jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT");
+        var tierResponse = client.put().uri(path + "/price-tiers").headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(List.of(Map.of("name", "A", "price", 100000),
+                        Map.of("name", "B", "price", 100000))).exchange();
+        tierResponse.expectStatus().isOk();
+        String saved = get(path);
+        List<String> tierIds = JsonPath.read(saved, "$.price_tiers[*].id");
+        List<String> colors = JsonPath.read(saved, "$.price_tiers[*].color");
+        assertThat(colors).hasSize(2).containsOnly(colors.getFirst());
+        List<String> zoneIds = JsonPath.read(get(ADMIN + "/seat-layouts/" + layout), "$.zones[*].id");
+        var prices = List.of(
+                Map.of("zone_id", zoneIds.get(0), "price_tier_id", tierIds.get(0), "display_name", "Khán đài mới"),
+                Map.of("zone_id", zoneIds.get(1), "price_tier_id", tierIds.get(1)));
+        client.put().uri(path + "/zone-prices").headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(prices).exchange().expectStatus().isOk();
+        client.put().uri(path + "/zone-prices").headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(List.of(Map.of("zone_id", zoneIds.getFirst(), "price_tier_id", tierIds.getFirst(),
+                                "display_name", "Không được lưu"),
+                        Map.of("zone_id", UUID.randomUUID(), "price_tier_id", tierIds.getFirst())))
+                .exchange().expectStatus().isBadRequest();
+        assertThat(get(path)).contains("Khán đài mới").doesNotContain("Không được lưu");
+        assertThat(get(ADMIN + "/seat-layouts/" + layout)).doesNotContain("Khán đài mới");
+        post(path + "/showtimes", showtimeBody(otherVenue, otherLayout), 400);
+        UUID show = createShowtime(event, venue, layout);
+        post(path + "/showtimes", showtimeBody(venue, layout), 400);
+        post(path + "/publish", null, 200);
+        client.get().uri("/api/v1/showtimes/{id}/availability", show).exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.zones[?(@.name == 'Khán đài mới')].code").isNotEmpty();
+        post(ADMIN + "/showtimes/" + show + "/cancel", Map.of("reason", "Thử hủy suất cuối"), 409);
+        post(path + "/cancel", Map.of("reason", "Thử hủy trước giờ bán"), 200);
+        String cancelled = get(path);
+        assertThat(JsonPath.<String>read(cancelled, "$.status")).isEqualTo("CANCELLED");
+        assertThat(JsonPath.<List<String>>read(cancelled, "$.showtimes[*].status")).containsExactly("CANCELLED");
     }
 
     @Test
@@ -155,7 +205,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
 
     @Test
     void layoutName_canRepeatAcrossVersionsAndRenameOnlyDraftWithoutChangingSvg() {
-        UUID hall = catalog.event().hallId();
+        UUID hall = catalog.event().venueId();
         UUID first = importLayout(hall, "Bóng đá", SMALL_SVG);
         UUID second = importLayout(hall, "Bóng đá", SMALL_SVG);
         String before = get(ADMIN + "/seat-layouts/" + first + "/svg");
@@ -175,7 +225,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {"", " ", "\t\n"})
     void layoutName_returns400ForBlankName(String name) {
-        UUID hall = catalog.event().hallId();
+        UUID hall = catalog.event().venueId();
         upload(hall, name, SMALL_SVG).expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
         UUID layout = importLayout(hall, "Tên hợp lệ", SMALL_SVG);
@@ -187,7 +237,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
 
     @Test
     void layoutName_returns400ForMissingNullOrTooLongNameAnd404ForMissingLayout() {
-        UUID hall = catalog.event().hallId();
+        UUID hall = catalog.event().venueId();
         upload(hall, null, SMALL_SVG).expectStatus().isBadRequest();
         upload(hall, "A".repeat(201), SMALL_SVG).expectStatus().isBadRequest();
         UUID layout = importLayout(hall, "A".repeat(200), SMALL_SVG);
@@ -204,11 +254,12 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
     @Test
     void layoutWrites_return404ForDeactivatedVenue() {
         UUID venue = createVenue("EV3-" + UUID.randomUUID(), "HN");
-        UUID hall = id(post(ADMIN + "/venues/" + venue + "/halls", Map.of("name", "Sân chính"), 201));
+        UUID hall = venue;
         UUID layout = importLayout(hall, "Tên hợp lệ", SMALL_SVG);
         client.delete().uri(ADMIN + "/venues/{id}", venue).headers(h -> h.setBearerAuth(token))
                 .exchange().expectStatus().isNoContent();
-        upload(hall, "Tên hợp lệ", SMALL_SVG).expectStatus().isNotFound();
+        client.post().uri(ADMIN+"/venue-imports").headers(h->h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("target_venue_id",hall)).exchange().expectStatus().isNotFound();
         client.post().uri(ADMIN + "/seat-layouts/{id}/publish", layout).headers(h -> h.setBearerAuth(token))
                 .exchange().expectStatus().isNotFound();
         client.patch().uri(ADMIN + "/seat-layouts/{id}", layout).headers(h -> h.setBearerAuth(token))
@@ -223,7 +274,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         var showtime = catalog.showtime(event, Window.notOpenYet());
         var before = showtimeSnapshot(showtime.id());
         client.post().uri(ADMIN + "/events/{id}/showtimes", event.id()).headers(h -> h.setBearerAuth(token))
-                .contentType(MediaType.APPLICATION_JSON).body(showtimeBody(event.hallId(), event.layoutId()))
+                .contentType(MediaType.APPLICATION_JSON).body(showtimeBody(event.venueId(), event.layoutId()))
                 .exchange().expectStatus().isEqualTo(409).expectBody().jsonPath("$.code").isEqualTo("EVENT_LOCKED");
         client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("starts_at", atDays(8)))
@@ -238,7 +289,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
     void showtimeChanges_refreshEventListsTimesAndLayoutCacheAfterCommit() {
         var event = catalog.event(EventSpec.defaults().withCity("HN"));
         assertThat(search.getEvent(event.id()).showtimes()).isEmpty();
-        UUID showtime = createShowtime(event.id(), event.hallId(), event.layoutId());
+        UUID showtime = createShowtime(event.id(), event.venueId(), event.layoutId());
         assertThat(search.getEvent(event.id()).showtimes()).hasSize(1);
         search.listEventShowtimes(event.id());
         search.getSeatmap(showtime, null);
@@ -257,7 +308,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         var other = catalog.event(EventSpec.defaults().withCity("DN"));
         client.patch().uri(ADMIN + "/showtimes/{id}", showtime).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("hall_id", other.hallId(), "seat_layout_id", other.layoutId()))
+                .body(Map.of("hall_id", other.venueId(), "seat_layout_id", other.layoutId()))
                 .exchange().expectStatus().isOk();
         assertThat(search.getEvent(event.id()).showtimes().getFirst().venue().city()).isEqualTo("DN");
         assertThat(search.getSeatmap(showtime, null).zones().stream().map(zone -> zone.zoneId()).toList())
@@ -294,7 +345,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         String key = "vingo:search:gen:event:" + event.id();
         String generation = redis.opsForValue().get(key);
         tx.executeWithoutResult(status -> {
-            createShowtimeDirect(event.id(), event.hallId(), event.layoutId());
+            createShowtimeDirect(event.id(), event.venueId(), event.layoutId());
             status.setRollbackOnly();
         });
         assertThat(jdbc.sql("SELECT count(*) FROM showtime WHERE event_id = :id")
@@ -318,7 +369,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         var stock = jdbc.sql("SELECT * FROM showtime_zone_stock WHERE showtime_id = :id ORDER BY zone_id")
                 .param("id", showtime.id()).query().listOfRows();
         var before = showtimeSnapshot(showtime.id());
-        UUID target = importLayout(event.hallId(), "Phiên bản mới", SMALL_SVG);
+        UUID target = importLayout(event.venueId(), "Phiên bản mới", SMALL_SVG);
         publish(target);
         client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", target))
@@ -354,7 +405,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
     private void createShowtimeDirect(UUID event, UUID hall, UUID layout) {
         var now = NOW.atOffset(ZoneOffset.UTC);
         layouts.createShowtime(event, new vingo.catalog.internal.SeatLayoutRepository.ShowtimeData(
-                hall, layout, now.plusDays(7), now.plusDays(7).plusHours(2), now.plusDays(2), now.plusDays(6)));
+                layout, now.plusDays(7), now.plusDays(7).plusHours(2), now.plusDays(2), now.plusDays(6)));
     }
 
     private UUID createVenue(String name, String city) {
@@ -362,23 +413,12 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
                 "address", "Địa chỉ kiểm thử", "city", city), 201));
     }
 
-    private UUID importLayout(UUID hall, String name, String svg) {
-        return id(upload(hall, name, svg).expectStatus().isCreated().expectBody(String.class)
-                .returnResult().getResponseBody());
+    private UUID importLayout(UUID venue,String name,String svg) {
+        return vingo.support.VenueImportHttpFixture.importLayout(client,token,venue,name,svg);
     }
 
-    private RestTestClient.ResponseSpec upload(UUID hall, String name, String svg) {
-        var parts = new MultipartBodyBuilder();
-        if (name != null) {
-            parts.part("name", name);
-        }
-        parts.part("file", new ByteArrayResource(svg.getBytes(StandardCharsets.UTF_8)) {
-            @Override
-            public String getFilename() { return "layout.svg"; }
-        }).contentType(MediaType.parseMediaType("image/svg+xml"));
-        return client.post().uri(ADMIN + "/halls/{id}/seat-layouts/import", hall)
-                .headers(h -> h.setBearerAuth(token)).contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(parts.build()).exchange();
+    private RestTestClient.ResponseSpec upload(UUID venue,String name,String svg) {
+        return vingo.support.VenueImportHttpFixture.importResponse(client,token,venue,name,svg);
     }
 
     private void publish(UUID layout) {

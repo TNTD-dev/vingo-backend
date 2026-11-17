@@ -13,7 +13,6 @@ import vingo.catalog.ShowtimeStatus;
 public record ShowtimeResult(
         UUID id,
         UUID eventId,
-        UUID hallId,
         UUID seatLayoutId,
         OffsetDateTime startsAt,
         OffsetDateTime endsAt,

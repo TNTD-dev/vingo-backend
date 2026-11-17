@@ -26,6 +26,17 @@ import vingo.catalog.EventService.UpdateEvent;
 public class EventRepository {
 
     private final JdbcClient jdbc;
+
+    public boolean hasMultipleActiveShowtimes(UUID eventId) {
+        return jdbc.sql("""
+                SELECT EXISTS (
+                    SELECT 1 FROM showtime
+                    WHERE event_id = :id AND status <> 'CANCELLED'
+                    OFFSET 1
+                )
+                """).param("id", eventId).query(Boolean.class).single();
+    }
+
     private final JsonMapper json;
     private static final Logger log
             = LoggerFactory.getLogger(EventRepository.class);
@@ -33,6 +44,45 @@ public class EventRepository {
     public EventRepository(JdbcClient jdbc, JsonMapper json) {
         this.jdbc = jdbc;
         this.json = json;
+    }
+
+    public Optional<EventDetails.LayoutSelection> findSelection(UUID eventId) {
+        return jdbc.sql("SELECT venue_id, seat_layout_id FROM event WHERE id=:id AND seat_layout_id IS NOT NULL")
+                .param("id", eventId).query((rs, row) -> new EventDetails.LayoutSelection(
+                        rs.getObject("venue_id", UUID.class), rs.getObject("seat_layout_id", UUID.class))).optional();
+    }
+
+    public boolean isPublishedLayout(UUID venue, UUID layout, String category) {
+        return jdbc.sql("""
+                SELECT EXISTS(SELECT 1 FROM seat_layout l JOIN venue v ON v.id=l.venue_id
+                JOIN venue_overview o ON o.id=l.overview_id
+                WHERE l.id=:layout AND v.id=:venue AND v.deleted_at IS NULL
+                  AND l.status='PUBLISHED' AND o.status='PUBLISHED' AND l.layout_type=:category)
+                """).param("venue", venue).param("layout", layout).param("category", category)
+                .query(Boolean.class).single();
+    }
+
+    public boolean hasConflictingShowtimes(UUID event, UUID layout) {
+        return jdbc.sql("""
+                SELECT EXISTS(SELECT 1 FROM showtime
+                WHERE event_id=:event AND status<>'CANCELLED' AND seat_layout_id<>:layout)
+                """).param("event", event).param("layout", layout).query(Boolean.class).single();
+    }
+
+    public void selectLayout(UUID event, UUID venue, UUID layout) {
+        jdbc.sql("UPDATE event SET venue_id=:venue, seat_layout_id=:layout WHERE id=:event")
+                .param("event", event).param("venue", venue).param("layout", layout).update();
+        jdbc.sql("""
+                DELETE FROM zone_price WHERE event_id=:event AND
+                zone_id NOT IN (SELECT id FROM zone WHERE seat_layout_id=:layout)
+                """).param("event", event).param("layout", layout).update();
+    }
+
+    public List<vingo.catalog.ZonePriceChange> findZonePrices(UUID event) {
+        return jdbc.sql("SELECT zone_id, price_tier_id, display_name FROM zone_price WHERE event_id=:event ORDER BY zone_id")
+                .param("event", event).query((rs, row) -> new vingo.catalog.ZonePriceChange(
+                        rs.getObject("zone_id", UUID.class), rs.getObject("price_tier_id", UUID.class),
+                        rs.getString("display_name"))).list();
     }
 
     public UUID insertDraft(CreateEvent input, OffsetDateTime now) {
@@ -189,7 +239,7 @@ public class EventRepository {
 
     public List<EventDetails.Session> findShowtimes(UUID eventId) {
         return jdbc.sql("""
-                SELECT s.id, s.event_id, s.hall_id, s.seat_layout_id,
+                SELECT s.id, s.event_id, s.seat_layout_id,
                         s.status, s.starts_at, s.ends_at,
                         s.sale_opens_at, s.sale_closes_at,
                         v.id AS venue_id,
@@ -198,8 +248,7 @@ public class EventRepository {
                         v.address AS venue_address,
                         v.city AS venue_city
                 FROM showtime s
-                JOIN hall h ON h.id = s.hall_id
-                JOIN venue v ON v.id = h.venue_id
+                JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
                 WHERE s.event_id = :id
                 ORDER BY s.starts_at, s.id
                 """)
@@ -207,7 +256,6 @@ public class EventRepository {
                 .query((rs, row) -> new EventDetails.Session(
                         rs.getObject("id", UUID.class),
                         rs.getObject("event_id", UUID.class),
-                        rs.getObject("hall_id", UUID.class),
                         rs.getObject("seat_layout_id", UUID.class),
                         rs.getString("status"),
                         rs.getObject("starts_at", OffsetDateTime.class),

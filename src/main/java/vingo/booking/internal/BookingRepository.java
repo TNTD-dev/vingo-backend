@@ -267,9 +267,17 @@ public class BookingRepository {
     // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
     public Optional<Sale> findSale(UUID showtimeId, OffsetDateTime now) {
         return jdbc.sql("""
+                        WITH locked_event AS MATERIALIZED (
+                            SELECT e.id, e.status, e.max_tickets_per_order
+                            FROM event e JOIN showtime source ON source.event_id = e.id
+                            WHERE source.id = :showtime
+                            FOR SHARE OF e
+                        )
                         SELECT s.status, s.sale_opens_at, s.sale_closes_at, s.ends_at,
                                e.status AS event_status, e.max_tickets_per_order
-                        FROM showtime s JOIN event e ON e.id = s.event_id WHERE s.id = :showtime
+                        FROM locked_event e JOIN showtime s ON s.event_id = e.id
+                        WHERE s.id = :showtime
+                        FOR SHARE OF s
                         """)
                 .param("showtime", showtimeId)
                 .query((rs, row) -> new Sale(rs.getString("status"),

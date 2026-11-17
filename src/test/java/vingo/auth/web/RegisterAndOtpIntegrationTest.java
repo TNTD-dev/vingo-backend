@@ -21,11 +21,14 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 
+import vingo.api.model.ForgotPasswordRequest;
 import vingo.api.model.LoginRequest;
 import vingo.api.model.OtpSession;
 import vingo.api.model.Problem;
+import vingo.api.model.RefreshTokenRequest;
 import vingo.api.model.RegisterRequest;
 import vingo.api.model.ResendOtpRequest;
+import vingo.api.model.ResetPasswordRequest;
 import vingo.api.model.TokenPair;
 import vingo.api.model.User;
 import vingo.api.model.VerifyOtpRequest;
@@ -50,6 +53,9 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     private static final String REGISTER = "/api/v1/auth/register";
     private static final String VERIFY_OTP = "/api/v1/auth/otp/verify";
     private static final String RESEND_OTP = "/api/v1/auth/otp/resend";
+    private static final String FORGOT_PASSWORD = "/api/v1/auth/password/forgot";
+    private static final String RESET_PASSWORD = "/api/v1/auth/password/reset";
+    private static final String REFRESH = "/api/v1/auth/refresh";
     private static final String LOGIN = "/api/v1/auth/login";
     private static final String PASSWORD = "StrongPassword#2026";
     private static final Pattern OTP_PATTERN = Pattern.compile("<strong>(\\d{6})</strong>");
@@ -372,6 +378,93 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         OtpSession recovered = registerUser(email, phone);
         assertThat(recovered).isNotNull();
         assertThat(recovered.getOtpSessionId()).isNotNull();
+    }
+
+    @Test
+    void forgotAndResetPassword_updatesPassword_andRevokesAllActiveSessions() {
+        String email = "reset." + UUID.randomUUID() + "@vingo.local";
+        OtpSession verifySession = registerUser(email, randomPhone());
+        String verifyOtp = extractOtp(mailSender.sent.getLast().payload().html());
+
+        TokenPair initialTokens = client.post().uri(VERIFY_OTP)
+                .body(new VerifyOtpRequest(verifySession.getOtpSessionId(), verifyOtp))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(TokenPair.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(initialTokens).isNotNull();
+
+        OtpSession resetSession = client.post().uri(FORGOT_PASSWORD)
+                .body(new ForgotPasswordRequest(email))
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody(OtpSession.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(resetSession).isNotNull();
+        assertThat(resetSession.getOtpSessionId()).isNotNull();
+        String resetOtp = extractOtp(mailSender.sent.getLast().payload().html());
+
+        // Không được dùng phiên RESET cho /auth/otp/verify
+        Problem wrongEndpoint = client.post().uri(VERIFY_OTP)
+                .body(new VerifyOtpRequest(resetSession.getOtpSessionId(), resetOtp))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(wrongEndpoint).isNotNull();
+        assertThat(wrongEndpoint.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
+
+        String newPassword = "BrandNewPassword#2026";
+        client.post().uri(RESET_PASSWORD)
+                .body(new ResetPasswordRequest(resetSession.getOtpSessionId(), resetOtp, newPassword))
+                .exchange()
+                .expectStatus().isNoContent();
+
+        // Cả access token và refresh token cũ đều mất hiệu lực.
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(initialTokens.getAccessToken()))
+                .exchange().expectStatus().isUnauthorized();
+        client.post().uri(REFRESH)
+                .body(new RefreshTokenRequest(initialTokens.getRefreshToken()))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        // Mật khẩu cũ không còn dùng được, mật khẩu mới đăng nhập thành công
+        client.post().uri(LOGIN)
+                .body(new LoginRequest(email, PASSWORD))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.post().uri(LOGIN)
+                .body(new LoginRequest(email, newPassword))
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void forgotPassword_returns202WithoutSendingEmail_whenEmailDoesNotExist() {
+        OtpSession fakeSession = client.post().uri(FORGOT_PASSWORD)
+                .body(new ForgotPasswordRequest("nobody." + UUID.randomUUID() + "@vingo.local"))
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody(OtpSession.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(fakeSession).isNotNull();
+        assertThat(fakeSession.getOtpSessionId()).isNotNull();
+        assertThat(mailSender.sent).isEmpty();
+
+        Problem invalidReset = client.post().uri(RESET_PASSWORD)
+                .body(new ResetPasswordRequest(fakeSession.getOtpSessionId(), "123456", "BrandNewPassword#2026"))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(invalidReset).isNotNull();
+        assertThat(invalidReset.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
     }
 
     private OtpSession registerUser(String email, String phone) {

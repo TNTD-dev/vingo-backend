@@ -51,7 +51,9 @@ class SeatLayoutNameMigrationTest extends IntegrationTest {
                                 now()+interval '1 day',now()+interval '6 days','DRAFT') RETURNING id
                         """).param("event", event).param("hall", hall).param("layout", layout)
                         .query(UUID.class).single();
-                Flyway.configure().dataSource(migrationDataSource).schemas(schema).defaultSchema(schema).load().migrate();
+                // Dừng trước sân v2: từ 1910 trigger bất biến chặn mọi UPDATE layout PUBLISHED trước khi tới CHECK tên.
+                Flyway.configure().dataSource(migrationDataSource).schemas(schema).defaultSchema(schema)
+                        .target("20261116.1800").load().migrate();
                 assertThat(isolated.sql("SELECT name FROM seat_layout WHERE id = :id")
                         .param("id", layout).query(String.class).single()).isEqualTo("Sơ đồ v" + version);
                 assertThat(isolated.sql("SELECT seat_layout_id FROM showtime WHERE id = :id")

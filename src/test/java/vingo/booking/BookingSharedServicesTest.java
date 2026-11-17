@@ -100,19 +100,8 @@ class BookingSharedServicesTest extends BookingTestSupport {
 
     @Test
     void holdSeats_suggestsRequestedQuantityInEachSeatedZone() {
-        var showtime = catalog.onSaleShowtime();
-        var event = showtime.event();
-        UUID secondZone = jdbc.sql("""
-                        INSERT INTO zone (seat_layout_id, name, kind, capacity)
-                        VALUES (:layout, 'B', 'SEATED', 4) RETURNING id
-                        """)
-                .param("layout", event.layoutId()).query(UUID.class).single();
-        jdbc.sql("INSERT INTO zone_price (event_id, zone_id, price_tier_id) VALUES (:event, :zone, :tier)")
-                .param("event", event.id()).param("zone", secondZone).param("tier", event.vipPriceTierId()).update();
-        for (int number = 5; number <= 8; number++) {
-            jdbc.sql("UPDATE seat SET zone_id = :zone WHERE id = :seat")
-                    .param("zone", secondZone).param("seat", event.seat(number)).update();
-        }
+        var event=catalog.eventWithTwoSeatedZones();
+        var showtime=catalog.showtime(event,Window.onSale());
         UUID otherOrder = catalog.order(catalog.buyer(), showtime.id(), "PENDING", catalog.now().plusMinutes(10));
         for (int number : new int[]{1, 5}) {
             catalog.setSeat(showtime.id(), event.seat(number), "HELD", otherOrder, catalog.now().plusMinutes(10));

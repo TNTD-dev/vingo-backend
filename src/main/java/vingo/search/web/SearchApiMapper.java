@@ -99,7 +99,6 @@ class SearchApiMapper {
         return new Showtime()
                 .id(r.id())
                 .eventId(r.eventId())
-                .hallId(r.hallId())
                 .seatLayoutId(r.seatLayoutId())
                 .startsAt(r.startsAt())
                 .endsAt(r.endsAt())
@@ -154,6 +153,7 @@ class SearchApiMapper {
     private GetAvailability200ResponseZonesInner toZoneAvailability(ZoneAvailabilityResult z) {
         GetAvailability200ResponseZonesInner zone = new GetAvailability200ResponseZonesInner()
                 .zoneId(z.zoneId())
+                .code(z.code())
                 .name(z.name())
                 .seatsLeft(z.seatsLeft());
         z.tier().ifPresent(t -> zone.tier(toPriceTier(t)));

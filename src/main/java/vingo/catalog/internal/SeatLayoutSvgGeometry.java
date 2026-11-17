@@ -1,6 +1,8 @@
 package vingo.catalog.internal;
 
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Area;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
@@ -26,6 +28,34 @@ final class SeatLayoutSvgGeometry {
 
     SeatLayoutSvgGeometry(Map<String, Element> elements) {
         this.elements = elements;
+    }
+
+    /** Diện tích fill thực, gồm use, winding và mask thuộc tập hỗ trợ. */
+    Area area(Element element) {
+        return new SeatLayoutSvgShapeResolver(elements).area(element);
+    }
+
+    /** Ghế là vật thể hình học ngay cả khi SVG đặt fill=none để trang trí. */
+    Area seatArea(Element element) {
+        try {
+            for (Node node = element; node instanceof Element ancestor; node = node.getParentNode()) {
+                if (ancestor.hasAttribute("mask")) {
+                    throw SeatLayoutSvgParser.invalid(element.getAttribute("id"), "UNSUPPORTED_COLLISION_GEOMETRY",
+                            "Không hỗ trợ mask che hình ghế khi kiểm tra collision.");
+                }
+            }
+            double radius = positive(element, "r");
+            var circle = new Ellipse2D.Double(number(element, "cx", 0) - radius,
+                    number(element, "cy", 0) - radius, radius * 2, radius * 2);
+            AffineTransform transform = elementTransform(element, parentTransform(element));
+            requireFinite(transform);
+            Area result = new Area(transform.createTransformedShape(circle));
+            if (result.isEmpty()) throw new IllegalArgumentException();
+            return result;
+        } catch (IllegalArgumentException ex) {
+            throw SeatLayoutSvgParser.invalid(element.getAttribute("id"), "UNSUPPORTED_COLLISION_GEOMETRY",
+                    "Không phân giải được hình ghế hoặc transform bị suy biến.");
+        }
     }
 
     Bounds bounds(Element zone) {
@@ -135,7 +165,7 @@ final class SeatLayoutSvgGeometry {
         return result;
     }
 
-    private static AffineTransform readTransform(String source) {
+    static AffineTransform readTransform(String source) {
         AffineTransform result = new AffineTransform();
         var matcher = TRANSFORM.matcher(source);
         int end = 0;
@@ -171,10 +201,17 @@ final class SeatLayoutSvgGeometry {
                 }
                 default -> throw new IllegalArgumentException();
             });
+            requireFinite(result);
             end = matcher.end();
         }
         requireSeparator(source.substring(end));
         return result;
+    }
+
+    static void requireFinite(AffineTransform transform) {
+        double[] values = new double[6];
+        transform.getMatrix(values);
+        for (double value : values) if (!Double.isFinite(value)) throw new IllegalArgumentException("Transform không hữu hạn");
     }
 
     private static void requireLength(double[] args, int min, int max) {
@@ -183,7 +220,7 @@ final class SeatLayoutSvgGeometry {
         }
     }
 
-    private static Path2D points(Element element) {
+    static Path2D points(Element element) {
         List<String> values = tokens(element.getAttribute("points"));
         if (values.size() < 4 || values.size() % 2 != 0) {
             throw new IllegalArgumentException();
@@ -199,7 +236,7 @@ final class SeatLayoutSvgGeometry {
         return shape;
     }
 
-    private static Path2D path(String source) {
+    static Path2D path(String source) {
         List<String> values = tokens(source);
         var shape = new Path2D.Double();
         char command = 0;

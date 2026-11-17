@@ -26,13 +26,11 @@ import vingo.api.AdminCatalogApi;
 import vingo.api.model.AdminEventPage;
 import vingo.api.model.AdminEventSummary;
 import vingo.api.model.CityCode;
-import vingo.api.model.CreateHallRequest;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventCreateInput;
 import vingo.api.model.EventDetail;
 import vingo.api.model.EventPatchInput;
 import vingo.api.model.EventStatus;
-import vingo.api.model.Hall;
 import vingo.api.model.ListVenues200Response;
 import vingo.api.model.PriceTier;
 import vingo.api.model.PriceTierInput;
@@ -141,25 +139,9 @@ class AdminVenueController implements AdminCatalogApi {
                 input.getPosterDesktopUrl(),
                 input.getAgeLimit(),
                 input.getMaxTicketsPerOrder()
-        ));
+        ), input.getVenueId(), input.getSeatLayoutId());
 
-        var data = created.data();
-
-        var response = new EventDetail()
-                .id(created.id())
-                .status(EventStatus.DRAFT)
-                .title(data.title())
-                .description(data.description())
-                .category(EventCategory.fromValue(data.category()))
-                .attributes(data.attributes())
-                .posterMobileUrl(data.posterMobileUrl())
-                .posterDesktopUrl(data.posterDesktopUrl())
-                .ageLimit(data.ageLimit())
-                .maxTicketsPerOrder(data.maxTicketsPerOrder())
-                .priceTiers(List.of())
-                .showtimes(List.of());
-
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(toAdminEventDetail(eventService.getDetails(created.id())));
     }
 
     @Override
@@ -172,27 +154,7 @@ class AdminVenueController implements AdminCatalogApi {
         VenueService.VenuePage page
                 = venues.list(q, city, cursor, limit);
 
-        var venueIds = page.data().stream()
-                .map(VenueRow::id)
-                .toList();
-
-        var hallsByVenue = venues.listHallsForVenues(venueIds);
-
-        var data = page.data().stream()
-                .map(row -> {
-                    var halls = hallsByVenue
-                            .getOrDefault(row.id(), List.of())
-                            .stream()
-                            .map(hall -> new Hall()
-                                    .id(hall.id())
-                                    .venueId(hall.venueId())
-                                    .name(hall.name()))
-                            .toList();
-
-                    return toApi(row).halls(halls);
-                })
-                .toList();
-
+        var data = page.data().stream().map(this::toApi).toList();
         return ResponseEntity.ok(new ListVenues200Response()
                 .data(data)
                 .nextCursor(page.nextCursor()));
@@ -218,53 +180,6 @@ class AdminVenueController implements AdminCatalogApi {
     public ResponseEntity<Void> deleteVenue(UUID venueId) {
         venues.delete(venueId);
         return ResponseEntity.noContent().build();
-    }
-
-    @Override
-    public ResponseEntity<Hall> createHall(UUID venueId, CreateHallRequest input) {
-        var created = venues.createHall(venueId, input.getName());
-
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(new Hall()
-                        .id(created.id())
-                        .venueId(created.venueId())
-                        .name(created.name()));
-    }
-
-    @Override
-    public ResponseEntity<SeatLayout> importSeatLayoutSvg(UUID hallId, MultipartFile file, String name) {
-        if (file.isEmpty()) {
-            throw new DomainException(ErrorCode.VALIDATION_ERROR, "File SVG không được để trống.");
-        }
-        String contentType = file.getContentType();
-        if (!isSvg(contentType)) {
-            throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE, "File phải có kiểu image/svg+xml.");
-        }
-
-        byte[] input;
-        try {
-            input = file.getBytes();
-        } catch (IOException ex) {
-            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Không đọc được file đã tải lên.");
-        }
-        var created = layouts.importSvg(hallId, name, input);
-        return ResponseEntity.status(HttpStatus.CREATED).body(new SeatLayout()
-                .id(created.id())
-                .hallId(created.hallId())
-                .name(created.name())
-                .version(created.version())
-                .schemaVersion(created.schemaVersion())
-                .status(SeatLayout.StatusEnum.DRAFT)
-                .zoneCount(created.zoneCount())
-                .seatCount(created.seatCount()));
-    }
-
-    private static boolean isSvg(String contentType) {
-        try {
-            return contentType != null && SVG.equalsTypeAndSubtype(MediaType.parseMediaType(contentType));
-        } catch (InvalidMediaTypeException ex) {
-            return false;
-        }
     }
 
     @Override
@@ -330,7 +245,7 @@ class AdminVenueController implements AdminCatalogApi {
         var header = overview.header();
         return ResponseEntity.ok(new SeatLayoutOverview()
                 .id(header.id())
-                .hallId(header.hallId())
+                .venueId(header.venueId()).overviewId(header.overviewId()).layoutType(header.layoutType() == null ? null : vingo.api.model.LayoutType.fromValue(header.layoutType())).legacy(header.overviewId() == null)
                 .name(header.name())
                 .status(SeatLayoutOverview.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
@@ -364,7 +279,7 @@ class AdminVenueController implements AdminCatalogApi {
                 .capacity(zone.capacity())
                 .svgId(zone.svgId())
                 .contentSvgId(zone.contentSvgId())
-                .pitchSideSvgId(zone.pitchSideSvgId())
+                .pitchSideSvgId(zone.pitchSideSvgId()).overviewAreaId(zone.overviewAreaId())
                 .bounds(toBounds(zone.bounds()))
                 .rows(detail.rows() == null ? null : detail.rows().stream()
                         .map(row -> new SeatLayoutZoneDetailAllOfRows()
@@ -392,6 +307,7 @@ class AdminVenueController implements AdminCatalogApi {
         response.setSvgId(zone.svgId());
         response.setContentSvgId(zone.contentSvgId());
         response.setPitchSideSvgId(zone.pitchSideSvgId());
+        response.setOverviewAreaId(zone.overviewAreaId());
         response.setBounds(toBounds(zone.bounds()));
         return response;
     }
@@ -414,8 +330,8 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
-    public ResponseEntity<SeatLayoutPage> listSeatLayouts(UUID hallId, String cursor, Integer limit) {
-        var page = layouts.listByHall(hallId, cursor, limit);
+    public ResponseEntity<SeatLayoutPage> listSeatLayouts(UUID venueId, vingo.api.model.LayoutType layoutType, String status, Boolean includeLegacy, String cursor, Integer limit) {
+        var page = layouts.listByVenue(venueId, layoutType == null ? null : layoutType.getValue(), status, Boolean.TRUE.equals(includeLegacy), cursor, limit);
         return ResponseEntity.ok(new SeatLayoutPage()
                 .data(page.data().stream().map(AdminVenueController::toSeatLayout).toList())
                 .nextCursor(page.nextCursor()));
@@ -444,7 +360,7 @@ class AdminVenueController implements AdminCatalogApi {
                 input.getTitle(), input.getDescription(), input.getCategory(), input.getAttributes(),
                 input.getPosterMobileUrl(), input.getPosterDesktopUrl(), input.getAgeLimit(),
                 input.getMaxTicketsPerOrder()
-        ));
+        ), input.getVenueId(), input.getSeatLayoutId());
         return ResponseEntity.ok(toAdminEventDetail(result));
     }
 
@@ -456,6 +372,10 @@ class AdminVenueController implements AdminCatalogApi {
                 = clock.instant().atOffset(ZoneOffset.UTC);
 
         var response = new EventDetail()
+                .venueId(result.selection() == null ? null : result.selection().venueId())
+                .seatLayoutId(result.selection() == null ? null : result.selection().layoutId())
+                .zonePrices(result.zonePrices().stream().map(price -> new ZonePriceInput()
+                        .zoneId(price.zoneId()).priceTierId(price.priceTierId()).displayName(price.displayName())).toList())
                 .id(header.id())
                 .status(EventStatus.fromValue(header.status()))
                 .title(data.title())
@@ -483,7 +403,7 @@ class AdminVenueController implements AdminCatalogApi {
     private static SeatLayout toSeatLayout(LayoutHeaderRow header) {
         return new SeatLayout()
                 .id(header.id())
-                .hallId(header.hallId())
+                .venueId(header.venueId()).overviewId(header.overviewId()).layoutType(header.layoutType() == null ? null : vingo.api.model.LayoutType.fromValue(header.layoutType())).legacy(header.overviewId() == null)
                 .name(header.name())
                 .status(SeatLayout.StatusEnum.fromValue(header.status()))
                 .zoneCount(header.zoneCount())
@@ -495,7 +415,6 @@ class AdminVenueController implements AdminCatalogApi {
 
     private static ShowtimeData toShowtimeData(ShowtimeInput input) {
         return new ShowtimeData(
-                input.getHallId(),
                 input.getSeatLayoutId(),
                 input.getStartsAt(),
                 input.getEndsAt(),
@@ -512,7 +431,6 @@ class AdminVenueController implements AdminCatalogApi {
                 .status(ShowtimeStatus.fromValue(vingo.catalog.ShowtimeStatus.of(row.status(),
                         data.saleOpensAt(), data.saleClosesAt(), data.endsAt(),
                         OffsetDateTime.now(clock)).name()))
-                .hallId(data.hallId())
                 .seatLayoutId(data.seatLayoutId())
                 .startsAt(data.startsAt())
                 .endsAt(data.endsAt())
@@ -535,7 +453,6 @@ class AdminVenueController implements AdminCatalogApi {
         return new Showtime()
                 .id(session.id())
                 .eventId(session.eventId())
-                .hallId(session.hallId())
                 .seatLayoutId(session.seatLayoutId())
                 .status(ShowtimeStatus.fromValue(status.name()))
                 .startsAt(session.startsAt())
@@ -651,7 +568,8 @@ class AdminVenueController implements AdminCatalogApi {
         var changes = input.stream()
                 .map(item -> new ZonePriceChange(
                         item.getZoneId(),
-                        item.getPriceTierId()
+                        item.getPriceTierId(),
+                        item.getDisplayName()
                 ))
                 .toList();
 
@@ -673,5 +591,17 @@ class AdminVenueController implements AdminCatalogApi {
     public ResponseEntity<EventDetail> publishEvent(UUID eventId) {
         publishing.publish(eventId);
         return ResponseEntity.ok(toAdminEventDetail(eventService.getDetails(eventId)));
+    }
+
+    @Override
+    public ResponseEntity<Void> cancelEvent(UUID id, vingo.api.model.CancelEventRequest request) {
+        publishing.cancelEvent(id, currentUser.require().id(), request.getReason());
+        return ResponseEntity.ok().build();
+    }
+
+    @Override
+    public ResponseEntity<Void> cancelShowtime(UUID id, vingo.api.model.CancelEventRequest request) {
+        publishing.cancelShowtime(id, currentUser.require().id(), request.getReason());
+        return ResponseEntity.ok().build();
     }
 }

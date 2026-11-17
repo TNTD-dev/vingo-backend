@@ -166,8 +166,8 @@ public class VenueRepository {
                 SELECT EXISTS (
                     SELECT 1
                     FROM showtime s
-                    JOIN hall h ON h.id = s.hall_id
-                    WHERE h.venue_id = :venueId
+                    JOIN seat_layout l ON l.id = s.seat_layout_id
+                    WHERE l.venue_id = :venueId
                       AND s.status IN ('DRAFT', 'SCHEDULED')
                       AND s.ends_at > :now
                 )
@@ -189,44 +189,4 @@ public class VenueRepository {
                 .update() == 1;
     }
 
-    public record HallRow(UUID id, UUID venueId, String name) {}
-
-    public Optional<HallRow> insertHall(UUID venueId, String name) {
-        return jdbc.sql("""
-                INSERT INTO hall (venue_id, name)
-                VALUES (:venueId, :name)
-                ON CONFLICT (venue_id, name) DO NOTHING
-                RETURNING id, venue_id, name
-                """)
-                .param("venueId", venueId)
-                .param("name", name)
-                .query((rs, rowNumber) -> new HallRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getObject("venue_id", UUID.class),
-                        rs.getString("name")
-                ))
-                .optional();
-    }
-
-    public List<HallRow> findHallsForVenues(List<UUID> venueIds) {
-        if (venueIds.isEmpty()) {
-            return List.of();
-        }
-
-        return jdbc.sql("""
-                SELECT h.id, h.venue_id, h.name
-                FROM hall h
-                JOIN venue v ON v.id = h.venue_id
-                WHERE h.venue_id IN (:venueIds)
-                AND v.deleted_at IS NULL
-                ORDER BY h.name, h.id
-                """)
-                .param("venueIds", venueIds)
-                .query((rs, row) -> new HallRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getObject("venue_id", UUID.class),
-                        rs.getString("name")
-                ))
-                .list();
-    }
 }

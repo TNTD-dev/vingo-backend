@@ -61,18 +61,17 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         String venueName = "CP7-" + UUID.randomUUID();
         UUID venue = id(request("POST", ADMIN + "/venues", token, Map.of(
                 "name", venueName, "type", "STADIUM", "address", "Địa chỉ kiểm thử CP7", "city", "HN"), 201));
-        UUID hall = id(request("POST", ADMIN + "/venues/" + venue + "/halls", token,
-                Map.of("name", "Sân chính"), 201));
+        UUID hall = venue;
         request("PATCH", ADMIN + "/venues/" + venue, token, Map.of("info", Map.of("cp", "CP7")), 200);
         assertThat(JsonPath.<List<String>>read(request("GET", ADMIN + "/venues?q=" + venueName,
                 token, null, 200), "$.data[*].id")).containsExactly(venue.toString());
 
-        String source = Files.readString(Path.of("sources/LAYOUT__THIEN-TRUONG.svg"));
+        String source = vingo.support.VenueImportHttpFixture.SAMPLE_DETAIL;
         UUID v1 = importSvg(token, hall, source);
         String overviewV1 = request("GET", LAYOUTS + v1, token, null, 200);
         assertThat(JsonPath.<String>read(overviewV1, "$.status")).isEqualTo("DRAFT");
-        assertThat(JsonPath.<Integer>read(overviewV1, "$.zone_count")).isEqualTo(27);
-        assertThat(JsonPath.<Integer>read(overviewV1, "$.seat_count")).isEqualTo(6699);
+        assertThat(JsonPath.<Integer>read(overviewV1, "$.zone_count")).isEqualTo(2);
+        assertThat(JsonPath.<Integer>read(overviewV1, "$.seat_count")).isEqualTo(4);
         assertThat(new BigDecimal(JsonPath.read(overviewV1, "$.view_box.width").toString()))
                 .isEqualByComparingTo("1600");
         assertThat(new BigDecimal(JsonPath.read(overviewV1, "$.view_box.height").toString()))
@@ -93,7 +92,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
 
         UUID event = jdbc.sql("""
                 INSERT INTO event (title, category, status)
-                VALUES ('CP7 fixture', 'FOOTBALL', 'DRAFT') RETURNING id
+                VALUES ('CP7 fixture', 'CONCERT', 'DRAFT') RETURNING id
                 """).query(UUID.class).single();
         String createPath = ADMIN + "/events/" + event + "/showtimes";
         var bodyV1 = showtimeBody(hall, v1, now);
@@ -119,12 +118,14 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         assertThat(request("GET", LAYOUTS + v1 + "/seats.csv", token, null, 200)).isEqualTo(seatsCsv);
         assertCode(request("GET", LAYOUTS + v1 + "/zones/" + standingV2, token, null, 404), "NOT_FOUND");
 
-        // Suất đã công bố (SCHEDULED) và tới giờ mở bán thì khóa đổi sơ đồ.
+        // Suất SCHEDULED đổi được sơ đồ trước giờ mở bán và bị khóa kể từ giờ mở bán.
         jdbc.sql("UPDATE showtime SET status = 'SCHEDULED' WHERE id = :id").param("id", showtimeA).update();
+        clock.set(now.plus(Duration.ofDays(2)).minusSeconds(1));
+        request("PATCH", ADMIN + "/showtimes/" + showtimeA, token, Map.of("seat_layout_id", v2), 200);
+        assertInventory(showtimeA, v2, standingV2, 1001);
         clock.set(now.plus(Duration.ofDays(2)));
-        assertCode(request("PATCH", ADMIN + "/showtimes/" + showtimeA, token,
-                Map.of("seat_layout_id", v2), 409), "SHOWTIME_LOCKED");
-        assertInventory(showtimeA, v1, standingV1, 1000);
+        assertCode(request("PATCH", ADMIN + "/showtimes/" + showtimeA, token, Map.of("seat_layout_id", v1), 409),
+                "SHOWTIME_LOCKED");
         String republished = request("POST", LAYOUTS + v1 + "/publish", token, null, 200);
         assertThat(JsonPath.<String>read(republished, "$.published_at"))
                 .isEqualTo(JsonPath.<String>read(publishedV1, "$.published_at"));
@@ -134,8 +135,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         request("DELETE", ADMIN + "/venues/" + venue, token, null, 204);
         assertThat(JsonPath.<List<?>>read(request("GET", ADMIN + "/venues?q=" + venueName,
                 token, null, 200), "$.data")).isEmpty();
-        assertCode(request("POST", ADMIN + "/venues/" + venue + "/halls", token,
-                Map.of("name", "Không còn hoạt động"), 404), "NOT_FOUND");
+        assertCode(request("POST", ADMIN + "/venue-imports", token, Map.of("target_venue_id",venue),404),"NOT_FOUND");
 
         writeHandoffSamples(Map.of(
                 "overview-v1.json", request("GET", LAYOUTS + v1, token, null, 200),
@@ -181,13 +181,8 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
                 "starts_at", start.plusDays(7).toString(), "ends_at", start.plusDays(7).plusHours(2).toString());
     }
 
-    private UUID importSvg(String token, UUID hall, String svg) throws Exception {
-        String boundary = "CP7-" + UUID.randomUUID();
-        String body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nCP7\r\n"
-                + "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\"\r\n"
-                + "Content-Type: image/svg+xml\r\n\r\n" + svg + "\r\n--" + boundary + "--\r\n";
-        return id(exchange("POST", ADMIN + "/halls/" + hall + "/seat-layouts/import", token,
-                body, "multipart/form-data; boundary=" + boundary, 201));
+    private UUID importSvg(String token,UUID venue,String svg) throws Exception {
+        return vingo.support.VenueImportHttpFixture.importLayout(client,token,venue,"CP7",svg);
     }
 
     private String request(String method, String path, String token, Map<String, ?> body, int status)
@@ -226,14 +221,14 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         var expectedSeats = jdbc.sql("""
                 SELECT s.id FROM seat s JOIN zone z ON z.id = s.zone_id WHERE z.seat_layout_id = :id
                 """).param("id", layout).query(UUID.class).list();
-        assertThat(expectedSeats).hasSize(6699);
+        assertThat(expectedSeats).hasSize(4);
         assertThat(jdbc.sql("SELECT seat_id FROM showtime_seat WHERE showtime_id = :id AND status = 'AVAILABLE'")
                 .param("id", showtime).query(UUID.class).list()).containsExactlyInAnyOrderElementsOf(expectedSeats);
         var expectedStock = jdbc.sql("""
                 SELECT id, capacity FROM zone WHERE seat_layout_id = :id AND kind = 'STANDING'
                 """).param("id", layout)
                 .query((rs, row) -> new Stock(rs.getObject("id", UUID.class), rs.getInt("capacity"), 0, 0)).list();
-        assertThat(expectedStock).hasSize(5).contains(new Stock(standingZone, standingCapacity, 0, 0));
+        assertThat(expectedStock).hasSize(1).contains(new Stock(standingZone, standingCapacity, 0, 0));
         assertThat(jdbc.sql("""
                 SELECT zone_id, capacity, sold, held FROM showtime_zone_stock WHERE showtime_id = :id
                 """).param("id", showtime).query((rs, row) -> new Stock(rs.getObject("zone_id", UUID.class),
@@ -243,7 +238,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
 
     private void assertCsvMatchesStoredLayout(UUID layout, String zones, String seats) {
         assertThat(zones.lines().findFirst()).contains("zone_code,label,stand_code,level,kind,capacity,svg_id");
-        assertThat(zones.lines().skip(1).toList()).hasSize(27).containsExactlyInAnyOrderElementsOf(
+        assertThat(zones.lines().skip(1).toList()).hasSize(2).containsExactlyInAnyOrderElementsOf(
                 jdbc.sql("""
                         SELECT code, name, stand_code, level, kind, capacity, svg_id
                         FROM zone WHERE seat_layout_id = :id
@@ -251,7 +246,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
                         rs.getString("name"), rs.getString("stand_code"), rs.getString("level"),
                         rs.getString("kind"), rs.getString("capacity"), rs.getString("svg_id"))).list());
         assertThat(seats.lines().findFirst()).contains("zone_code,row_label,seat_number,x,y");
-        assertThat(seats.lines().skip(1).toList()).hasSize(6699).containsExactlyInAnyOrderElementsOf(
+        assertThat(seats.lines().skip(1).toList()).hasSize(4).containsExactlyInAnyOrderElementsOf(
                 jdbc.sql("""
                         SELECT z.code, s.row_label, s.number, s.x, s.y
                         FROM seat s JOIN zone z ON z.id = s.zone_id WHERE z.seat_layout_id = :id

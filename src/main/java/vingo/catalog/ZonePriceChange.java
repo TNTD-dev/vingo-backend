@@ -4,5 +4,10 @@ import java.util.UUID;
 
 public record ZonePriceChange(
         UUID zoneId,
-        UUID priceTierId
-) {}
+        UUID priceTierId,
+        String displayName
+) {
+    public ZonePriceChange(UUID zoneId, UUID priceTierId) {
+        this(zoneId, priceTierId, null);
+    }
+}
