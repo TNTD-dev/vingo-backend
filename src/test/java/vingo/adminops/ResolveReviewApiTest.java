@@ -62,11 +62,27 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
     }
 
     @Test
+    void issueTickets_enqueuesExactlyOneEmailAndRetryingIssuanceDoesNotDuplicateIt() {
+        UUID order = reviewSeats(showtime.event().seat(1), showtime.event().seat(2));
+        assertThat(outbox()).isEmpty();
+
+        body(resolve(order, "ISSUE_TICKETS"), 200);
+
+        var tickets = ticketIds(order);
+        assertThat(tickets).hasSize(2);
+        UUID message = assertOutbox(tickets);
+        var repeated = transactions.execute(status -> ticketingService.issueForOrder(order));
+        assertThat(repeated).containsExactlyInAnyOrderElementsOf(tickets);
+        assertThat(assertOutbox(tickets)).isEqualTo(message);
+    }
+
+    @Test
     void issueTickets_reclaimsThreeStandingPlaces() {
         UUID order = reviewStanding(3);
         assertThat(standingStock()).containsEntry("held", 0).containsEntry("sold", 0);
         payAndIssue(hold(tokenFor(catalog.buyer(), Role.BUYER), standing(2)));
         assertThat(standingStock()).containsEntry("held", 0).containsEntry("sold", 2);
+        clearSetupTicketEmails();
 
         assertThat(text(body(resolve(order, "ISSUE_TICKETS"), 200), "$.status")).isEqualTo("PAID");
 
@@ -230,6 +246,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
                 : hold(buyerToken, seats(showtime.event().seat(1)));
         var tickets = ticketIds(order);
         var seat = seatRow(showtime.event().seat(1));
+        var messagesBefore = outbox();
 
         problem(resolve(order, "ISSUE_TICKETS"), 409, "ORDER_STATE_INVALID");
 
@@ -237,7 +254,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(ticketIds(order)).isEqualTo(tickets);
         assertThat(seatRow(showtime.event().seat(1))).isEqualTo(seat);
         assertThat(audits(order)).isEmpty();
-        assertThat(outbox()).isEmpty();
+        assertThat(outbox()).containsExactlyInAnyOrderElementsOf(messagesBefore);
     }
 
     @Test

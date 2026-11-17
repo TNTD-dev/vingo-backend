@@ -440,8 +440,12 @@ paths:
       parameters:
         - name: q
           in: query
-          description: "Tên sự kiện, nghệ sĩ hoặc đội. Không đưa loại sự kiện (dùng `category`), thành phố (dùng `city`) hay thời gian (dùng `from`/`to`) vào đây. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`."
+          description: "Từ khoá tìm trên tên sự kiện, nghệ sĩ hoặc đội, mô tả, tên sân và tên thành phố của các suất còn bán (suất đã huỷ, đã qua và sân ngừng dùng không tính). Có dấu hay không dấu đều khớp ('Mỹ Đình' = 'my dinh', 'Hà Nội' = 'ha noi'), gõ dở một đoạn đầu từ vẫn ra, gõ sai nhẹ tên sự kiện vẫn ra. Thứ tự xếp: khớp tên sự kiện trên khớp sân/thành phố, khớp sân/thành phố trên khớp mô tả. Từ khoá chỉ 1 đến 2 ký tự chỉ khớp đầu từ (ví dụ 'sk' ra 'Sky'), không dò gần đúng nên 'x' không ra sự kiện nào chỉ vì giống chữ. Muốn lọc chính xác theo loại sự kiện, thành phố hay thời gian thì dùng `category`, `city`, `from`/`to` thay vì đưa vào `q`. Ví dụ: người dùng nói 'concert Sơn Tùng ở Sài Gòn' → `q=Sơn Tùng`, `category=CONCERT`, `city=HCM`; người dùng nói 'sự kiện ở sân Mỹ Đình' → `q=Mỹ Đình`."
           schema: { type: string }
+          examples:
+            artist: { summary: "Tên nghệ sĩ (không dấu vẫn được)", value: son tung }
+            venue: { summary: Tên sân, value: Mỹ Đình }
+            city: { summary: Thành phố, value: Hà Nội }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
         - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
@@ -556,6 +560,34 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SeatMap' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /showtimes/{showtime_id}/seatmap.svg:
+    get:
+      operationId: getSeatmapSvg
+      tags: [Search]
+      summary: Ảnh SVG sơ đồ sân của suất
+      description: |
+        Gọi khi giao diện cần vẽ sơ đồ sân cho trang chọn ghế. Trả SVG đã chuẩn hóa của sơ đồ sân gắn với suất, dùng cùng dữ liệu ghế và trạng thái của `getSeatmap`/`getAvailability`: nhóm khu trong SVG mang mã khu, ghép với `zones[].name`; ghế trong khu ghép theo `row` và `number`.
+        Chỉ trả khi suất không phải DRAFT, sự kiện đang PUBLISHED và sơ đồ đã PUBLISHED. Admin có thể đổi sơ đồ của suất trước giờ mở bán, nên phản hồi có `Cache-Control: no-cache` kèm `ETag`: trình duyệt dùng lại bản đã tải sau khi hỏi lại bằng `If-None-Match` (server trả 304 nếu SVG không đổi).
+
+        Ví dụ lỗi 404 (suất không tồn tại, suất DRAFT, sự kiện chưa PUBLISHED, hoặc sơ đồ không có SVG):
+        ```json
+        { "title": "Không tìm thấy suất", "status": 404, "code": "NOT_FOUND", "detail": "Suất không tồn tại" }
+        ```
+        Ví dụ lỗi 429 (kèm header `Retry-After`):
+        ```json
+        { "title": "Gọi quá nhanh", "status": 429, "code": "RATE_LIMITED", "detail": "Thử lại sau 10 giây" }
+        ```
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+      responses:
+        '200':
+          description: Nội dung SVG
+          content:
+            image/svg+xml:
+              schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/availability:
@@ -845,6 +877,12 @@ paths:
       operationId: getTicketQr
       tags: [Tickets]
       summary: Ảnh mã QR vào cổng
+      description: |
+        Chỉ chủ vé ISSUED được lấy ảnh PNG 320x320, nội dung là qr_token hiện tại.
+        Trả Cache-Control: no-store vì ảnh chứa token vào cổng; reissue-qr làm token trong ảnh cũ mất hiệu lực.
+        QR có lề 2 module và mức sửa lỗi M.
+        Vé không tồn tại hoặc không thuộc người gọi trả 404 NOT_FOUND, kể cả ADMIN không phải chủ vé.
+        Vé USED trả 409 TICKET_USED; vé VOID trả 409 TICKET_NOT_VALID. Chưa đăng nhập trả 401 UNAUTHORIZED.
       parameters: [ { $ref: '#/components/parameters/TicketId' } ]
       responses:
         '200':
@@ -852,8 +890,10 @@ paths:
           content:
             image/png:
               schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Vé không còn hiệu lực (TICKET_NOT_VALID)
+          description: Vé đã dùng (TICKET_USED) hoặc đã vô hiệu (TICKET_NOT_VALID)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1845,7 +1885,8 @@ paths:
       description: >
         Admin đặt toàn bộ danh sách hạng giá.
         Event phải là DRAFT hoặc PUBLISHED, không có đơn
-        và không có suất chưa hủy đã tới giờ mở bán.
+        và không có suất đã công bố (SCHEDULED) đã tới giờ mở bán.
+        Suất DRAFT chưa bán được nên không khóa, kể cả khi đã qua sale_opens_at.
         Nếu có id, hạng phải thuộc đúng sự kiện.
         Nếu không có id, dùng lại hạng cùng tên đã bỏ khoảng trắng,
         hoặc tạo mới nếu chưa có.
@@ -1904,7 +1945,7 @@ paths:
         Admin thay toàn bộ danh sách gán hạng giá cho khu.
         Áp dụng cùng quy tắc khóa như PUT price-tiers:
         event DRAFT hoặc PUBLISHED, chưa có đơn và không có
-        suất chưa hủy đã tới giờ mở bán.
+        suất đã công bố (SCHEDULED) đã tới giờ mở bán.
         Mỗi zone_id chỉ xuất hiện một lần.
         Khu phải thuộc layout đã chọn của sự kiện. Sự kiện cũ chưa có layout chung
         dùng các layout của những suất chưa hủy.
@@ -1958,7 +1999,7 @@ paths:
       summary: DRAFT → PUBLISHED; các suất chuyển SCHEDULED
       description: >
         Công bố nguyên tử sự kiện DRAFT khi có ít nhất một suất chưa hủy, layout đã công bố,
-        sân còn hoạt động, thời gian suất hợp lệ và mọi khu có hạng giá thuộc sự kiện.
+        sân còn hoạt động, thời gian suất hợp lệ (chưa qua giờ đóng bán) và mọi khu có hạng giá thuộc sự kiện.
         Thiếu cấu hình trả 422 EVENT_INCOMPLETE. Suất DRAFT chuyển SCHEDULED;
         giữ nguyên tồn kho hiện có, kể cả BLOCKED, chỉ bổ sung dòng thiếu.
         Gửi lại sự kiện PUBLISHED trả dữ liệu hiện tại. ENDED/CANCELLED trả EVENT_LOCKED.
@@ -2044,7 +2085,7 @@ paths:
     patch:
       operationId: updateShowtime
       tags: [Admin Catalog]
-      summary: Sửa suất (chỉ trước sale_opens_at)
+      summary: Sửa suất (suất DRAFT, hoặc suất SCHEDULED trước sale_opens_at)
       description: >
         Cập nhật thông tin suất diễn trước thời điểm mở bán hiện tại, không áp default cho trường không gửi hoặc null.
         Sự kiện ENDED/CANCELLED trả EVENT_LOCKED; suất đã hủy hoặc đã tới giờ mở bán trả SHOWTIME_LOCKED.

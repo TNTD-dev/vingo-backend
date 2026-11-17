@@ -54,7 +54,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET,
                                 API + "/auth/google", API + "/auth/oauth2/callback/google",
                                 API + "/events", API + "/events/*", API + "/events/*/showtimes",
-                                API + "/showtimes/*/seatmap", API + "/showtimes/*/availability",
+                                API + "/showtimes/*/seatmap", API + "/showtimes/*/seatmap.svg", API + "/showtimes/*/availability",
                                 API + "/payments/vnpay/ipn", API + "/payments/vnpay/return").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()

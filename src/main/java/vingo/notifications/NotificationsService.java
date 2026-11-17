@@ -11,9 +11,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import vingo.notifications.internal.DeliveryException;
-import vingo.notifications.internal.EmailPayload;
 import vingo.notifications.internal.EmailSender;
 import vingo.notifications.internal.NotificationSettings;
+import vingo.notifications.internal.OtpEmailRenderer;
 import vingo.notifications.internal.OutboxRepository;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
@@ -46,11 +46,7 @@ public class NotificationsService {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "OTP must have 6 digits and future expiry");
         }
         long minutes = Math.max(1, Duration.between(clock.instant(), expiresAt.toInstant()).toMinutes());
-        String html = """
-                <p>Mã xác thực tài khoản Vingo của bạn là: <strong>%s</strong></p>
-                <p>Mã có hiệu lực trong %d phút. Không chia sẻ mã này với bất kỳ ai.</p>
-                """.formatted(otp, minutes);
-        var payload = new EmailPayload(recipient, "Mã xác thực tài khoản Vingo", html, List.of(), settings.sender());
+        var payload = OtpEmailRenderer.render(recipient, otp, minutes, settings.sender());
         try {
             emailSender.send(idempotencyKey, payload);
         } catch (DeliveryException ex) {

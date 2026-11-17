@@ -92,8 +92,10 @@ class NotificationsIntegrationTest extends IntegrationTest {
         assertThat(state(id)).isEqualTo("SENT");
         assertThat(content(id)).isEqualTo(original);
         assertThat(sender.payloads).singleElement().satisfies(payload -> {
-            assertThat(payload.html()).contains("TIEN-FIXTURE-T1","Tiến report fixture");
-            assertThat(payload.attachments()).isEmpty();
+            assertThat(payload.html()).contains("TIEN-FIXTURE-T1","Tiến report fixture","cid:vingo-mascot-celebrate");
+            // Chỉ có ảnh thương hiệu nhúng, chưa đính kèm QR hay tệp nào khác.
+            assertThat(payload.attachments()).extracting(EmailPayload.Attachment::contentId)
+                    .containsExactly("vingo-logo","vingo-mascot-celebrate");
         });
         assertThat(dispatcher.dispatchOne()).isFalse();
     }

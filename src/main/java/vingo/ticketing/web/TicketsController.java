@@ -2,6 +2,10 @@ package vingo.ticketing.web;
 
 import java.util.UUID;
 
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -33,6 +37,14 @@ public class TicketsController implements TicketsApi {
     @Override
     public ResponseEntity<Ticket> getTicket(UUID ticketId) {
         return ResponseEntity.ok(ticketing.getTicket(ticketId));
+    }
+
+    /** Trả ảnh QR không lưu cache cho chủ vé còn hiệu lực. */
+    @Override
+    public ResponseEntity<Resource> getTicketQr(UUID ticketId) {
+        byte[] png = ticketing.ticketQrPng(ticketId);
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_PNG).cacheControl(CacheControl.noStore())
+                .body(new ByteArrayResource(png));
     }
 
     /** Đưa vé của người gọi vào outbox sau khi kiểm giới hạn gửi lại. */

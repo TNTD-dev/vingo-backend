@@ -35,6 +35,7 @@ import vingo.shared.error.ErrorCode;
 import vingo.shared.logging.LogKeys;
 import vingo.shared.ratelimit.RateLimiter;
 import vingo.shared.security.CurrentUser;
+import vingo.ticketing.internal.QrPng;
 import vingo.ticketing.internal.TicketingReader;
 import vingo.ticketing.internal.TicketingRepository;
 import vingo.ticketing.internal.TicketingRepository.PagePosition;
@@ -120,9 +121,23 @@ public class TicketingService {
         }
         realtime.publish(order.userId(), RealtimeEventType.TICKET_ISSUED,
                 Map.of("order_id", orderId, "ticket_ids", ids));
+        booking.buyerEmailForOrder(orderId).ifPresent(email -> notifications.enqueueTickets(email, ids));
         log.atInfo().addKeyValue(LogKeys.ORDER_ID, orderId).addKeyValue(LogKeys.USER_ID, order.userId())
                 .addKeyValue("ticket_count", ids.size()).log("Đã phát {} vé", ids.size());
         return List.copyOf(ids);
+    }
+
+    /** Tạo ảnh PNG từ QR hiện tại sau khi kiểm chủ vé và trạng thái ISSUED. */
+    @Transactional(readOnly = true)
+    public byte[] ticketQrPng(UUID ticketId) {
+        Ticket ticket = getTicket(ticketId);
+        if (ticket.getStatus() == TicketStatus.USED) {
+            throw new DomainException(ErrorCode.TICKET_USED, "Vé đã sử dụng");
+        }
+        if (ticket.getStatus() != TicketStatus.ISSUED) {
+            throw new DomainException(ErrorCode.TICKET_NOT_VALID, "Vé không còn hiệu lực");
+        }
+        return QrPng.encode(ticket.getQrToken());
     }
 
     /** Khoá và vô hiệu vé ISSUED trong transaction audit của adminops, giữ nguyên ghế SOLD. */

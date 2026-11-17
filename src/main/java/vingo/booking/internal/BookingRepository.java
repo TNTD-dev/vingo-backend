@@ -48,6 +48,18 @@ public class BookingRepository {
                         rs.getObject("expires_at", OffsetDateTime.class))).optional();
     }
 
+    /** Chụp hồ sơ vào đơn đã khoá khi chưa có email, giữ nguyên ảnh chụp đầu tiên. */
+    public void snapshotBuyer(UUID orderId) {
+        // shortcut: đọc thẳng bảng buyer_profile của auth, đổi sang AuthService khi có
+        jdbc.sql("""
+                        UPDATE orders o
+                        SET buyer_name = bp.full_name, buyer_email = bp.email, buyer_phone = bp.phone
+                        FROM buyer_profile bp
+                        WHERE o.id = :order AND bp.user_id = o.user_id AND o.buyer_email IS NULL
+                        """)
+                .param("order", orderId).update();
+    }
+
     /** Đọc email trong transaction đang xử lý đơn hoặc vé, không khoá ngược từ vé về đơn. */
     public Optional<String> buyerEmailForOrder(UUID orderId) {
         return jdbc.sql("SELECT buyer_email FROM orders WHERE id = :order")
@@ -361,6 +373,40 @@ public class BookingRepository {
                 .param("showtime", showtimeId).param("zone", zoneId)
                 .query((rs, row) -> new HoldItem(null, rs.getObject("zone_id", UUID.class),
                         rs.getObject("price_tier_id", UUID.class), quantity, rs.getLong("price"))).optional();
+    }
+
+    /**
+     * Khoá advisory theo (user, suất) tới hết transaction, để các yêu cầu giữ ghế đồng thời của cùng user trên cùng
+     * suất chạy tuần tự quanh bước kiểm tra cooldown. Yêu cầu sau chờ rồi đọc được lần nhả đã commit.
+     */
+    public void lockReholdScope(UUID userId, UUID showtimeId) {
+        jdbc.sql("SELECT count(*) FROM (SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))) locked")
+                .param("key", "hold-cooldown:" + userId + ":" + showtimeId).query(Integer.class).single();
+    }
+
+    /**
+     * Thời điểm nhả gần nhất trong các ghế mà user đã giữ rồi nhả không thanh toán ({@code EXPIRED} hoặc
+     * {@code CANCELLED}) từ {@code maxReleases} lần trở lên kể từ {@code since}. Rỗng nếu không ghế nào chạm ngưỡng.
+     * Đơn hết hạn tính từ {@code expires_at} (lúc ghế thật sự trống), đơn huỷ tính từ {@code updated_at}.
+     */
+    public Optional<OffsetDateTime> lastReleaseOfOverheldSeats(UUID userId, UUID showtimeId, List<UUID> seatIds,
+                                                               OffsetDateTime since, int maxReleases) {
+        var rows = jdbc.sql("""
+                        SELECT max(last_release) FROM (
+                            SELECT item.seat_id,
+                                   max(CASE WHEN o.status = 'EXPIRED' THEN o.expires_at ELSE o.updated_at END) AS last_release
+                            FROM orders o JOIN order_item item ON item.order_id = o.id
+                            WHERE o.user_id = :user AND o.showtime_id = :showtime
+                              AND item.seat_id = ANY(:ids) AND o.status IN ('EXPIRED', 'CANCELLED')
+                              AND CASE WHEN o.status = 'EXPIRED' THEN o.expires_at ELSE o.updated_at END >= :since
+                            GROUP BY item.seat_id HAVING count(*) >= :max
+                        ) overheld
+                        """)
+                .param("user", userId).param("showtime", showtimeId)
+                .param("ids", new SqlArrayValue("uuid", seatIds.toArray()))
+                .param("since", since).param("max", maxReleases)
+                .query(OffsetDateTime.class).list();
+        return rows.stream().filter(java.util.Objects::nonNull).findFirst();
     }
 
     public Optional<UUID> insertOrder(String code, UUID userId, UUID showtimeId, long total,

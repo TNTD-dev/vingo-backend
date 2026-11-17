@@ -17,22 +17,18 @@ import java.util.concurrent.Future;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import vingo.search.AvailabilityResult;
 import vingo.search.SearchService;
 import vingo.support.CatalogFixtures;
-import vingo.support.IntegrationTest;
 
 /** Nhiều request cùng miss cache availability chỉ truy vấn DB một lần ({@code @Cacheable(sync = true)}). */
-class AvailabilityCacheTest extends IntegrationTest {
+class AvailabilityCacheTest extends SearchRepositorySpyTest {
 
     private static final int THREADS = 24;
 
     @Autowired
     private SearchService searchService;
-    @MockitoSpyBean
-    private SeatmapRepository seatmaps;
 
     private CatalogFixtures fixtures;
 

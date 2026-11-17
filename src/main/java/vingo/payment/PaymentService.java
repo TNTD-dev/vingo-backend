@@ -135,7 +135,7 @@ public class PaymentService {
                     .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
             String txnRef = orderCode + "-" + attempt;
             String url = buildSignedPaymentUrl(
-                    txnRef, order.totalAmount(), normalizedBody.getMethod(), clientIp, now, order.expiresAt());
+                    txnRef, order.totalAmount(), clientIp, now, order.expiresAt());
 
             IntentRow created = repository.insertIntent(
                     orderId, txnRef, order.totalAmount(), url, now, order.expiresAt());
@@ -374,7 +374,9 @@ public class PaymentService {
         });
     }
 
-    private String buildSignedPaymentUrl(String txnRef, long amountVnd, CreatePaymentRequest.MethodEnum method,
+    // Không gửi vnp_BankCode: VNPay hiện trang chọn ngân hàng/phương thức cho người mua.
+    // Gửi mã không được TMN hỗ trợ (vd. ATM, VNPAYQR trên sandbox) sẽ bị VNPay chặn với code=76.
+    private String buildSignedPaymentUrl(String txnRef, long amountVnd,
             String clientIp, OffsetDateTime createdAt, OffsetDateTime expiresAt) {
         TreeMap<String, String> params = new TreeMap<>();
         params.put("vnp_Version", "2.1.0");
@@ -390,9 +392,6 @@ public class PaymentService {
         params.put("vnp_IpAddr", (clientIp == null || clientIp.isBlank()) ? "127.0.0.1" : clientIp);
         params.put("vnp_CreateDate", VNP_TIME.format(createdAt.atZoneSameInstant(VN_ZONE)));
         params.put("vnp_ExpireDate", VNP_TIME.format(expiresAt.atZoneSameInstant(VN_ZONE)));
-        if (method != null) {
-            params.put("vnp_BankCode", method.getValue());
-        }
 
         String query = params.entrySet().stream()
                 .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.US_ASCII)

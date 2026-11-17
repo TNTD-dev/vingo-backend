@@ -42,6 +42,11 @@ vingo:
     access-token-ttl: PT15M
   hold:
     ttl: PT10M
+    # Chống giữ lại cùng ghế liên tục mà không thanh toán: giữ rồi nhả (hết hạn hoặc huỷ) đủ rehold-max lần
+    # trong rehold-window thì phải chờ rehold-cooldown kể từ lần nhả gần nhất.
+    rehold-max: 3
+    rehold-window: PT1H
+    rehold-cooldown: PT10M
   realtime:
     replay-window: PT5M
     replay-overlap: PT10S
@@ -90,6 +95,8 @@ vingo:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}
     base-url: ${MAIL_BASE_URL:https://api.resend.com}
+    # Địa chỉ web Vingo cho nút "Xem vé" trong email
+    web-url: ${WEB_BASE_URL:http://localhost:3000}
 
 logging:
   structured:
@@ -112,6 +119,9 @@ management:
 
 sentry:
   dsn: ${SENTRY_DSN:}
+  environment: ${SENTRY_ENVIRONMENT:production}
+  # App mới, traffic thấp: trace 100% request. Giảm qua env khi traffic tăng.
+  traces-sample-rate: ${SENTRY_TRACES_SAMPLE_RATE:1.0}
   send-default-pii: false
 
 springdoc:

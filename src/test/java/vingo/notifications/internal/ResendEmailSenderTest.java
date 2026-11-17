@@ -256,4 +256,33 @@ class ResendEmailSenderTest {
         var missing = new PayloadCipher(new NotificationSettings("", "", "", ""));
         assertThatThrownBy(() -> missing.decrypt(first)).isInstanceOf(IllegalStateException.class);
     }
+
+    /** Ảnh nhúng gửi kèm content_id và content_type; đính kèm thường không gửi trường null. */
+    @Test
+    void inlineImages_areSentWithContentId_plainAttachmentsOmitNullFields() throws Exception {
+        var captured=new AtomicReference<String>();
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/emails", exchange -> {
+            captured.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));
+            byte[] body="{\"id\":\"email-1\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200,body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var sender=ResendEmailSender.forLoopbackTest(new NotificationSettings("","test@example.test","test-key",
+                    "http://127.0.0.1:"+server.getAddress().getPort()),CLOCK);
+            var attachments=new java.util.ArrayList<>(EmailLayout.images(EmailLayout.Image.MASCOT_WAVE));
+            attachments.add(new EmailPayload.Attachment("note.txt","aGk="));
+            sender.send(UUID.randomUUID(),new EmailPayload("buyer@example.test","test","body",attachments));
+            var json=tools.jackson.databind.json.JsonMapper.builder().build().readTree(captured.get()).path("attachments");
+            assertThat(json.size()).isEqualTo(3);
+            assertThat(json.get(0).path("content_id").asText()).isEqualTo("vingo-logo");
+            assertThat(json.get(0).path("content_type").asText()).isEqualTo("image/png");
+            assertThat(json.get(1).path("content_id").asText()).isEqualTo("vingo-mascot-wave");
+            assertThat(json.get(2).has("content_id")).isFalse();
+            assertThat(json.get(2).has("content_type")).isFalse();
+        } finally { server.stop(0); }
+    }
 }

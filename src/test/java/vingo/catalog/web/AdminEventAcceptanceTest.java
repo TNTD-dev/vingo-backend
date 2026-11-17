@@ -73,6 +73,16 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         assertThat(jdbc.sql("SELECT status FROM event WHERE id=:id").param("id",e.id()).query(String.class).single()).isEqualTo("DRAFT");
         assertThat(jdbc.sql("SELECT status FROM showtime WHERE id=:id").param("id",s.id()).query(String.class).single()).isEqualTo("DRAFT");
     }
+    @Test void publish_returns422_whenShowtimeSalesAlreadyClosed() {
+        var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
+        var s=catalog.showtime(e,Window.draft());
+        // Giờ đóng bán đã qua nhưng suất chưa kết thúc: công bố xong sẽ hiện SALES_CLOSED ngay.
+        jdbc.sql("UPDATE showtime SET sale_opens_at=:opens, sale_closes_at=:closes WHERE id=:id")
+                .param("opens",java.time.OffsetDateTime.parse("2026-11-10T09:00:00Z"))
+                .param("closes",java.time.OffsetDateTime.parse("2026-11-12T08:00:00Z")).param("id",s.id()).update();
+        publish(e.id()).expectStatus().isEqualTo(422).expectBody().jsonPath("$.code").isEqualTo("EVENT_INCOMPLETE");
+        assertThat(jdbc.sql("SELECT status FROM event WHERE id=:id").param("id",e.id()).query(String.class).single()).isEqualTo("DRAFT");
+    }
     @Test void publish_checksAuthenticationMissingAndLockedEvents() {
         UUID id=UUID.randomUUID();
         client.post().uri("/api/v1/admin/events/{id}/publish",id).exchange().expectStatus().isUnauthorized();

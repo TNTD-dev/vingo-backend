@@ -95,6 +95,19 @@ class SeatmapRepository {
                 .optional();
     }
 
+    /** SVG của sơ đồ sân đã PUBLISHED; rỗng khi sơ đồ chưa publish hoặc không có SVG. */
+    Optional<String> findPublishedSvg(UUID layoutId) {
+        return jdbc.sql("""
+                        SELECT v.svg_content
+                        FROM seat_layout_svg v
+                        JOIN seat_layout l ON l.id = v.seat_layout_id
+                        WHERE v.seat_layout_id = :id AND l.status = 'PUBLISHED'
+                        """)
+                .param("id", layoutId)
+                .query(String.class)
+                .optional();
+    }
+
     /**
      * Layout tĩnh của suất: các khu theo {@code name} kèm hạng giá, ghế của khu ngồi theo {@code row_label},
      * {@code number} (ghế đôi lấy từ {@code seat_pair} cả hai chiều). Hai câu truy vấn, không phụ thuộc giờ hay

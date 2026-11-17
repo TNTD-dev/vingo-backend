@@ -154,6 +154,13 @@ class PgSearchService implements SearchService {
     }
 
     @Override
+    public String getSeatmapSvg(UUID showtimeId) {
+        ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
+        return seatmaps.findPublishedSvg(showtime.seatLayoutId())
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Sơ đồ của suất chưa có SVG"));
+    }
+
+    @Override
     public AvailabilityResult getAvailability(UUID showtimeId) {
         return reads.availability(showtimeId);
     }

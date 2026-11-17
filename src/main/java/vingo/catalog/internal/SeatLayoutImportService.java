@@ -262,6 +262,7 @@ public class SeatLayoutImportService {
         var current = repository.lockShowtime(showtimeId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy suất diễn."));
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        // Suất DRAFT chưa bán được (booking yêu cầu sự kiện PUBLISHED), nên chỉ khóa suất đã công bố.
         if ("CANCELLED".equals(current.status())
                 || ("SCHEDULED".equals(current.status()) && !now.isBefore(current.data().saleOpensAt()))) {
             throw new DomainException(ErrorCode.SHOWTIME_LOCKED, "Suất diễn đã mở bán, không thể chỉnh sửa.");

@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -27,7 +26,6 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
-import org.testcontainers.containers.GenericContainer;
 
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
@@ -270,13 +268,6 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestOAuthConfig {
-
-        /** Redis riêng cho test rate limit để các test khác giữ nguyên cấu hình. */
-        @Bean
-        @ServiceConnection(name = "redis")
-        GenericContainer<?> googleLoginRedis() {
-            return new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
-        }
 
         /** Token endpoint giả và khóa công khai được dùng trong callback test. */
         @Bean

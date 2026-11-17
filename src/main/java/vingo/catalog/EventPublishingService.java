@@ -30,7 +30,7 @@ public class EventPublishingService {
         if(!event.status().equals("DRAFT")) throw new DomainException(ErrorCode.EVENT_LOCKED,"Sự kiện đã kết thúc hoặc hủy.");
         var sessions=publishing.lockShowtimes(id);
         var now=clock.instant().atOffset(ZoneOffset.UTC);
-        if(!publishing.complete(id,now)) throw new DomainException(ErrorCode.EVENT_INCOMPLETE,"Thiếu suất hợp lệ, sơ đồ đã công bố hoặc giá cho mọi khu.");
+        if(!publishing.complete(id,now)) throw new DomainException(ErrorCode.EVENT_INCOMPLETE,"Thiếu suất hợp lệ (chưa qua giờ đóng bán), sơ đồ đã công bố hoặc giá cho mọi khu.");
         publishing.publish(id,now);
         publisher.publishEvent(new CatalogChanged(id,Set.copyOf(sessions)));
         try(var ignored=MDC.putCloseable("event_id",id.toString())) {

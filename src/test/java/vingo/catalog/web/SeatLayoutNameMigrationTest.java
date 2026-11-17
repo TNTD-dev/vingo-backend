@@ -7,20 +7,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import vingo.support.IntegrationTest;
+import vingo.support.TestcontainersConfig;
 
 class SeatLayoutNameMigrationTest extends IntegrationTest {
     private final DataSource migrationDataSource;
 
-    @Autowired
-    SeatLayoutNameMigrationTest(PostgreSQLContainer postgres) {
+    SeatLayoutNameMigrationTest() {
         // Không đổi search_path của pool ứng dụng: mỗi connection migration là connection vật lý riêng.
+        PostgreSQLContainer postgres = TestcontainersConfig.postgres();
         this.migrationDataSource = new DriverManagerDataSource(
                 postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
     }

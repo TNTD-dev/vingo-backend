@@ -175,6 +175,30 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void updateShowtime_succeeds_whenDraftShowtimeSaleOpensAtInPast() {
+        var event = catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
+        // Window.draft: suất DRAFT, giờ mở bán đã qua 1 ngày.
+        var showtime = catalog.showtime(event, Window.draft());
+        client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("sale_opens_at", atDays(1)))
+                .exchange().expectStatus().isOk();
+        assertThat(jdbc.sql("SELECT sale_opens_at FROM showtime WHERE id = :id").param("id", showtime.id())
+                .query(OffsetDateTime.class).single().toInstant()).isEqualTo(NOW.plusSeconds(86400));
+    }
+
+    @Test
+    void updateShowtime_returns409_whenScheduledShowtimeSaleOpened() {
+        var event = catalog.event(EventSpec.defaults().withCity("HN"));
+        var showtime = catalog.showtime(event, Window.onSale());
+        var before = showtimeSnapshot(showtime.id());
+        client.patch().uri(ADMIN + "/showtimes/{id}", showtime.id()).headers(h -> h.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("sale_opens_at", atDays(1)))
+                .exchange().expectStatus().isEqualTo(409).expectBody()
+                .jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
+        assertThat(showtimeSnapshot(showtime.id())).isEqualTo(before);
+    }
+
+    @Test
     void layoutName_canRepeatAcrossVersionsAndRenameOnlyDraftWithoutChangingSvg() {
         UUID hall = catalog.event().venueId();
         UUID first = importLayout(hall, "Bóng đá", SMALL_SVG);

@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -26,6 +27,8 @@ import vingo.support.TestcontainersConfig;
 
 /** Worker không có HTTP nên dùng cùng kiểu boot test như WorkerProfileStartupTest của team. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+// Đóng context sau class: job nền của worker không được chạy tiếp trên DB dùng chung khi test khác đang chạy.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @ActiveProfiles(value = {"worker", "test"}, inheritProfiles = false)
 @Import({TestcontainersConfig.class, NotificationsIntegrationTest.MailTestConfig.class})
 @TestPropertySource(properties = {"spring.flyway.enabled=true", "vingo.jobs.outbox-sender=PT0.1S",
@@ -62,7 +65,9 @@ class NotificationWorkerIntegrationTest extends vingo.support.IntegrationTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertThat(jdbc.sql("SELECT status FROM outbox_message WHERE id=:id").param("id", id)
                         .query(String.class).single()).isEqualTo("SENT"));
-        assertThat(sender.calls.get()).isEqualTo(1);
+        // DB dùng chung cho cả lượt test: outbox có thể còn tin của test khác, worker gửi luôn các tin đó.
+        // Chỉ kiểm tin của test này được gửi đúng một lần.
+        assertThat(sender.ids).containsOnlyOnce(id);
         assertThat(jdbc.sql("SELECT count(*) FROM shedlock WHERE name='outbox_sender'").query(Integer.class).single()).isEqualTo(1);
     }
 }

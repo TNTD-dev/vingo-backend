@@ -118,6 +118,8 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         assertThat(request("GET", LAYOUTS + v1 + "/seats.csv", token, null, 200)).isEqualTo(seatsCsv);
         assertCode(request("GET", LAYOUTS + v1 + "/zones/" + standingV2, token, null, 404), "NOT_FOUND");
 
+        // Suất đã công bố (SCHEDULED) và tới giờ mở bán thì khóa đổi sơ đồ.
+        jdbc.sql("UPDATE showtime SET status = 'SCHEDULED' WHERE id = :id").param("id", showtimeA).update();
         clock.set(now.plus(Duration.ofDays(2)));
         request("PATCH", ADMIN + "/showtimes/" + showtimeA, token, Map.of("seat_layout_id", v2), 200);
         assertInventory(showtimeA, v2, standingV2, 1001);
