@@ -27,8 +27,8 @@ spring:
   servlet:
     multipart:
       # Mọi profile kế thừa giới hạn này; request dành thêm 1 MiB cho multipart headers.
-      max-file-size: 10MB
-      max-request-size: 11MB
+      max-file-size: 20MB
+      max-request-size: 21MB
   jackson:
     default-property-inclusion: non_null
 
@@ -66,6 +66,10 @@ vingo:
     client-secret: ${GOOGLE_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/api/v1/auth/oauth2/callback/google}
     rate-limit-per-minute: ${GOOGLE_LOGIN_RATE_LIMIT_PER_MINUTE:10}
+  venue-lookup:
+    google-api-key: ${GOOGLE_MAPS_API_KEY:}
+    gemini-api-key: ${GEMINI_API_KEY:}
+    gemini-model: ${GEMINI_MODEL:gemini-2.5-flash}
   auth:
     frontend-return-url: ${AUTH_FRONTEND_RETURN_URL:http://localhost:3000/auth/google}
     secure-cookies: ${AUTH_SECURE_COOKIES:true}

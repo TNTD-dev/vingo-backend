@@ -21,26 +21,9 @@ class SchemaConstraintsTest extends IntegrationTest {
 
     @BeforeEach
     void seedCatalog() {
-        UUID venue = id("INSERT INTO venue (name, type) VALUES ('Sân test', 'STADIUM') RETURNING id");
-        UUID hall = jdbc.sql("INSERT INTO hall (venue_id, name) VALUES (:v, :n) RETURNING id")
-                .param("v", venue).param("n", "Hall " + UUID.randomUUID()).query(UUID.class).single();
-        UUID layout = jdbc.sql("INSERT INTO seat_layout (hall_id) VALUES (:h) RETURNING id")
-                .param("h", hall).query(UUID.class).single();
-        zoneId = jdbc.sql("INSERT INTO zone (seat_layout_id, name, kind, capacity) VALUES (:l, 'A', 'SEATED', 10) RETURNING id")
-                .param("l", layout).query(UUID.class).single();
-        seatId = jdbc.sql("""
-                        INSERT INTO seat (zone_id, seat_type_id, row_label, number, x, y)
-                        VALUES (:z, (SELECT id FROM seat_type WHERE code = 'STANDARD'), 'A', 1, 0, 0) RETURNING id
-                        """)
-                .param("z", zoneId).query(UUID.class).single();
-        UUID event = id("INSERT INTO event (title, category) VALUES ('Trận test', 'FOOTBALL') RETURNING id");
-        OffsetDateTime start = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
-        showtimeId = jdbc.sql("""
-                        INSERT INTO showtime (event_id, hall_id, seat_layout_id, starts_at, ends_at, sale_opens_at, sale_closes_at, status)
-                        VALUES (:e, :h, :l, :s, :s + interval '2 hours', :s - interval '30 days', :s, 'SCHEDULED') RETURNING id
-                        """)
-                .param("e", event).param("h", hall).param("l", layout).param("s", start)
-                .query(UUID.class).single();
+        var showtime=catalog.onSaleShowtime();
+        showtimeId=showtime.id();zoneId=showtime.event().seatedZoneId();seatId=showtime.event().seat(1);
+
     }
 
     @Test
@@ -73,7 +56,7 @@ class SchemaConstraintsTest extends IntegrationTest {
         UUID user = id("INSERT INTO users (email, full_name, password_hash) VALUES (gen_random_uuid() || '@t.vn', 'U', 'x') RETURNING id");
         UUID order = insertPendingOrder(user);
         UUID event = jdbc.sql("SELECT event_id FROM showtime WHERE id = :s").param("s", showtimeId).query(UUID.class).single();
-        UUID tier = jdbc.sql("INSERT INTO price_tier (event_id, name, price) VALUES (:e, 'VIP', 500000) RETURNING id")
+        UUID tier = jdbc.sql("SELECT id FROM price_tier WHERE event_id=:e AND name='VIP'")
                 .param("e", event).query(UUID.class).single();
         return jdbc.sql("""
                         INSERT INTO order_item (order_id, zone_id, seat_id, price_tier_id, quantity, unit_price)

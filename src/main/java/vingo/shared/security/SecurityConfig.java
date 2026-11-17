@@ -8,6 +8,11 @@ import javax.crypto.spec.SecretKeySpec;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
@@ -68,8 +73,13 @@ public class SecurityConfig {
     }
 
     @Bean
-    JwtDecoder jwtDecoder(JwtProperties props) {
-        return NimbusJwtDecoder.withSecretKey(secretKey(props)).macAlgorithm(MacAlgorithm.HS256).build();
+    JwtDecoder jwtDecoder(JwtProperties props, ObjectProvider<OAuth2TokenValidator<Jwt>> validators) {
+        var decoder = NimbusJwtDecoder.withSecretKey(secretKey(props)).macAlgorithm(MacAlgorithm.HS256).build();
+        var checks = new java.util.ArrayList<OAuth2TokenValidator<Jwt>>();
+        checks.add(JwtValidators.createDefault());
+        validators.orderedStream().forEach(checks::add);
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(checks));
+        return decoder;
     }
 
     @Bean

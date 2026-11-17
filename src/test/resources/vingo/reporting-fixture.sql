@@ -5,25 +5,31 @@ INSERT INTO users (id,email,full_name,password_hash,role,status) VALUES
 ON CONFLICT DO NOTHING;
 INSERT INTO venue (id,name,type) VALUES
 ('0197f100-0000-7000-8000-000000000101','Tiến fixture venue','STADIUM') ON CONFLICT DO NOTHING;
-INSERT INTO hall (id,venue_id,name) VALUES
-('0197f100-0000-7000-8000-000000000111','0197f100-0000-7000-8000-000000000101','Fixture hall') ON CONFLICT DO NOTHING;
-INSERT INTO seat_layout (id,hall_id) VALUES
-('0197f100-0000-7000-8000-000000000121','0197f100-0000-7000-8000-000000000111') ON CONFLICT DO NOTHING;
-INSERT INTO zone (id,seat_layout_id,name,kind,capacity) VALUES
+INSERT INTO venue_overview(id,venue_id,name,svg_content,view_box_width,view_box_height) VALUES
+('0197f100-0000-7000-8000-000000000111','0197f100-0000-7000-8000-000000000101','Fixture overview','<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><rect id="GATE__G1" x="900" y="900" width="10" height="10"/></svg>',1000,1000) ON CONFLICT DO NOTHING;
+INSERT INTO venue_gate(overview_id,code,name,svg_id) SELECT '0197f100-0000-7000-8000-000000000111','G1','G1','GATE__G1' WHERE NOT EXISTS(SELECT 1 FROM venue_gate WHERE overview_id='0197f100-0000-7000-8000-000000000111');
+INSERT INTO seat_layout(id,venue_id,overview_id,layout_type,name) VALUES
+('0197f100-0000-7000-8000-000000000121','0197f100-0000-7000-8000-000000000101','0197f100-0000-7000-8000-000000000111','CONCERT','Fixture layout') ON CONFLICT DO NOTHING;
+INSERT INTO seat_layout_svg(seat_layout_id,schema_version,svg_content,view_box_x,view_box_y,view_box_width,view_box_height) SELECT
+'0197f100-0000-7000-8000-000000000121',2,'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"/>',0,0,1000,1000 WHERE NOT EXISTS(SELECT 1 FROM seat_layout_svg WHERE seat_layout_id='0197f100-0000-7000-8000-000000000121');
+INSERT INTO zone (id,seat_layout_id,name,kind,capacity) SELECT seed.id::uuid,seed.layout::uuid,seed.name,seed.kind,seed.capacity FROM (VALUES
 ('0197f100-0000-7000-8000-000000000131','0197f100-0000-7000-8000-000000000121','A','SEATED',2),
-('0197f100-0000-7000-8000-000000000132','0197f100-0000-7000-8000-000000000121','Standing','STANDING',10)
-ON CONFLICT DO NOTHING;
+('0197f100-0000-7000-8000-000000000132','0197f100-0000-7000-8000-000000000121','Standing','STANDING',10)) AS seed(id,layout,name,kind,capacity) WHERE NOT EXISTS(SELECT 1 FROM zone WHERE id=seed.id::uuid);
 INSERT INTO seat (id,zone_id,seat_type_id,row_label,number,x,y)
 SELECT '0197f100-0000-7000-8000-000000000141','0197f100-0000-7000-8000-000000000131',id,'A',1,0,0
-FROM seat_type WHERE code='STANDARD' ON CONFLICT DO NOTHING;
+FROM seat_type WHERE code='STANDARD' AND NOT EXISTS(SELECT 1 FROM seat WHERE id='0197f100-0000-7000-8000-000000000141');
 INSERT INTO seat (id,zone_id,seat_type_id,row_label,number,x,y)
 SELECT '0197f100-0000-7000-8000-000000000142','0197f100-0000-7000-8000-000000000131',id,'A',2,40,0
-FROM seat_type WHERE code='STANDARD' ON CONFLICT DO NOTHING;
+FROM seat_type WHERE code='STANDARD' AND NOT EXISTS(SELECT 1 FROM seat WHERE id='0197f100-0000-7000-8000-000000000142');
+UPDATE venue_overview SET validation_hash=catalog_overview_hash(id),validation_engine='fixture',validated_at=now() WHERE id='0197f100-0000-7000-8000-000000000111' AND status='DRAFT';
+UPDATE venue_overview SET status='PUBLISHED',published_at=now() WHERE id='0197f100-0000-7000-8000-000000000111' AND status='DRAFT';
+UPDATE seat_layout SET validation_hash=catalog_layout_hash(id),validation_engine='fixture',validated_at=now() WHERE id='0197f100-0000-7000-8000-000000000121' AND status='DRAFT';
+UPDATE seat_layout SET status='PUBLISHED',published_at=now() WHERE id='0197f100-0000-7000-8000-000000000121' AND status='DRAFT';
 INSERT INTO event (id,title,category) VALUES
 ('0197f100-0000-7000-8000-000000000201','Tiến report fixture','OTHER') ON CONFLICT DO NOTHING;
-INSERT INTO showtime (id,event_id,hall_id,seat_layout_id,starts_at,ends_at,sale_opens_at,sale_closes_at,status) VALUES
+INSERT INTO showtime (id,event_id,seat_layout_id,starts_at,ends_at,sale_opens_at,sale_closes_at,status) VALUES
 ('0197f100-0000-7000-8000-000000000211','0197f100-0000-7000-8000-000000000201',
-'0197f100-0000-7000-8000-000000000111','0197f100-0000-7000-8000-000000000121',
+'0197f100-0000-7000-8000-000000000121',
 '2026-11-20T12:00:00Z','2026-11-20T14:00:00Z','2026-10-01T00:00:00Z','2026-11-20T12:00:00Z','SCHEDULED')
 ON CONFLICT DO NOTHING;
 INSERT INTO price_tier (id,event_id,name,price) VALUES

@@ -174,8 +174,8 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
                 .containsExactly("DN");
 
         assertThat(JsonPath.<List<String>>read(
-                response, otherPath + ".hall_id"))
-                .containsExactly(secondEvent.hallId().toString());
+                response, otherPath + ".venue.id"))
+                .containsExactly(secondEvent.venueId().toString());
         assertThat(JsonPath.<List<String>>read(
                 response, otherPath + ".seat_layout_id"))
                 .containsExactly(secondEvent.layoutId().toString());

@@ -122,8 +122,7 @@ class EventSearchRepository {
                     JOIN LATERAL (
                         SELECT v.name AS venue_name, v.city, s.starts_at AS first_starts_at
                         FROM showtime s
-                        JOIN hall h ON h.id = s.hall_id
-                        JOIN venue v ON v.id = h.venue_id
+                        JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
                         WHERE s.event_id = e.id AND s.status = 'SCHEDULED' AND s.starts_at >= :now%s
                         ORDER BY s.starts_at, s.id
                         LIMIT 1

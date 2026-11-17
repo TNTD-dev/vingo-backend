@@ -7,8 +7,12 @@ import java.util.UUID;
 public record EventDetails(
         Header header,
         List<Tier> priceTiers,
-        List<Session> showtimes
+        List<Session> showtimes,
+        LayoutSelection selection,
+        List<ZonePriceChange> zonePrices
 ) {
+    public record LayoutSelection(UUID venueId, UUID layoutId) {}
+
     public record Header(
             UUID id,
             String status,
@@ -33,7 +37,6 @@ public record EventDetails(
     public record Session(
             UUID id,
             UUID eventId,
-            UUID hallId,
             UUID seatLayoutId,
             String storedStatus,
             OffsetDateTime startsAt,

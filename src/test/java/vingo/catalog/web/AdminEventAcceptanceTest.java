@@ -34,7 +34,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         publish(event).expectStatus().isEqualTo(422);
         String session=client.post().uri("/api/v1/admin/events/{id}/showtimes",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of(
-                        "hall_id",layout.hallId(),"seat_layout_id",layout.layoutId(),
+                        "hall_id",layout.venueId(),"seat_layout_id",layout.layoutId(),
                         "starts_at","2026-11-20T09:00:00Z","ends_at","2026-11-20T11:00:00Z",
                         "sale_opens_at","2026-11-13T09:00:00Z","sale_closes_at","2026-11-20T08:00:00Z"))
                 .exchange().expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();

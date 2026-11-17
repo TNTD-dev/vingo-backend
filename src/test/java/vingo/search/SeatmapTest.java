@@ -74,12 +74,11 @@ class SeatmapTest extends IntegrationTest {
     void getSeatmap_includesCouplePairAndStandingSeatsLeft() {
         var created = fixtures.event()
                 .tier("VIP", 2_000_000).tier("Thường", 500_000)
-                .showtime(s -> s.onSale().seatedRows(2, 2, "VIP").standing(100, "Thường"))
+                .showtime(s -> s.onSale().seatedRows(2, 2, "VIP").standing(100, "Thường").couple(2))
                 .create();
         UUID showtime = created.showtimeId();
         List<UUID> zones = fixtures.zoneIds(showtime);
         List<UUID> seats = fixtures.seatIds(zones.get(0));
-        fixtures.makeCouple(seats.get(2), seats.get(3));
         fixtures.setZoneStock(showtime, zones.get(1), 30, 10);
 
         JsonNode body = get("/api/v1/showtimes/" + showtime + "/seatmap");
@@ -276,10 +275,9 @@ class SeatmapTest extends IntegrationTest {
     }
 
     private CoupleSetup coupleSetup() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(4)).create().showtimeId();
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(4).couple(0)).create().showtimeId();
         UUID zone = fixtures.zoneIds(showtime).getFirst();
         List<UUID> seats = fixtures.seatIds(zone);
-        fixtures.makeCouple(seats.get(0), seats.get(1));
         return new CoupleSetup(showtime, zone, seats);
     }
 

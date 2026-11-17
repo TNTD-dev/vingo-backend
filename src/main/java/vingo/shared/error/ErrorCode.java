@@ -25,13 +25,13 @@ public enum ErrorCode {
     SHOWTIME_NOT_ON_SALE(HttpStatus.CONFLICT, "Suất chưa mở hoặc đã đóng bán"),
     ORDER_STATE_INVALID(HttpStatus.CONFLICT, "Trạng thái đơn không cho phép thao tác này"),
     HOLD_EXPIRED(HttpStatus.CONFLICT, "Đơn đã quá hạn giữ ghế"),
-    HALL_NAME_TAKEN(HttpStatus.CONFLICT, "Tên đã bị trùng"),
     PROFILE_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "Chưa có hồ sơ người mua"),
     MAX_TICKETS_EXCEEDED(HttpStatus.UNPROCESSABLE_CONTENT, "Vượt số vé tối đa mỗi đơn"),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "Trùng Idempotency-Key nhưng khác nội dung"),
     TICKET_NOT_VALID(HttpStatus.CONFLICT, "Vé không còn hiệu lực"),
     TICKET_USED(HttpStatus.CONFLICT, "Vé đã được sử dụng"),
     VENUE_IN_USE(HttpStatus.CONFLICT, "Sân còn suất chưa kết thúc"),
+    PAYLOAD_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "Tệp tải lên vượt giới hạn"),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Định dạng tệp không được hỗ trợ"),
     INVALID_SEAT_LAYOUT(HttpStatus.UNPROCESSABLE_CONTENT, "Sơ đồ sân không hợp lệ"),
     SEAT_LAYOUT_LOCKED(HttpStatus.CONFLICT, "Sơ đồ đã công bố"),
@@ -40,6 +40,7 @@ public enum ErrorCode {
     SHOWTIME_LOCKED(HttpStatus.CONFLICT, "Suất đã mở bán, không sửa được"),
     ACTION_STATE_INVALID(HttpStatus.CONFLICT, "Thao tác đã hết hạn hoặc đã xử lý"),
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Gọi quá nhanh"),
+    PDF_NOT_PROCESSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "PDF không xử lý được"),
     SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ tạm thời không khả dụng");
 
     private final HttpStatus status;

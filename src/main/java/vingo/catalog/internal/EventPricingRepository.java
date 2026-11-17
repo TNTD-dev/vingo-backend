@@ -29,7 +29,7 @@ public class EventPricingRepository {
                     SELECT 1
                     FROM showtime
                     WHERE event_id = :eventId
-                      AND status <> 'CANCELLED'
+                      AND status = 'SCHEDULED'
                       AND sale_opens_at <= :now
                 )
                 OR EXISTS (
@@ -165,10 +165,13 @@ public class EventPricingRepository {
         return Set.copyOf(jdbc.sql("""
                 SELECT DISTINCT z.id
                 FROM zone z
-                JOIN showtime s
-                ON s.seat_layout_id = z.seat_layout_id
-                WHERE s.event_id = :eventId
-                AND s.status <> 'CANCELLED'
+                JOIN event e ON e.id=:eventId
+                WHERE z.seat_layout_id=e.seat_layout_id OR (
+                  e.seat_layout_id IS NULL AND EXISTS (
+                    SELECT 1 FROM showtime s WHERE s.event_id=e.id
+                    AND s.seat_layout_id=z.seat_layout_id AND s.status<>'CANCELLED'
+                  )
+                )
                 """)
                 .param("eventId", eventId)
                 .query(UUID.class)
@@ -189,15 +192,16 @@ public class EventPricingRepository {
         for (var item : input) {
             jdbc.sql("""
                     INSERT INTO zone_price (
-                        event_id, zone_id, price_tier_id
+                        event_id, zone_id, price_tier_id, display_name
                     )
                     VALUES (
-                        :eventId, :zoneId, :tierId
+                        :eventId, :zoneId, :tierId, :displayName
                     )
                     """)
                     .param("eventId", eventId)
                     .param("zoneId", item.zoneId())
                     .param("tierId", item.priceTierId())
+                    .param("displayName", item.displayName() == null ? null : item.displayName().strip(), Types.VARCHAR)
                     .update();
         }
     }

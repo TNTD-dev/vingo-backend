@@ -41,11 +41,11 @@ public class TicketingReader {
         var tickets = jdbc.sql("""
                         SELECT t.id, t.code, t.status, t.used_at,
                                CASE WHEN t.status = 'ISSUED' THEN t.qr_token END AS visible_qr_token,
-                               o.code AS order_code, t.showtime_id, s.event_id, s.hall_id, s.seat_layout_id,
+                               o.code AS order_code, t.showtime_id, s.event_id, s.seat_layout_id,
                                s.starts_at, s.ends_at, s.sale_opens_at, s.sale_closes_at,
                                s.status AS stored_showtime_status, e.title, e.category, e.poster_url,
                                v.id AS venue_id, v.name AS venue_name, v.type AS venue_type, v.address, v.city,
-                               z.name AS zone_name, seat.row_label, seat.number, pt.name AS tier_name,
+                               COALESCE(oi.zone_name_snapshot, z.name) AS zone_name, seat.row_label, seat.number, COALESCE(oi.tier_name_snapshot, pt.name) AS tier_name,
                                (SELECT min(tier.price) FROM zone_price zp
                                 JOIN price_tier tier ON tier.id = zp.price_tier_id
                                 WHERE zp.event_id = e.id) AS price_from,
@@ -58,8 +58,7 @@ public class TicketingReader {
                                          AND :now < s2.sale_closes_at) AS on_sale
                         FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
                         JOIN orders o ON o.id = oi.order_id JOIN showtime s ON s.id = t.showtime_id
-                        JOIN event e ON e.id = s.event_id JOIN hall h ON h.id = s.hall_id
-                        JOIN venue v ON v.id = h.venue_id JOIN zone z ON z.id = t.zone_id
+                        JOIN event e ON e.id = s.event_id JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id JOIN zone z ON z.id = t.zone_id
                         JOIN price_tier pt ON pt.id = oi.price_tier_id LEFT JOIN seat ON seat.id = t.seat_id
                         WHERE t.id = ANY(:ids)
                         """)
@@ -87,7 +86,7 @@ public class TicketingReader {
                         event.posterUrl(URI.create(poster));
                     }
                     var showtime = new Showtime().id(rs.getObject("showtime_id", UUID.class))
-                            .eventId(rs.getObject("event_id", UUID.class)).hallId(rs.getObject("hall_id", UUID.class))
+                            .eventId(rs.getObject("event_id", UUID.class))
                             .seatLayoutId(rs.getObject("seat_layout_id", UUID.class))
                             .startsAt(rs.getObject("starts_at", OffsetDateTime.class))
                             .endsAt(rs.getObject("ends_at", OffsetDateTime.class))
@@ -118,8 +117,9 @@ public class TicketingReader {
         Map<UUID, CheckinResult> byId = new HashMap<>();
         jdbc.sql("""
                         SELECT c.id, c.result, c.scanned_at, t.code, t.used_at,
-                               z.name AS zone_name, s.row_label, s.number
+                               COALESCE(oi.zone_name_snapshot, z.name) AS zone_name, s.row_label, s.number
                         FROM checkin c JOIN ticket t ON t.id = c.ticket_id
+                        JOIN order_item oi ON oi.id = t.order_item_id
                         JOIN zone z ON z.id = t.zone_id LEFT JOIN seat s ON s.id = t.seat_id
                         WHERE c.id = ANY(:ids)
                         """)

@@ -38,7 +38,7 @@ class SeatmapRepository {
      * {@link #countZones}. {@code stockMissing} là true khi khu đứng chưa có dòng {@code showtime_zone_stock}.
      * {@code missingSeats} là số ghế của khu ngồi thiếu dòng {@code showtime_seat} (chỉ {@link #countZones} điền).
      */
-    record ZoneRow(UUID id, String name, ZoneKind kind, Optional<PriceTierResult> tier, int seatsLeft,
+    record ZoneRow(UUID id, String code, String name, ZoneKind kind, Optional<PriceTierResult> tier, int seatsLeft,
             boolean stockMissing, int missingSeats) {
     }
 
@@ -104,7 +104,7 @@ class SeatmapRepository {
         record ZoneBase(UUID id, String name, ZoneKind kind, PriceTierResult tier) {
         }
         List<ZoneBase> zones = jdbc.sql("""
-                        SELECT z.id, z.name, z.kind, pt.id AS tier_id, pt.name AS tier_name, pt.price, pt.color
+                        SELECT z.id, COALESCE(zp.display_name, z.name) AS name, z.kind, pt.id AS tier_id, pt.name AS tier_name, pt.price, pt.color
                         FROM zone z
                         LEFT JOIN zone_price zp ON zp.event_id = :eventId AND zp.zone_id = z.id
                         LEFT JOIN price_tier pt ON pt.id = zp.price_tier_id
@@ -198,8 +198,8 @@ class SeatmapRepository {
      */
     List<ZoneRow> countZones(ShowtimeRef showtime, OffsetDateTime now) {
         return jdbc.sql("""
-                        SELECT z.id, z.name, z.kind, pt.id AS tier_id, pt.name AS tier_name, pt.price, pt.color,
-                               st.zone_id IS NULL AS stock_missing,
+                        SELECT z.id, COALESCE(zp.display_name, z.name) AS name, z.kind, pt.id AS tier_id, pt.name AS tier_name, pt.price, pt.color,
+                               z.code, st.zone_id IS NULL AS stock_missing,
                                CASE WHEN z.kind = 'STANDING' THEN COALESCE(st.capacity - st.sold - st.held, 0)
                                     ELSE COUNT(ss.seat_id) FILTER (WHERE %s) END AS seats_left,
                                COUNT(s.id) FILTER (WHERE ss.seat_id IS NULL) AS missing_seats
@@ -210,7 +210,7 @@ class SeatmapRepository {
                         LEFT JOIN seat s ON s.zone_id = z.id AND z.kind = 'SEATED'
                         LEFT JOIN showtime_seat ss ON ss.showtime_id = :showtimeId AND ss.seat_id = s.id
                         WHERE z.seat_layout_id = :layoutId
-                        GROUP BY z.id, z.name, z.kind, pt.id, pt.name, pt.price, pt.color,
+                        GROUP BY z.id, z.name, zp.display_name, z.kind, pt.id, pt.name, pt.price, pt.color,
                                  st.zone_id, st.capacity, st.sold, st.held
                         ORDER BY z.name, z.id
                         """.formatted(FREE_SEAT_SQL))
@@ -221,7 +221,7 @@ class SeatmapRepository {
                 .query((rs, n) -> {
                     ZoneKind kind = ZoneKind.valueOf(rs.getString("kind"));
                     return new ZoneRow(
-                            rs.getObject("id", UUID.class), rs.getString("name"), kind, tier(rs),
+                            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"), kind, tier(rs),
                             rs.getInt("seats_left"), kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"),
                             rs.getInt("missing_seats"));
                 }).list();

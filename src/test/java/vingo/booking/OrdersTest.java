@@ -41,6 +41,27 @@ class OrdersTest extends BookingTestSupport {
     }
 
     @Test
+    void getOrder_usesNamesAndPriceCapturedAtHold() {
+        var event = showtime.event();
+        jdbc.sql("""
+                UPDATE zone_price SET display_name = 'Khán đài A'
+                WHERE event_id = :event AND zone_id = :zone
+                """).param("event", event.id()).param("zone", event.seatedZoneId()).update();
+        UUID id = seatedHold();
+        jdbc.sql("""
+                UPDATE zone_price SET display_name = 'Tên mới'
+                WHERE event_id = :event AND zone_id = :zone
+                """).param("event", event.id()).param("zone", event.seatedZoneId()).update();
+        jdbc.sql("UPDATE price_tier SET name = 'Hạng mới', price = 1 WHERE id = :tier")
+                .param("tier", event.vipPriceTierId()).update();
+
+        String json = body(get(token, "/api/v1/orders/{id}", id), 200);
+        assertThat(text(json, "$.items[0].zone")).isEqualTo("Khán đài A");
+        assertThat(text(json, "$.items[0].tier")).isEqualTo("VIP");
+        assertThat(number(json, "$.items[0].unit_price")).isEqualTo(VIP_PRICE);
+    }
+
+    @Test
     void getOrder_returns404_whenOrderBelongsToAnotherBuyer() {
         UUID id = seatedHold();
         problem(get(buyerToken(catalog.buyer()), "/api/v1/orders/{id}", id), 404, "NOT_FOUND");

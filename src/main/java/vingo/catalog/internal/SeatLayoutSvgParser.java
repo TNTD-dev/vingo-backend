@@ -45,7 +45,7 @@ public class SeatLayoutSvgParser {
             "id", "viewBox", "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry",
             "x1", "x2", "y1", "y2", "d", "points", "fill", "stroke", "stroke-width",
             "stroke-linejoin", "stroke-linecap", "fill-rule", "clip-rule", "mask",
-            "maskUnits", "maskContentUnits", "opacity", "fill-opacity", "stroke-opacity", "transform");
+            "maskUnits", "maskContentUnits", "mask-type", "opacity", "fill-opacity", "stroke-opacity", "transform");
 
     public enum ZoneKind {
         SEATED,
@@ -59,7 +59,7 @@ public class SeatLayoutSvgParser {
             BigDecimal height
     ) {}
 
-   record ParsedSeat(
+   public record ParsedSeat(
          String svgId,
          String rowLabel,
          int number,
@@ -67,7 +67,7 @@ public class SeatLayoutSvgParser {
          BigDecimal y
    ) {}
 
-   record ParsedZone(
+   public record ParsedZone(
          String code,
          String label,
          String standCode,
@@ -81,7 +81,7 @@ public class SeatLayoutSvgParser {
          List<ParsedSeat> seats
    ) {}
 
-   record ParsedLayout(
+   public record ParsedLayout(
          int schemaVersion,
          String svgContent,
          Bounds viewBox,
@@ -122,6 +122,7 @@ public class SeatLayoutSvgParser {
         List<ParsedZone> parsedZones = zones.values().stream()
                 .map(zone -> finishZone(zone, elements))
                 .toList();
+        SeatLayoutCollisionValidator.validate(elements, geometry);
         return new ParsedLayout(1, serialize(document), viewBox, parsedZones);
     }
 
@@ -129,7 +130,32 @@ public class SeatLayoutSvgParser {
         return readViewBox(parseXml(input).getDocumentElement());
     }
 
-    private static Bounds readViewBox(Element root) {
+    /** API nội bộ để luồng import nhiều file gọi sau khi hợp nhất các file detail. */
+    public void validateGateCollisions(byte[] overviewInput, byte[] detailInput) {
+        Document overviewDocument = parseXml(overviewInput);
+        Bounds overviewBox = readViewBox(overviewDocument.getDocumentElement());
+        Map<String, Element> overview = validateElements(overviewDocument.getDocumentElement());
+        if (overview.keySet().stream().noneMatch(id -> id.startsWith("GATE__"))) {
+            throw invalid("MISSING_GATES", "Sơ đồ nền cần ít nhất một cổng có hình học.");
+        }
+        if (overview.keySet().stream().anyMatch(id -> id.startsWith("ZONE__") || id.startsWith("SEAT__"))) {
+            throw invalid("INVALID_OVERVIEW", "Sơ đồ nền không được chứa zone hoặc ghế chi tiết.");
+        }
+        Document detailDocument = parseXml(detailInput);
+        Bounds detailBox = readViewBox(detailDocument.getDocumentElement());
+        Map<String, Element> detail = validateElements(detailDocument.getDocumentElement());
+        if (detail.keySet().stream().anyMatch(id -> id.startsWith("GATE__"))) {
+            throw invalid("INVALID_DETAIL", "Cổng phải nằm trong file nền, không phải file chi tiết.");
+        }
+        if (overviewBox.x().compareTo(detailBox.x()) != 0 || overviewBox.y().compareTo(detailBox.y()) != 0
+                || overviewBox.width().compareTo(detailBox.width()) != 0 || overviewBox.height().compareTo(detailBox.height()) != 0) {
+            throw invalid("VIEW_BOX_MISMATCH", "Hai file phải có cùng hệ tọa độ viewBox.");
+        }
+        parse(detailInput);
+        SeatLayoutCollisionValidator.validate(overview, detail);
+    }
+
+    static Bounds readViewBox(Element root) {
         if (root == null
                 || !"svg".equals(root.getLocalName())
                 || !SVG.equals(root.getNamespaceURI())) {
@@ -159,7 +185,7 @@ public class SeatLayoutSvgParser {
         }
     }
 
-    private static Map<String, Element> validateElements(Element root) {
+    static Map<String, Element> validateElements(Element root) {
         Map<String, Element> elements = new LinkedHashMap<>();
         var nodes = root.getElementsByTagName("*");
         validateElement(root, elements);
@@ -195,6 +221,11 @@ public class SeatLayoutSvgParser {
             }
             if ("use".equals(element.getLocalName()) && "href".equals(name)
                     && (namespace == null || XLINK.equals(namespace))) {
+                continue;
+            }
+            if (namespace == null && element == element.getOwnerDocument().getDocumentElement()
+                    && (("data-schema-version".equals(name) && "2".equals(attribute.getNodeValue()))
+                    || ("data-document-kind".equals(name) && Set.of("OVERVIEW", "SEAT_LAYOUT").contains(attribute.getNodeValue())))) {
                 continue;
             }
             if (namespace != null || !ATTRIBUTES.contains(name)) {
@@ -315,7 +346,7 @@ public class SeatLayoutSvgParser {
         throw invalid(id, reason, "Giá trị phải là số nguyên dương.");
     }
 
-    private static String serialize(Document document) {
+    static String serialize(Document document) {
         try {
             var factory = TransformerFactory.newInstance();
             factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
@@ -334,7 +365,7 @@ public class SeatLayoutSvgParser {
     private record ZoneDraft(String code, Integer level, ZoneKind kind, int capacity, String svgId, Bounds bounds,
             List<ParsedSeat> seats, Set<SeatKey> keys) {}
 
-    private static Document parseXml(byte[] input) {
+    static Document parseXml(byte[] input) {
         try {
             var factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(true);

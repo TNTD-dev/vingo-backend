@@ -18,7 +18,7 @@ import vingo.search.VenueResult;
 
 /**
  * Truy vấn chi tiết sự kiện và các suất, chỉ đọc bằng {@link JdbcClient}. Đọc bảng của catalog (event, showtime,
- * hall, venue, price_tier) và booking (showtime_seat, showtime_zone_stock). Không tính trạng thái suất trong SQL.
+ * seat_layout, venue, price_tier) và booking (showtime_seat, showtime_zone_stock). Không tính trạng thái suất trong SQL.
  */
 @Repository
 class EventDetailRepository {
@@ -34,7 +34,7 @@ class EventDetailRepository {
      * Một suất ở dạng thô: {@code storedStatus} là giá trị trong DB, chưa tính theo giờ; không có {@code sold_out}
      * vì cờ đó đổi theo từng giây. Đây là dữ liệu được cache 10 phút.
      */
-    record ShowtimeRow(UUID id, UUID eventId, UUID hallId, UUID seatLayoutId, OffsetDateTime startsAt,
+    record ShowtimeRow(UUID id, UUID eventId, UUID seatLayoutId, OffsetDateTime startsAt,
             OffsetDateTime endsAt, OffsetDateTime saleOpensAt, OffsetDateTime saleClosesAt, String storedStatus,
             VenueResult venue) {
     }
@@ -80,13 +80,12 @@ class EventDetailRepository {
     /** Các suất không phải DRAFT, theo {@code starts_at} rồi {@code id}. Dữ liệu thô, không tính trạng thái. */
     List<ShowtimeRow> findShowtimes(UUID eventId) {
         return jdbc.sql("""
-                        SELECT s.id, s.event_id, s.hall_id, s.seat_layout_id, s.starts_at, s.ends_at,
+                        SELECT s.id, s.event_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at, s.status,
                                v.id AS venue_id, v.name AS venue_name, v.type AS venue_type,
                                v.address AS venue_address, v.city AS venue_city
                         FROM showtime s
-                        JOIN hall h ON h.id = s.hall_id
-                        JOIN venue v ON v.id = h.venue_id
+                        JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
                         WHERE s.event_id = :id AND s.status <> 'DRAFT'
                         ORDER BY s.starts_at, s.id
                         """)
@@ -94,7 +93,6 @@ class EventDetailRepository {
                 .query((rs, n) -> new ShowtimeRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("event_id", UUID.class),
-                        rs.getObject("hall_id", UUID.class),
                         rs.getObject("seat_layout_id", UUID.class),
                         rs.getObject("starts_at", OffsetDateTime.class),
                         rs.getObject("ends_at", OffsetDateTime.class),

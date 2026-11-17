@@ -9,6 +9,8 @@ Repo này cung cấp REST API và luồng realtime (SSE) cho:
 Người mua: đăng nhập → tìm sự kiện → giữ ghế 10 phút → thanh toán VNPay → nhận vé QR → check-in tại cổng.
 Admin: tạo sân, sơ đồ ghế, sự kiện, suất, giá → quản lý đơn và vé → xem báo cáo.
 
+Backend nhập sân v2 (mục 1.3) đã chuyển sang mô hình không có hall; xem [API, payload và sequence](docs/venue-import-api.md) và [checklist](docs/admin-completion-checklist.md). Hai migration sân vẫn ở `deploy/migrations-pending`; [DB local đã migrate theo yêu cầu riêng](docs/local-venue-v2-migration.md), có cấu hình locations trong `.env.local`. Backend mới cần schema v2; UI còn chờ mục 1.4, triển khai đồng bộ ở mục 1.5.
+
 ---
 
 ## Mục lục
@@ -92,7 +94,7 @@ Dữ liệu mẫu có 1 sân, 1 sự kiện đang mở bán (30 ghế + khu đ�
 
 Mở Swagger UI: <http://localhost:8080/swagger-ui.html>
 
-Flyway tự chạy migration khi API khởi động.
+Flyway tự chạy migration trong đường dẫn đã cấu hình khi API khởi động. Để thử backend sân mới, dùng thêm profile `venue-v2` trên DB thử nghiệm theo tài liệu API. `scripts/seed.sql` ở bước 7 là seed schema hall cũ: chỉ dùng trước khi migrate, không chạy lại trên schema v2.
 
 ### Profile
 
@@ -103,6 +105,7 @@ Cùng một file jar, chọn vai trò bằng profile:
 | `api` | Phục vụ HTTP (REST + SSE), tắt job nền |
 | `worker` | Không mở cổng HTTP, chạy job nền |
 | `local` | Cấu hình cho máy dev (đọc `.env.local`, log dạng dễ đọc) |
+| `venue-v2` | Chủ động thêm migration chờ khi chạy từ thư mục repo trên DB thử nghiệm đã sao lưu; không tự bật |
 
 ---
 
@@ -286,7 +289,7 @@ VNPay gửi kết quả (IPN) từ server của họ về URL HTTPS public, nên
 
 | Môi trường | Cách nhận kết quả thanh toán |
 |---|---|
-| Staging | Nhận IPN thật từ VNPay sandbox (IPN URL đã cấu hình trong merchant portal sandbox) |
+| Staging | Nhận IPN thật từ VNPay sandbox; cấu hình IPN URL trong merchant portal sandbox là `https://staging.vingo.id.vn/api/v1/payments/vnpay/ipn` |
 | Máy local | Dùng `scripts/simulate_ipn.py` để giả IPN có chữ ký hợp lệ |
 
 ```bash

@@ -141,8 +141,9 @@ public class TicketingRepository {
     public Optional<ScannableTicket> lockTicket(String qrToken) {
         return jdbc.sql("""
                         SELECT t.id, t.showtime_id, t.status, t.used_at, t.code,
-                               z.name AS zone_name, s.row_label, s.number
-                        FROM ticket t JOIN zone z ON z.id = t.zone_id LEFT JOIN seat s ON s.id = t.seat_id
+                               COALESCE(oi.zone_name_snapshot, z.name) AS zone_name, s.row_label, s.number
+                        FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
+                        JOIN zone z ON z.id = t.zone_id LEFT JOIN seat s ON s.id = t.seat_id
                         WHERE t.qr_token = :token FOR UPDATE OF t
                         """)
                 .param("token", qrToken).query((rs, row) -> new ScannableTicket(

@@ -26,6 +26,7 @@ import org.springframework.util.StringUtils;
 
 import vingo.auth.internal.AuthProperties;
 import vingo.auth.internal.AuthRepository;
+import vingo.auth.internal.AccountSecurityState;
 import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.LoginProperties;
 import vingo.auth.internal.OtpProperties;
@@ -49,6 +50,7 @@ public class AuthService {
     private static final String ACCOUNT_LOCKED_MESSAGE = "Tài khoản đang bị khoá tạm do đăng nhập sai nhiều lần";
 
     private final AuthRepository accounts;
+    private final AccountSecurityState securityState;
     private final JwtProperties jwt;
     private final AuthProperties authProperties;
     private final LoginProperties loginProperties;
@@ -64,8 +66,10 @@ public class AuthService {
     AuthService(AuthRepository accounts, JwtProperties jwt, AuthProperties authProperties,
                 LoginProperties loginProperties, OtpProperties otpProperties,
                 NotificationsService notifications, RateLimiter rateLimiter,
-                PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock) {
+                PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock,
+                AccountSecurityState securityState) {
         this.accounts = accounts;
+        this.securityState = securityState;
         this.jwt = jwt;
         this.authProperties = authProperties;
         this.loginProperties = loginProperties;
@@ -212,7 +216,10 @@ public class AuthService {
         }
         var session = found.get().session();
         var user = found.get().user();
-        if (!"VERIFY".equals(session.purpose()) || session.consumedAt() != null || !"UNVERIFIED".equals(user.status())) {
+        boolean validState = session.consumedAt() == null
+                && (("VERIFY".equals(session.purpose()) && "UNVERIFIED".equals(user.status()))
+                || ("RESET".equals(session.purpose()) && ("ACTIVE".equals(user.status()) || "LOCKED".equals(user.status()))));
+        if (!validState) {
             return new ResendOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
         }
         OffsetDateTime nextAllowed = session.lastSentAt().plus(otpProperties.resendCooldown());
@@ -223,6 +230,93 @@ public class AuthService {
         OffsetDateTime newExpiresAt = now.plus(otpProperties.ttl());
         accounts.refreshOtpSession(session.id(), newOtpHash, now, newExpiresAt);
         return new ResendOutcome.Success(user.id(), user.email(), newExpiresAt);
+    }
+
+    /**
+     * Yêu cầu OTP đặt lại mật khẩu. Luôn trả OtpSession hợp lệ để không lộ email tồn tại hay không.
+     */
+    public OtpSessionInfo forgotPassword(String email, String clientIp) {
+        rateLimiter.check(clientKey(clientIp), "auth-forgot-password",
+                otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
+        String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+        String rawOtp = generateOtp();
+        String otpHash = passwordEncoder.encode(rawOtp);
+
+        var created = tx.execute(status -> {
+            OffsetDateTime now = OffsetDateTime.now(clock);
+            OffsetDateTime expiresAt = now.plus(otpProperties.ttl());
+            var found = accounts.findByEmailForUpdate(normalizedEmail);
+            if (found.isEmpty()) {
+                return new ForgotPasswordResult(null, null, UUID.randomUUID(), expiresAt, false);
+            }
+            var user = found.get();
+            if (!"ACTIVE".equals(user.status()) && !"LOCKED".equals(user.status())) {
+                return new ForgotPasswordResult(null, null, UUID.randomUUID(), expiresAt, false);
+            }
+            accounts.consumeActiveOtpSessions(user.id(), "RESET", now);
+            var session = accounts.createOtpSession(user.id(), "RESET", "EMAIL", otpHash, now, expiresAt);
+            return new ForgotPasswordResult(user.id(), user.email(), session.id(), session.expiresAt(), true);
+        });
+
+        if (created.shouldSendEmail()) {
+            try {
+                notifications.sendOtpEmail(UUID.randomUUID(), created.email(), rawOtp, created.expiresAt());
+            } catch (RuntimeException ex) {
+                tx.executeWithoutResult(status ->
+                        accounts.consumeOtpSession(created.otpSessionId(), OffsetDateTime.now(clock)));
+                throw ex;
+            }
+            log.atInfo()
+                    .addKeyValue("user_id", created.userId())
+                    .addKeyValue("otp_session_id", created.otpSessionId())
+                    .log("Created password reset OTP session");
+        }
+        return new OtpSessionInfo(created.otpSessionId(), created.expiresAt(), "EMAIL");
+    }
+
+    /**
+     * Xác thực OTP mục đích RESET, đặt mật khẩu mới (mở khoá nếu đang LOCKED) và thu hồi toàn bộ phiên.
+     */
+    public void resetPassword(UUID otpSessionId, String rawOtp, String newPassword) {
+        String newPasswordHash = passwordEncoder.encode(newPassword);
+        ResetOutcome outcome = tx.execute(status -> resetPasswordInTransaction(otpSessionId, rawOtp, newPasswordHash));
+        if (outcome instanceof ResetOutcome.Failure(var code, var message)) {
+            throw new DomainException(code, message);
+        }
+        var success = (ResetOutcome.Success) outcome;
+        log.atInfo()
+                .addKeyValue("user_id", success.userId())
+                .addKeyValue("otp_session_id", otpSessionId)
+                .log("Reset password via OTP and revoked all sessions");
+    }
+
+    private ResetOutcome resetPasswordInTransaction(UUID otpSessionId, String rawOtp, String newPasswordHash) {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        var found = accounts.findOtpSessionForUpdate(otpSessionId);
+        if (found.isEmpty()) {
+            return new ResetOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ");
+        }
+        var session = found.get().session();
+        var user = found.get().user();
+        boolean eligibleUser = "ACTIVE".equals(user.status()) || "LOCKED".equals(user.status());
+        if (!"RESET".equals(session.purpose()) || session.consumedAt() != null || !eligibleUser) {
+            return new ResetOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
+        }
+        if (!session.expiresAt().isAfter(now)) {
+            return new ResetOutcome.Failure(ErrorCode.OTP_EXPIRED, "OTP đã hết hạn");
+        }
+        if (session.attempts() >= otpProperties.maxAttempts()) {
+            return new ResetOutcome.Failure(ErrorCode.OTP_TOO_MANY_ATTEMPTS, "Nhập sai OTP quá số lần cho phép");
+        }
+        if (!passwordEncoder.matches(rawOtp, session.otpHash())) {
+            accounts.incrementOtpAttempts(session.id());
+            return new ResetOutcome.Failure(ErrorCode.OTP_INVALID, "OTP không đúng");
+        }
+
+        accounts.consumeOtpSession(session.id(), now);
+        accounts.updatePasswordAndUnlock(user.id(), newPasswordHash, now);
+        accounts.revoke(user.id(), null, true, now);
+        return new ResetOutcome.Success(user.id());
     }
 
     private static String generateOtp() {
@@ -274,6 +368,9 @@ public class AuthService {
 
         var account = found.get();
         var user = account.user();
+        if (securityState.locked(user.id())) {
+            return new LoginOutcome.Failure(ErrorCode.ACCOUNT_LOCKED, "Tài khoản đã bị quản trị viên khóa");
+        }
         boolean expiredTempLock = false;
         if ("LOCKED".equals(user.status())) {
             if (account.lockedUntil() == null || account.lockedUntil().isAfter(now)) {
@@ -335,6 +432,59 @@ public class AuthService {
         accounts.revoke(userId, sessionId, allDevices, OffsetDateTime.now(clock));
     }
 
+    @Transactional
+    public AuthUser getMe(UUID userId) {
+        var account = accounts.findEditableAccount(userId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy tài khoản"));
+        if (!"ACTIVE".equals(account.user().status()) && !"LOCKED".equals(account.user().status())) {
+            throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động");
+        }
+        return account.user();
+    }
+
+    @Transactional
+    public AuthUser updateMe(UUID userId, String fullName, String phone, String currentPassword, String newPassword) {
+        var account = accounts.findEditableAccount(userId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy tài khoản"));
+        if (!"ACTIVE".equals(account.user().status())) {
+            throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động");
+        }
+        boolean changePassword = StringUtils.hasText(newPassword);
+        if ((StringUtils.hasText(currentPassword) && !changePassword)
+                || (changePassword && newPassword.length() < 8)) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Đổi mật khẩu cần mật khẩu mới tối thiểu 8 ký tự");
+        }
+        if (changePassword && (!StringUtils.hasText(currentPassword) || account.passwordHash() == null
+                || !passwordEncoder.matches(currentPassword, account.passwordHash()))) {
+            throw new DomainException(ErrorCode.INVALID_CREDENTIALS, "Mật khẩu hiện tại không đúng");
+        }
+        String normalizedName = fullName == null ? account.user().fullName() : fullName.strip();
+        String normalizedPhone = phone == null ? account.user().phone() : phone.strip();
+        if (!StringUtils.hasText(normalizedName) || normalizedName.length() > 200
+                || (normalizedPhone != null && !normalizedPhone.isBlank() && normalizedPhone.length() > 32)) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Tên hoặc số điện thoại không hợp lệ");
+        }
+        String hash = changePassword ? passwordEncoder.encode(newPassword) : null;
+        try {
+            accounts.updateAccount(userId, normalizedName, StringUtils.hasText(normalizedPhone) ? normalizedPhone : null,
+                    hash, OffsetDateTime.now(clock));
+        } catch (DataIntegrityViolationException ex) {
+            String message = ex.getMostSpecificCause().getMessage();
+            if (message != null && message.contains("users_phone_uk")) {
+                throw new DomainException(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
+            }
+            throw ex;
+        }
+        return accounts.findEditableAccount(userId).orElseThrow().user();
+    }
+
+    @Transactional
+    public void deleteMe(UUID userId) {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        accounts.revoke(userId, null, true, now);
+        accounts.deleteAccount(userId, now);
+    }
+
     /** Kiểm tra người mua đã có hồ sơ trước khi tạo thanh toán. */
     public boolean hasBuyerProfile(UUID userId) {
         return accounts.hasBuyerProfile(userId);
@@ -344,6 +494,7 @@ public class AuthService {
         var claims = JwtClaimsSet.builder()
                 .issuer(jwt.issuer())
                 .subject(userId.toString())
+                .claim("av", securityState.version(userId))
                 .claim(CurrentUser.ROLE_CLAIM, role.name())
                 .claim(CurrentUser.SESSION_CLAIM, sessionId.toString())
                 .issuedAt(now.toInstant())
@@ -391,6 +542,22 @@ public class AuthService {
     }
 
     private record RegisteredOtp(UUID userId, UUID otpSessionId, OffsetDateTime expiresAt) {
+    }
+
+    private record ForgotPasswordResult(
+            UUID userId,
+            String email,
+            UUID otpSessionId,
+            OffsetDateTime expiresAt,
+            boolean shouldSendEmail) {
+    }
+
+    private sealed interface ResetOutcome {
+        record Success(UUID userId) implements ResetOutcome {
+        }
+
+        record Failure(ErrorCode code, String message) implements ResetOutcome {
+        }
     }
 
     public record OtpSessionInfo(UUID otpSessionId, OffsetDateTime expiresAt, String channel) {

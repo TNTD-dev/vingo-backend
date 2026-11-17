@@ -48,7 +48,7 @@ public final class CatalogFixtures {
     public void reset() {
         jdbc.sql("""
                 TRUNCATE showtime_zone_stock, showtime_seat, zone_price, price_tier, showtime, event,
-                         seat_pair, seat, zone, seat_layout, hall, venue CASCADE
+                         seat_pair, seat, zone, seat_layout, venue_overview, venue CASCADE
                 """).update();
     }
 
@@ -70,6 +70,9 @@ public final class CatalogFixtures {
     // ------------------------------------------------------------------ Showtime
 
     public final class ShowtimeBuilder {
+        private int coupleFirst=-1;
+        public ShowtimeBuilder couple(int firstIndex) {this.coupleFirst=firstIndex;return this;}
+
 
         private Instant startsAt = clock.instant().plus(Duration.ofDays(7));
         private Duration length = Duration.ofHours(2);
@@ -284,10 +287,7 @@ public final class CatalogFixtures {
                 String cityCode = s.city != null ? s.city : city;
                 String venueLabel = s.venueName != null ? s.venueName : venueName != null ? venueName : "Sân " + cityCode;
                 UUID venueId = venues.computeIfAbsent(cityCode + "/" + venueLabel, k -> insertVenue(venueLabel, cityCode));
-                UUID hallId = insertHall(venueId);
-                UUID layoutId = insertLayout(hallId);
-                UUID showtimeId = insertShowtime(eventId, hallId, layoutId, s);
-                showtimeIds.add(showtimeId);
+                UUID layoutId = VenueSchemaFixture.draft(jdbc,venueId);
 
                 // Tạo zone, giá và ghế theo thứ tự khai báo; ghi nhớ để phân bổ vé đã bán.
                 Map<UUID, ZoneSpec> created = new LinkedHashMap<>();
@@ -300,6 +300,14 @@ public final class CatalogFixtures {
                         seatsByZone.put(zoneId, insertSeats(zoneId, z.size(), z.perRow()));
                     }
                 }
+
+                if(s.coupleFirst>=0) {
+                    var seats=seatsByZone.get(created.keySet().iterator().next());
+                    makeCouple(seats.get(s.coupleFirst),seats.get(s.coupleFirst+1));
+                }
+                VenueSchemaFixture.publish(jdbc,layoutId);
+                UUID showtimeId=insertShowtime(eventId,layoutId,s);
+                showtimeIds.add(showtimeId);
 
                 // Vé đã bán: ghế ngồi trước, rồi tới khu đứng. Đơn PAID chỉ để thoả ràng buộc order_id của ghế SOLD.
                 int remainingSold = s.sold;
@@ -451,28 +459,16 @@ public final class CatalogFixtures {
                 .param("n", name).param("c", city).query(UUID.class).single();
     }
 
-    private UUID insertHall(UUID venueId) {
-        return jdbc.sql("INSERT INTO hall (venue_id, name) VALUES (:v, :n) RETURNING id")
-                .param("v", venueId).param("n", "Hall " + UUID.randomUUID()).query(UUID.class).single();
-    }
-
-    private UUID insertLayout(UUID hallId) {
-        return jdbc.sql("""
-                        INSERT INTO seat_layout (hall_id, status, published_at) VALUES (:h, 'PUBLISHED', :now) RETURNING id
-                        """)
-                .param("h", hallId).param("now", utc(clock.instant())).query(UUID.class).single();
-    }
-
-    private UUID insertShowtime(UUID eventId, UUID hallId, UUID layoutId, CatalogFixtures.ShowtimeBuilder s) {
+    private UUID insertShowtime(UUID eventId, UUID layoutId, CatalogFixtures.ShowtimeBuilder s) {
         Instant endsAt = s.startsAt.plus(s.length);
         Instant opens = s.saleOpensAt != null ? s.saleOpensAt : s.startsAt.minus(Duration.ofDays(30));
         Instant closes = s.saleClosesAt != null ? s.saleClosesAt : s.startsAt;
         return jdbc.sql("""
-                        INSERT INTO showtime (event_id, hall_id, seat_layout_id, starts_at, ends_at,
+                        INSERT INTO showtime (event_id, seat_layout_id, starts_at, ends_at,
                                               sale_opens_at, sale_closes_at, status)
-                        VALUES (:e, :h, :l, :starts, :ends, :opens, :closes, :status) RETURNING id
+                        VALUES (:e, :l, :starts, :ends, :opens, :closes, :status) RETURNING id
                         """)
-                .param("e", eventId).param("h", hallId).param("l", layoutId)
+                .param("e", eventId).param("l", layoutId)
                 .param("starts", utc(s.startsAt)).param("ends", utc(endsAt))
                 .param("opens", utc(opens)).param("closes", utc(closes))
                 .param("status", s.status)

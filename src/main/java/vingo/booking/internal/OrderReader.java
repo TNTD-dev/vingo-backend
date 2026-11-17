@@ -70,7 +70,7 @@ public class OrderReader {
         }
         UUID[] ids = orderIds.toArray(UUID[]::new);
         var orders = jdbc.sql("""
-                        SELECT o.*, s.event_id, s.hall_id, s.seat_layout_id, s.starts_at, s.ends_at,
+                        SELECT o.*, s.event_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at,
                                s.status AS stored_showtime_status,
                                e.title, e.category, e.poster_url, v.name AS venue_name, v.city,
@@ -86,7 +86,7 @@ public class OrderReader {
                                          AND :now < s2.sale_closes_at) AS on_sale
                         FROM orders o JOIN showtime s ON s.id = o.showtime_id
                         JOIN event e ON e.id = s.event_id
-                        JOIN hall h ON h.id = s.hall_id JOIN venue v ON v.id = h.venue_id
+                        JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
                         WHERE o.id = ANY(:ids)
                         """)
                 .param("ids", new SqlArrayValue("uuid", ids)).param("now", now)
@@ -110,7 +110,7 @@ public class OrderReader {
                         event.posterUrl(URI.create(poster));
                     }
                     var showtime = new Showtime().id(rs.getObject("showtime_id", UUID.class))
-                            .eventId(rs.getObject("event_id", UUID.class)).hallId(rs.getObject("hall_id", UUID.class))
+                            .eventId(rs.getObject("event_id", UUID.class))
                             .seatLayoutId(rs.getObject("seat_layout_id", UUID.class))
                             .startsAt(rs.getObject("starts_at", OffsetDateTime.class))
                             .endsAt(rs.getObject("ends_at", OffsetDateTime.class))
@@ -142,8 +142,8 @@ public class OrderReader {
 
         Map<UUID, List<OrderItem>> itemsByOrder = new HashMap<>();
         jdbc.sql("""
-                        SELECT i.order_id, i.id, i.seat_id, i.unit_price, i.quantity, z.name AS zone_name,
-                               s.row_label, s.number, pt.name AS tier_name
+                        SELECT i.order_id, i.id, i.seat_id, i.unit_price, i.quantity, COALESCE(i.zone_name_snapshot, z.name) AS zone_name,
+                               s.row_label, s.number, COALESCE(i.tier_name_snapshot, pt.name) AS tier_name
                         FROM order_item i JOIN zone z ON z.id = i.zone_id
                         JOIN price_tier pt ON pt.id = i.price_tier_id LEFT JOIN seat s ON s.id = i.seat_id
                         WHERE i.order_id = ANY(:ids) ORDER BY i.order_id, z.name, s.row_label, s.number, i.id
