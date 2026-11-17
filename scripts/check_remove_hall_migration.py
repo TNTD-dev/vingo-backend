@@ -14,7 +14,13 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PENDING = ROOT / "deploy/migrations-pending/V20261116_1900__catalog_remove_hall.sql"
+MIGRATIONS = ROOT / "src/main/resources/db/migration"
+PENDING = MIGRATIONS / "V20261116_1900__catalog_remove_hall.sql"
+
+
+def history_before(name: str):
+    """Migration lịch sử đứng trước `name`, dùng dựng schema cũ trước khi thử chuyển đổi."""
+    return [m for m in sorted(MIGRATIONS.glob("V*.sql")) if m.name < name]
 CONTAINER = "vingo-hall-check-" + uuid.uuid4().hex[:12]
 TABLES = (
     "venue", "hall", "seat_layout", "zone", "seat", "showtime", "orders",
@@ -128,7 +134,7 @@ def main():
         command("docker", "cp", str(ROOT / "src/main/resources/db/migration"), CONTAINER + ":/migrations")
         command("docker", "cp", str(PENDING), CONTAINER + ":/pending.sql")
         sql("postgres", "CREATE DATABASE hall_template")
-        for migration in sorted((ROOT / "src/main/resources/db/migration").glob("V*.sql")):
+        for migration in history_before(PENDING.name):
             command("docker", "exec", CONTAINER, "psql", "-Xq", "-U", "postgres", "-d", "hall_template",
                     "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/migrations/" + migration.name)
 

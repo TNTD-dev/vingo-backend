@@ -27,4 +27,4 @@ vingo:
     frontend-return-url: http://localhost:5173/payment/result
 spring:
   flyway:
-    locations: classpath:db/migration,filesystem:deploy/migrations-pending
+    locations: classpath:db/migration

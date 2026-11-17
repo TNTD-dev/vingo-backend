@@ -9,7 +9,7 @@ Repo này cung cấp REST API và luồng realtime (SSE) cho:
 Người mua: đăng nhập → tìm sự kiện → giữ ghế 10 phút → thanh toán VNPay → nhận vé QR → check-in tại cổng.
 Admin: tạo sân, sơ đồ ghế, sự kiện, suất, giá → quản lý đơn và vé → xem báo cáo.
 
-Backend nhập sân v2 (mục 1.3) đã chuyển sang mô hình không có hall; xem [API, payload và sequence](docs/venue-import-api.md) và [checklist](docs/admin-completion-checklist.md). Hai migration sân vẫn ở `deploy/migrations-pending`; [DB local đã migrate theo yêu cầu riêng](docs/local-venue-v2-migration.md), có cấu hình locations trong `.env.local`. Backend mới cần schema v2; UI còn chờ mục 1.4, triển khai đồng bộ ở mục 1.5.
+Backend nhập sân v2 (mục 1.3) đã chuyển sang mô hình không có hall; xem [API, payload và sequence](docs/venue-import-api.md) và [checklist](docs/admin-completion-checklist.md). Bốn migration sân v2 (`V20261116_1900`, `V20261116_1910`, `V20261117_0100`, `V20261117_0200`) đã nằm trong `src/main/resources/db/migration`; Flyway tự áp khi API khởi động. Migration bỏ hall không quay ngược được: **sao lưu DB trước khi chạy bản này lần đầu**. Nếu `.env.local` còn dòng `spring.flyway.locations=...migrations-pending` thì xoá đi.
 
 ---
 

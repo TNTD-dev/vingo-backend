@@ -99,13 +99,11 @@ Giá và tên zone trong phạm vi đầu tiên áp dụng chung cho mọi showt
 
 ## 7. Chạy luồng mới ở local
 
-Backend cần các migration chờ của quản lý sân trước migration
-`V20261117_0200__catalog_event_layout_selection.sql`. Từ thư mục backend,
-chạy trong PowerShell:
+Các migration sân v2 đã nằm trong thư mục Flyway chính, API tự áp khi
+khởi động (sao lưu DB trước lần đầu). Từ thư mục backend, chạy trong PowerShell:
 
 ```powershell
 docker compose -f deploy/compose.dev.yaml up -d
-$env:SPRING_FLYWAY_LOCATIONS = 'classpath:db/migration,filesystem:deploy/migrations-pending'
 .\mvnw.cmd spring-boot:run '-Dspring-boot.run.profiles=api,local'
 ```
 
@@ -138,8 +136,8 @@ này.
 
 Migration giữ nguyên ID cũ. Sự kiện cũ có một layout v2 đã phát hành, đúng
 loại, được điền liên kết sân/layout. Sự kiện cũ có nhiều layout hoặc dùng
-schema cũ giữ cách đọc qua từng suất. File SQL vẫn nằm trong
-`deploy/migrations-pending`. Khi triển khai, sao lưu PostgreSQL và áp dụng
+schema cũ giữ cách đọc qua từng suất. File SQL nằm trong
+`src/main/resources/db/migration`. Khi triển khai, sao lưu PostgreSQL và áp dụng
 chuỗi migration cùng bản backend/frontend tương ứng. Nếu cần khôi phục sau
 khi ghi dữ liệu mới, dùng bản sao lưu trước migration theo quy trình rollback
 của môi trường đích.
