@@ -186,7 +186,7 @@ public class VenueSvgProcessor {
     private static void rewrite(Element e,Map<String,String> names) {
         if(names.containsKey(e.getAttribute("id"))) e.setAttribute("id",names.get(e.getAttribute("id")));
         var attrs=e.getAttributes(); for(int i=0;i<attrs.getLength();i++) {Node a=attrs.item(i);String v=a.getNodeValue();
-            if(v.startsWith("#") && names.containsKey(v.substring(1))) a.setNodeValue("#"+names.get(v.substring(1)));
+            if("href".equals(a.getLocalName()) && v.startsWith("#") && names.containsKey(v.substring(1))) a.setNodeValue("#"+names.get(v.substring(1)));
             else if(v.startsWith("url(#")&&v.endsWith(")")&&names.containsKey(v.substring(5,v.length()-1))) a.setNodeValue("url(#"+names.get(v.substring(5,v.length()-1))+")");
         }
     }

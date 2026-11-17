@@ -411,6 +411,7 @@ public class AuthRepository {
         jdbc.sql("""
                         UPDATE users
                         SET password_hash = :passwordHash,
+                            auth_version = auth_version + 1,
                             status = CASE WHEN status = 'LOCKED' AND NOT admin_locked THEN 'ACTIVE' ELSE status END,
                             locked_until = NULL,
                             updated_at = :now

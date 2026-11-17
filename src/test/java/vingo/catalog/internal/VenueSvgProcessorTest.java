@@ -40,6 +40,21 @@ class VenueSvgProcessorTest {
         var bundle=processor.combine(base(),List.of(a,b),Map.of());assertThat(bundle.layout().zones()).hasSize(2);
         assertThat(bundle.layout().svgContent()).contains("FILE_0__shape","FILE_1__shape","#FILE_1__shape");
     }
+    @ParameterizedTest
+    @ValueSource(strings = {"#fff0", "#ffffff00"})
+    void transparentDecorationDoesNotOverlapGate(String fill) {
+        String layout = svg("<g id='ZONE__A__STANDING__10'><rect width='20' height='20'/>"
+                + "<rect x='90' y='90' width='5' height='5' fill='" + fill + "'/></g>");
+        assertThat(processor.combine(base(), List.of(layout), Map.of()).layout().zones()).hasSize(1);
+    }
+
+    @Test void preservesHexColorsWhenRenamingReferencedIds() {
+        String layout = svg("<defs><path id='fff' d='M0 0H20V20H0Z'/></defs>"
+                + "<g id='ZONE__A__STANDING__10' fill='#fff' stroke='#fff'><use href='#fff'/></g>");
+        assertThat(processor.combine(base(), List.of(layout), Map.of()).layout().svgContent())
+                .contains("fill=\"#fff\"", "stroke=\"#fff\"", "href=\"#FILE_0__fff\"");
+    }
+
     @Test void generatedTechnicalIdsCannotCollideWithIdsInOverview() {
         String overview=base().replace("</svg>","<defs><rect id='FILE_0__shape' width='1' height='1'/></defs></svg>");
         String detail=svg("<defs><path id='shape' d='M0 0H20V20H0Z'/></defs><g id='ZONE__A__STANDING__10'><use href='#shape'/></g>");

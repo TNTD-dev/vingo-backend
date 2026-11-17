@@ -26,6 +26,8 @@ import org.springframework.util.StringUtils;
 
 import vingo.auth.internal.AuthProperties;
 import vingo.auth.internal.AuthRepository;
+import vingo.auth.internal.AdminAccountRepository;
+import vingo.api.model.AdminAccount;
 import vingo.auth.internal.AccountSecurityState;
 import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.LoginProperties;
@@ -50,6 +52,7 @@ public class AuthService {
     private static final String ACCOUNT_LOCKED_MESSAGE = "Tài khoản đang bị khoá tạm do đăng nhập sai nhiều lần";
 
     private final AuthRepository accounts;
+    private final AdminAccountRepository administration;
     private final AccountSecurityState securityState;
     private final JwtProperties jwt;
     private final AuthProperties authProperties;
@@ -63,12 +66,13 @@ public class AuthService {
     private final JwtEncoder encoder;
 
     /** Dùng cùng cấu hình ký JWT mà resource server dùng để xác minh. */
-    AuthService(AuthRepository accounts, JwtProperties jwt, AuthProperties authProperties,
+    AuthService(AuthRepository accounts, AdminAccountRepository administration, JwtProperties jwt, AuthProperties authProperties,
                 LoginProperties loginProperties, OtpProperties otpProperties,
                 NotificationsService notifications, RateLimiter rateLimiter,
                 PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock,
                 AccountSecurityState securityState) {
         this.accounts = accounts;
+        this.administration = administration;
         this.securityState = securityState;
         this.jwt = jwt;
         this.authProperties = authProperties;
@@ -480,6 +484,13 @@ public class AuthService {
 
     @Transactional
     public void deleteMe(UUID userId) {
+        administration.lockAdministration();
+        var account = administration.find(userId, true).orElseThrow(() ->
+                new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy tài khoản."));
+        if (account.getRole() == AdminAccount.RoleEnum.ADMIN && account.getStatus() == AdminAccount.StatusEnum.ACTIVE
+                && !Boolean.TRUE.equals(account.getAdminLocked()) && administration.activeAdmins() <= 1) {
+            throw new DomainException(ErrorCode.ACTION_STATE_INVALID, "Không thể xóa ADMIN hoạt động cuối cùng.");
+        }
         OffsetDateTime now = OffsetDateTime.now(clock);
         accounts.revoke(userId, null, true, now);
         accounts.deleteAccount(userId, now);

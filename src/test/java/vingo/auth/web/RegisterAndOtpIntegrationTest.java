@@ -423,7 +423,9 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .exchange()
                 .expectStatus().isNoContent();
 
-        // Phiên cũ bị thu hồi
+        // Cả access token và refresh token cũ đều mất hiệu lực.
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(initialTokens.getAccessToken()))
+                .exchange().expectStatus().isUnauthorized();
         client.post().uri(REFRESH)
                 .body(new RefreshTokenRequest(initialTokens.getRefreshToken()))
                 .exchange()

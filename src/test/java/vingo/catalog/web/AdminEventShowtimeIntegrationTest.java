@@ -135,10 +135,15 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         String path = ADMIN + "/events";
         var selection = Map.of("title", "Trận đấu " + UUID.randomUUID(), "category", "FOOTBALL",
                 "venue_id", venue, "seat_layout_id", layout);
-        post(path, Map.of("title", "Sai loại", "category", "CONCERT", "venue_id", venue,
-                "seat_layout_id", layout), 400);
+        String invalidLayout = post(path, Map.of("title", "Sai loại", "category", "CONCERT",
+                "venue_id", venue, "seat_layout_id", layout), 422);
+        assertThat(JsonPath.<String>read(invalidLayout, "$.code")).isEqualTo("INVALID_SEAT_LAYOUT");
         UUID event = id(post(path, selection, 201));
         path += "/" + event;
+        client.patch().uri(path).headers(h -> h.setBearerAuth(token))
+                .body(Map.of("venue_id", otherVenue, "seat_layout_id", layout))
+                .exchange().expectStatus().isEqualTo(422)
+                .expectBody().jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT");
         var tierResponse = client.put().uri(path + "/price-tiers").headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(List.of(Map.of("name", "A", "price", 100000),
                         Map.of("name", "B", "price", 100000))).exchange();

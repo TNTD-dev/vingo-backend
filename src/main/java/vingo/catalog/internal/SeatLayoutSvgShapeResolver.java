@@ -66,7 +66,7 @@ final class SeatLayoutSvgShapeResolver {
             }
             default -> {
                 Shape shape = shape(element, style.rule());
-                result = style.visible() && style.fillOpacity() != 0 && !"none".equals(style.fill()) ? new Area(shape) : new Area();
+                result = style.visible() && style.fillOpacity() != 0 && !transparent(style.fill()) ? new Area(shape) : new Area();
             }
         }
         if (!style.visible()) result.reset();
@@ -96,7 +96,7 @@ final class SeatLayoutSvgShapeResolver {
                 String fill = childStyle.fill();
                 if ("g".equals(child.getLocalName())) throw unsupported();
                 if (black(fill)) result.subtract(painted);
-                else if (white(fill) || "none".equals(fill)) result.add(painted);
+                else if (white(fill) || transparent(fill)) result.add(painted);
                 else throw unsupported();
             } else result.add(painted);
         }
@@ -185,6 +185,11 @@ final class SeatLayoutSvgShapeResolver {
                     || !"none".equals(newStroke))) throw unsupported();
             return new Style(value, newRule, visible && opacity != 0, newFillOpacity, newStroke);
         }
+    }
+
+    private static boolean transparent(String fill) {
+        return "none".equals(fill) || "transparent".equalsIgnoreCase(fill)
+                || fill.matches("#(?:[0-9a-fA-F]{3}0|[0-9a-fA-F]{6}00)");
     }
 
     private static boolean white(String fill) { return List.of("white", "#fff", "#ffffff").contains(fill.toLowerCase(java.util.Locale.ROOT)); }

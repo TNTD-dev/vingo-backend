@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import java.net.http.HttpClient;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 /** Google Places API (New); không cấu hình key thì cho phép dùng các chức năng khác của catalog. */
@@ -25,7 +27,10 @@ public class GooglePlacesClient {
             OpeningHoursData openingHours, ParkingType parkingType) {}
 
     public GooglePlacesClient(GoogleVenueLookupSettings settings) {
-        this.http = RestClient.builder().baseUrl(BASE).build();
+        var client = HttpClient.newBuilder().connectTimeout(settings.timeout()).build();
+        var factory = new JdkClientHttpRequestFactory(client);
+        factory.setReadTimeout(settings.timeout());
+        this.http = RestClient.builder().requestFactory(factory).baseUrl(BASE).build();
         this.settings = settings;
     }
 

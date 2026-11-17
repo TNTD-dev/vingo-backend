@@ -80,9 +80,10 @@ public class VenueImportService {
         // overview_id chỉ do server gắn lúc tạo nháp, client không được đổi nó.
         if(draft.getOverviewId()!=null&&!draft.getOverviewId().equals(state.draft().getOverviewId())) throw invalid("Không được đổi nền nguồn của phiên nhập.");
         draft.overviewId(state.draft().getOverviewId());
-        VenueSetupService.protectMetadata(state.draft(),draft);
-        VenueSetupService.validateDraft(draft);
         if(state.venueId()!=null&&draft.getVenue()!=null) throw invalid("Phiên thêm layout không sửa thông tin sân đích.");
+        var origin=VenueSetupService.location(repository,state,draft);
+        VenueSetupService.protectMetadata(state.draft(),draft,origin);
+        VenueSetupService.validateDraft(draft,origin);
         repository.patch(id,body.getStep()==null?state.step():body.getStep().getValue(),draft,now());
         return view(read(id,false));
     }
@@ -148,11 +149,13 @@ public class VenueImportService {
             if(locked.status().equals("COMPLETED")) return result(locked);
             expect(locked,revision);
             UUID venue=locked.venueId();
+            if(venue!=null&&!repository.lockVenue(venue)) throw missing();
+            metadata(locked);
             if(venue==null) {
                 var v=locked.draft().getVenue();
                 venue=venues.create(new VenueData(v.getName(),"STADIUM",v.getAddress(),v.getCity()==null?null:v.getCity().getValue(),v.getDistrict(),v.getLat(),v.getLng(),
                         v.getInfo()==null?"{}":json.writeValueAsString(v.getInfo()))).id();
-            } else if(!repository.lockVenue(venue)) throw missing();
+            }
             repository.persistSetup(id,venue,locked.draft());
             UUID overview=locked.draft().getOverviewId();
             if(overview!=null) {
@@ -227,7 +230,8 @@ public class VenueImportService {
     }
 
     private void metadata(Snapshot state) {
-        var d=state.draft();VenueSetupService.validateDraft(d);
+        var d=state.draft();
+        VenueSetupService.validateDraft(d,VenueSetupService.location(repository,state,d));
         if(d.getFileLayoutTypes()==null||d.getFileLayoutTypes().isEmpty())defaultName(d.getLayoutName(),null);
         if(d.getLayoutType()==null) throw invalid("Cần loại layout FOOTBALL hoặc CONCERT.");
         defaultName(d.getOverviewName(),"Sơ đồ tổng quát");

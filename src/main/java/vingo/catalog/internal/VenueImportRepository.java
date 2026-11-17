@@ -16,6 +16,15 @@ public class VenueImportRepository {
     private final JsonMapper json;
     private final SeatLayoutRepository layouts;
     public VenueImportRepository(JdbcClient jdbc, JsonMapper json, SeatLayoutRepository layouts) {this.jdbc=jdbc;this.json=json;this.layouts=layouts;}
+    public Optional<VenueLocationInput> venueLocation(UUID id) {
+        return jdbc.sql("""
+                SELECT COALESCE(location, jsonb_build_object('display_address', address,
+                    'latitude', lat, 'longitude', lng, 'source', 'LEGACY'))::text
+                FROM venue WHERE id = :id AND deleted_at IS NULL
+                """).param("id", id).query(String.class)
+                .optional().map(value -> json.readValue(value, VenueLocationInput.class));
+    }
+
     public record FileSource(UUID id, String filename, String checksum, int size,
                              String role, String safeSvg, String status, String issues) {}
     public record Snapshot(UUID id, UUID ownerId, UUID venueId, String status, long revision,
