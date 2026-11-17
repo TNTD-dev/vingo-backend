@@ -40,7 +40,6 @@ public enum ErrorCode {
     SHOWTIME_LOCKED(HttpStatus.CONFLICT, "Suất đã mở bán, không sửa được"),
     ACTION_STATE_INVALID(HttpStatus.CONFLICT, "Thao tác đã hết hạn hoặc đã xử lý"),
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Gọi quá nhanh"),
-    PDF_NOT_PROCESSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "PDF không xử lý được"),
     SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ tạm thời không khả dụng");
 
     private final HttpStatus status;

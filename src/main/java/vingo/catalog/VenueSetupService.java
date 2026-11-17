@@ -73,44 +73,6 @@ public class VenueSetupService {
         if(!s.status().equals("DRAFT")||s.revision()!=revision||s.expiresAt().isBefore(now()))throw conflict();
         return s;
     }
-    public VenueRulesDocument upload(UUID session,long revision,String filename,String mime,byte[] bytes){
-        editable(session,revision);
-        if(bytes.length>20*1024*1024)throw new DomainException(ErrorCode.PAYLOAD_TOO_LARGE,"PDF tối đa 20 MiB.");
-        if(!"application/pdf".equals(mime)||bytes.length<5||!new String(bytes,0,5,StandardCharsets.US_ASCII).equals("%PDF-"))throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE,"Chọn file PDF hợp lệ.");
-        if(filename==null||filename.length()>255||filename.chars().anyMatch(c->c<32))throw invalid("Tên file PDF không hợp lệ.");
-        UUID document=UUID.randomUUID();
-        var processed=clients.upload(document,bytes);
-        var model=json.treeToValue(processed,VenueRulesDocument.class).id(document).filename(filename).sizeBytes(bytes.length)
-            .sha256(sha(bytes)).uploadedAt(now()).uploadedBy(user.require().id());
-        try {
-            tx.executeWithoutResult(status->{
-                // Lock the session so complete/upload cannot race.
-                var locked=imports.find(session,user.require().id(),true).orElseThrow(VenueSetupService::missing);
-                if(locked.revision()!=revision||!locked.status().equals("DRAFT"))throw conflict();
-                jdbc.sql("UPDATE venue_rules_documents SET deleted_at=:now WHERE session_id=:session AND deleted_at IS NULL")
-                    .param("now",now()).param("session",session).update();
-                jdbc.sql("INSERT INTO venue_rules_documents(id,session_id,uploaded_by,metadata,uploaded_at) VALUES(:id,:session,:owner,CAST(:data AS jsonb),:now)")
-                    .param("id",document).param("session",session).param("owner",user.require().id()).param("data",json.writeValueAsString(model)).param("now",now()).update();
-            });
-        }catch(RuntimeException ex){clients.delete(document);throw ex;}
-        return model;
-    }
-    public VenueRulesDocument document(UUID session){
-        sessions.get(session); // owner check, including completed session
-        var model=jdbc.sql("SELECT metadata::text FROM venue_rules_documents WHERE session_id=:id AND deleted_at IS NULL")
-            .param("id",session).query(String.class).optional().map(s->json.readValue(s,VenueRulesDocument.class)).orElseThrow(VenueSetupService::missing);
-        if(model.getExtractionStatus()==RulesExtractionStatus.QUEUED||model.getExtractionStatus()==RulesExtractionStatus.PROCESSING){
-            var result=clients.document(model.getId());
-            model.extractionStatus(RulesExtractionStatus.fromValue(result.path("extraction_status").asText()))
-                .extractedText(result.path("extracted_text").asText(null)).extractedTextTruncated(result.path("extracted_text_truncated").asBoolean());
-            if(result.has("error_code"))model.errorCode(VenueRulesDocument.ErrorCodeEnum.fromValue(result.path("error_code").asText()));
-            if(model.getExtractionStatus()!=RulesExtractionStatus.PROCESSING&&model.getExtractionStatus()!=RulesExtractionStatus.QUEUED)model.extractedAt(now());
-            jdbc.sql("UPDATE venue_rules_documents SET metadata=CAST(:data AS jsonb) WHERE id=:id")
-                .param("data",json.writeValueAsString(model)).param("id",model.getId()).update();
-        }
-        return model;
-    }
-    public byte[] download(UUID session){var d=document(session);return clients.download(d.getId());}
     static void protectMetadata(VenueImportDraft previous,VenueImportDraft draft,VenueLocationInput origin){
         if(draft.getParkingLocations()==null)return;
         var old=previous.getParkingLocations()==null?List.<ParkingSetupDraft>of():previous.getParkingLocations();
