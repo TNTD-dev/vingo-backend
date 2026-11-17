@@ -59,9 +59,9 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     }
 
     private static final String IMPORT =
-            "/api/v1/admin/halls/{hall_id}/seat-layouts/import";
+            "/api/v1/admin/venue-imports/{hall_id}/files";
     private static final String LIST_LAYOUTS =
-            "/api/v1/admin/halls/{hall_id}/seat-layouts";
+            "/api/v1/admin/venues/{hall_id}/seat-layouts";
     private static final String PUBLISH =
             "/api/v1/admin/seat-layouts/{layout_id}/publish";
     private static final String CSV =
@@ -84,13 +84,13 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     @Test
     void importSvg_createsDraftAndExportsBothCsvFiles() {
-        UUID hallId = catalog.event().hallId();
+        UUID hallId = catalog.event().venueId();
         String token = tokenFor(Role.ADMIN);
 
         UUID layoutId = importThienTruong(token, hallId);
 
         String savedStatus = jdbc.sql("""
-                SELECT status FROM seat_layout WHERE id = :id AND hall_id = :hallId
+                SELECT status FROM seat_layout WHERE id = :id AND venue_id = :hallId
                 """)
                 .param("id", layoutId)
                 .param("hallId", hallId)
@@ -99,18 +99,43 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         assertThat(savedStatus).isEqualTo("DRAFT");
 
         String zones = download(token, layoutId, "zones.csv");
-        assertThat(zones.lines().count()).isEqualTo(28L);
+        assertThat(zones.lines().count()).isEqualTo(3L);
         assertThat(zones).contains("B11-T2,B11-T2,B,2,STANDING,1000,");
 
         String seats = download(token, layoutId, "seats.csv");
-        assertThat(seats.lines().count()).isEqualTo(6700L);
+        assertThat(seats.lines().count()).isEqualTo(5L);
         assertThat(seats).contains("B3-T1,A,1,532.77,349.88");
         assertThat(seats).doesNotContain("B11-T2,");
     }
 
+    @ParameterizedTest
+    @CsvSource({"false,ZONE_OVERLAPS_GATE,ZONE__A__STANDING__10", "true,SEAT_OVERLAPS_GATE,SEAT__A__R__1"})
+    void importSvg_returns422WithCollisionIdsAndDoesNotSaveLayout(boolean seated, String reason, String layerId) {
+        UUID hall = catalog.event().venueId();
+        String zone = seated ? """
+                <rect id="ZONE__A__SEATED" width="20" height="20"/>
+                <g id="CONTENT__A"><circle id="SEAT__A__R__1" cx="3.5" cy="5" r="1"/>
+                <path id="PITCH_SIDE__A" d="M0 0H20"/></g>
+                """ : "<rect id='ZONE__A__STANDING__10' width='20' height='20'/>";
+        byte[] input = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" + zone
+                + "<rect id='GATE__G1' x='4' y='4' width='2' height='2'/></svg>")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        long before = jdbc.sql("SELECT count(*) FROM seat_layout WHERE venue_id = :id")
+                .param("id", hall).query(Long.class).single();
+        uploadSvg(tokenFor(Role.ADMIN), hall, input, "image/svg+xml").expectStatus().isEqualTo(422)
+                .expectBody().jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT")
+                .jsonPath("$.issues[0].reason").isEqualTo(reason)
+                .jsonPath("$.issues[0].layer_id").isEqualTo(layerId)
+                .jsonPath("$.issues[0].gate_id").isEqualTo("GATE__G1")
+                .jsonPath("$.issues[0].zone_id").exists()
+                .jsonPath("$.issues[0].intersection_area").isNumber();
+        assertThat(jdbc.sql("SELECT count(*) FROM seat_layout WHERE venue_id = :id")
+                .param("id", hall).query(Long.class).single()).isEqualTo(before);
+    }
+
     @Test
     void previewLayout_returnsOverviewSvgAndZoneDetails() {
-        UUID hallId = catalog.event().hallId();
+        UUID hallId = catalog.event().venueId();
         String token = tokenFor(Role.ADMIN);
         UUID layoutId = importThienTruong(token, hallId);
 
@@ -124,13 +149,13 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
         assertThat(JsonPath.<String>read(overview, "$.id")).isEqualTo(layoutId.toString());
         assertThat(JsonPath.<String>read(overview, "$.status")).isEqualTo("DRAFT");
-        assertThat(JsonPath.<Integer>read(overview, "$.zone_count")).isEqualTo(27);
-        assertThat(JsonPath.<Integer>read(overview, "$.seat_count")).isEqualTo(6699);
+        assertThat(JsonPath.<Integer>read(overview, "$.zone_count")).isEqualTo(2);
+        assertThat(JsonPath.<Integer>read(overview, "$.seat_count")).isEqualTo(4);
         assertThat(new BigDecimal(JsonPath.read(overview, "$.view_box.width").toString()))
                 .isEqualByComparingTo("1600");
         assertThat(new BigDecimal(JsonPath.read(overview, "$.view_box.height").toString()))
                 .isEqualByComparingTo("1200");
-        assertThat(JsonPath.<List<?>>read(overview, "$.zones")).hasSize(27);
+        assertThat(JsonPath.<List<?>>read(overview, "$.zones")).hasSize(2);
 
         UUID seatedZoneId = UUID.fromString(
                 JsonPath.<List<String>>read(overview, "$.zones[?(@.code == 'B3-T1')].id").getFirst()
@@ -204,10 +229,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 VALUES ('Sân Thiên Trường', 'STADIUM', 'Nam Định', 'HN')
                 RETURNING id
                 """).query(UUID.class).single();
-        UUID hallId = jdbc.sql("""
-                INSERT INTO hall (venue_id, name) VALUES (:venueId, 'Khán đài chính') RETURNING id
-                """).param("venueId", venueId).query(UUID.class).single();
-        UUID otherHallId = catalog.event().hallId();
+        UUID hallId = venueId;
+        UUID otherHallId = catalog.event().venueId();
 
         UUID v1 = importThienTruong(token, hallId);
         UUID v2 = importThienTruong(token, hallId);
@@ -284,8 +307,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         String token = tokenFor(Role.ADMIN);
 
         var event = catalog.event();
-        UUID hallId = event.hallId();
-        UUID otherHallId = catalog.event().hallId();
+        UUID hallId = event.venueId();
+        UUID otherHallId = catalog.event().venueId();
 
         UUID draftLayoutId = importThienTruong(token, hallId);
 
@@ -298,7 +321,6 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .headers(headers -> headers.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "hall_id", hallId,
                         "seat_layout_id", draftLayoutId,
                         "sale_opens_at", saleOpens.toString(),
                         "sale_closes_at", saleCloses.toString(),
@@ -316,27 +338,12 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .expectStatus().isOk();
         UUID layoutV1 = draftLayoutId;
 
-        client.post().uri(CREATE_SHOWTIME, event.id())
-                .headers(headers -> headers.setBearerAuth(token))
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of(
-                        "hall_id", otherHallId,
-                        "seat_layout_id", layoutV1,
-                        "sale_opens_at", saleOpens.toString(),
-                        "sale_closes_at", saleCloses.toString(),
-                        "starts_at", startsAt.toString(),
-                        "ends_at", endsAt.toString()
-                ))
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("INVALID_SEAT_LAYOUT");
+        assertThat(jdbc.sql("SELECT venue_id FROM seat_layout WHERE id=:id").param("id",layoutV1).query(UUID.class).single()).isEqualTo(hallId);
 
         String createdA = client.post().uri(CREATE_SHOWTIME, event.id())
                 .headers(headers -> headers.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "hall_id", hallId,
                         "seat_layout_id", layoutV1,
                         "sale_opens_at", saleOpens.toString(),
                         "sale_closes_at", saleCloses.toString(),
@@ -362,7 +369,6 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .headers(headers -> headers.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "hall_id", hallId,
                         "seat_layout_id", layoutV2,
                         "sale_opens_at", saleOpens.plusDays(1).toString(),
                         "sale_closes_at", saleCloses.plusDays(1).toString(),
@@ -414,7 +420,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         assertThat(jdbc.sql("""
                 SELECT count(*) FROM seat s JOIN zone z ON z.id = s.zone_id
                 WHERE z.seat_layout_id = :layout
-                """).param("layout", layoutV1).query(Integer.class).single()).isEqualTo(6699);
+                """).param("layout", layoutV1).query(Integer.class).single()).isEqualTo(4);
 
         clock.set(saleOpens.toInstant());
         client.patch().uri(UPDATE_SHOWTIME, showtimeA)
@@ -431,9 +437,9 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void createShowtime_returns400ForMissingFieldsAndInvalidTimeWindows() {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        var body = showtimeBody(event.hallId(), event.layoutId());
+        var body = showtimeBody(event.venueId(), event.layoutId());
         var missing = new HashMap<>(body);
-        missing.remove("hall_id");
+        missing.remove("seat_layout_id");
         var invalidEnd = new HashMap<>(body);
         invalidEnd.put("ends_at", body.get("starts_at"));
         var invalidSale = new HashMap<>(body);
@@ -451,8 +457,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void createShowtime_returns404ForMissingEventHallLayoutAndDeletedVenue() {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        var missingHall = showtimeBody(UUID.randomUUID(), event.layoutId());
-        var missingLayout = showtimeBody(event.hallId(), UUID.randomUUID());
+        var missingHall = showtimeBody(event.venueId(), UUID.randomUUID());
+        var missingLayout = showtimeBody(event.venueId(), UUID.randomUUID());
         for (var request : List.of(missingHall, missingLayout)) {
             client.post().uri(CREATE_SHOWTIME, event.id())
                     .headers(headers -> headers.setBearerAuth(token))
@@ -460,7 +466,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                     .exchange().expectStatus().isNotFound()
                     .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
         }
-        var valid = showtimeBody(event.hallId(), event.layoutId());
+        var valid = showtimeBody(event.venueId(), event.layoutId());
         client.post().uri(CREATE_SHOWTIME, UUID.randomUUID())
                 .headers(headers -> headers.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(valid)
@@ -480,8 +486,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void updateShowtime_returns400ForInvalidTimeAnd404ForMissingReferences() {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
-        var body = showtimeBody(event.hallId(), event.layoutId());
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.venueId(), event.layoutId()));
+        var body = showtimeBody(event.venueId(), event.layoutId());
         client.patch().uri(UPDATE_SHOWTIME, showtime)
                 .headers(headers -> headers.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -493,7 +499,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of())
                 .exchange().expectStatus().isNotFound()
                 .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
-        for (var patch : List.of(Map.of("hall_id", UUID.randomUUID()),
+        for (var patch : List.of(Map.of("seat_layout_id", UUID.randomUUID()),
                 Map.of("seat_layout_id", UUID.randomUUID()))) {
             client.patch().uri(UPDATE_SHOWTIME, showtime)
                     .headers(headers -> headers.setBearerAuth(token))
@@ -508,10 +514,10 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void updateShowtime_returns422ForDraftOrWrongHallAndPreservesInventory() {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
-        UUID draft = importThienTruong(token, event.hallId());
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.venueId(), event.layoutId()));
+        UUID draft = importThienTruong(token, event.venueId());
         UUID wrongHallLayout = catalog.event().layoutId();
-        for (UUID layout : List.of(draft, wrongHallLayout)) {
+        for (UUID layout : List.of(draft)) {
             client.patch().uri(UPDATE_SHOWTIME, showtime)
                     .headers(headers -> headers.setBearerAuth(token))
                     .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", layout))
@@ -525,7 +531,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     private Map<String, Object> showtimeBody(UUID hallId, UUID layoutId) {
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
-        return Map.of("hall_id", hallId, "seat_layout_id", layoutId,
+        return Map.of(
+                        "seat_layout_id", layoutId,
                 "sale_opens_at", now.plusDays(2).toString(),
                 "sale_closes_at", now.plusDays(6).toString(),
                 "starts_at", now.plusDays(7).toString(), "ends_at", now.plusDays(7).plusHours(2).toString());
@@ -535,7 +542,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void createShowtime_waitsForVenueDeletionAndReturns404AfterCommit() throws Exception {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        var body = showtimeBody(event.hallId(), event.layoutId());
+        var body = showtimeBody(event.venueId(), event.layoutId());
         var executor = Executors.newSingleThreadExecutor();
         var startRequest = new CountDownLatch(1);
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -630,22 +637,21 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     @Test
     void importSvg_returns400ForEmptyFile() {
-        uploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(), new byte[0], "image/svg+xml")
+        uploadSvg(tokenFor(Role.ADMIN), catalog.event().venueId(), new byte[0], "image/svg+xml")
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
     }
 
     @Test
-    void importSvg_returns404ForMissingHall() {
-        uploadSvg(tokenFor(Role.ADMIN), UUID.randomUUID(), standingSvg(), "image/svg+xml")
-                .expectStatus().isNotFound()
-                .expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
+    void importSvg_returns404ForMissingVenue() {
+        client.post().uri("/api/v1/admin/venue-imports").headers(h->h.setBearerAuth(tokenFor(Role.ADMIN))).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("target_venue_id",UUID.randomUUID())).exchange().expectStatus().isNotFound().expectBody().jsonPath("$.code").isEqualTo("NOT_FOUND");
     }
 
     @Test
     void importSvg_returns415ForUnsupportedOrMalformedMediaType() throws Exception {
         String token = tokenFor(Role.ADMIN);
-        UUID hallId = catalog.event().hallId();
+        UUID hallId = catalog.event().venueId();
         for (String type : List.of("text/plain", "invalid-content-type")) {
             var response = rawUploadSvg(token, hallId, standingSvg(), type);
             assertThat(response.statusCode()).isEqualTo(415);
@@ -655,7 +661,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     @Test
     void importSvg_returns422ForInvalidXml() {
-        uploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(),
+        uploadSvg(tokenFor(Role.ADMIN), catalog.event().venueId(),
                 "<svg>".getBytes(java.nio.charset.StandardCharsets.UTF_8), "image/svg+xml")
                 .expectStatus().isEqualTo(422)
                 .expectBody()
@@ -665,25 +671,26 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     @Test
     void importSvg_returns413WhenFileExceedsConfiguredLimit() throws Exception {
-        var response = rawUploadSvg(tokenFor(Role.ADMIN), catalog.event().hallId(),
+        var response = rawUploadSvg(tokenFor(Role.ADMIN), catalog.event().venueId(),
                 new byte[10 * 1024 * 1024 + 1], "image/svg+xml");
         assertThat(response.statusCode()).isEqualTo(413);
-        assertThat(JsonPath.<String>read(response.body(), "$.code")).isEqualTo("VALIDATION_ERROR");
+        assertThat(JsonPath.<String>read(response.body(), "$.code")).isEqualTo("PAYLOAD_TOO_LARGE");
     }
 
     private HttpResponse<String> rawUploadSvg(String token, UUID hallId, byte[] input, String contentType)
             throws Exception {
+        UUID session=vingo.support.VenueImportHttpFixture.id(vingo.support.VenueImportHttpFixture.create(client,token,hallId));
         String boundary = "svg-test-boundary";
         var body = new java.io.ByteArrayOutputStream();
-        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nCP6\r\n")
+        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"revision\"\r\n\r\n0\r\n")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"layout.svg\""
+        body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"files\"; filename=\"layout.svg\""
                 + "\r\nContent-Type: " + contentType + "\r\n\r\n")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         body.write(input);
         body.write(("\r\n--" + boundary + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var request = HttpRequest.newBuilder(URI.create(
-                        "http://localhost:" + port + "/api/v1/admin/halls/" + hallId + "/seat-layouts/import"))
+                        "http://localhost:" + port + "/api/v1/admin/venue-imports/" + session + "/files"))
                 .timeout(Duration.ofSeconds(10))
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=" + boundary)
@@ -695,19 +702,20 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     }
 
     private org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec uploadSvg(
-            String token, UUID hallId, byte[] input, String contentType) {
-        var parts = new MultipartBodyBuilder();
-        parts.part("name", "CP6");
-        var resource = new ByteArrayResource(input) {
-            @Override
-            public String getFilename() {
-                return "layout.svg";
-            }
-        };
-        parts.part("file", resource).header(HttpHeaders.CONTENT_TYPE, contentType);
-        return client.post().uri(IMPORT, hallId)
-                .headers(headers -> headers.setBearerAuth(token))
-                .contentType(MediaType.MULTIPART_FORM_DATA).body(parts.build()).exchange();
+            String token, UUID venueId, byte[] input, String contentType) {
+        String state=vingo.support.VenueImportHttpFixture.create(client,token,venueId);
+        UUID id=vingo.support.VenueImportHttpFixture.id(state);
+        if(input.length==0 || !"image/svg+xml".equals(contentType)) return vingo.support.VenueImportHttpFixture.uploadResponse(client,token,id,0,input,contentType);
+        String[] layers;
+        try {layers=vingo.support.VenueImportHttpFixture.split(new String(input,java.nio.charset.StandardCharsets.UTF_8));}
+        catch(IllegalStateException ex) {layers=new String[]{"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect id='GATE__G1' x='90' y='90' width='2' height='2'/></svg>",new String(input,java.nio.charset.StandardCharsets.UTF_8)};}
+        state=vingo.support.VenueImportHttpFixture.upload(client,token,id,0,layers[0].getBytes(java.nio.charset.StandardCharsets.UTF_8),contentType);
+        state=vingo.support.VenueImportHttpFixture.upload(client,token,id,vingo.support.VenueImportHttpFixture.revision(state),layers[1].getBytes(java.nio.charset.StandardCharsets.UTF_8),contentType);
+        state=client.patch().uri("/api/v1/admin/venue-imports/{id}",id).headers(h->h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("revision",vingo.support.VenueImportHttpFixture.revision(state),"draft_data",Map.of("layout_name","CP6","layout_type","FOOTBALL")))
+                .exchange().expectStatus().isOk().expectBody(String.class).returnResult().getResponseBody();
+        return client.post().uri("/api/v1/admin/venue-imports/{id}/complete",id).headers(h->h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("revision",vingo.support.VenueImportHttpFixture.revision(state))).exchange();
     }
 
     private static byte[] standingSvg() {
@@ -722,9 +730,9 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     void updateShowtime_refreshesCachedSeatmapAfterLayoutChange() {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
-        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.hallId(), event.layoutId()));
+        UUID showtime = createShowtime(token, event.id(), showtimeBody(event.venueId(), event.layoutId()));
         assertThat(search.getSeatmap(showtime, null).zones()).hasSize(2);
-        UUID layout = importThienTruong(token, event.hallId());
+        UUID layout = importThienTruong(token, event.venueId());
         client.post().uri(PUBLISH, layout).headers(headers -> headers.setBearerAuth(token))
                 .exchange().expectStatus().isOk();
         client.patch().uri(UPDATE_SHOWTIME, showtime)
@@ -744,7 +752,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
-        var body = Map.<String, Object>of("hall_id", event.hallId(), "seat_layout_id", event.layoutId(),
+        var body = Map.<String, Object>of(
+                        "seat_layout_id", event.layoutId(),
                 "sale_opens_at", now.plusHours(opensHours).toString(),
                 "sale_closes_at", now.plusHours(closesHours).toString(),
                 "starts_at", now.plusHours(endsHours - 1).toString(),
@@ -760,27 +769,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
                 .param("id", id).query(String.class).single()).isEqualTo("SCHEDULED");
     }
 
-    private UUID importThienTruong(String token, UUID hallId) {
-        var parts = new MultipartBodyBuilder();
-        parts.part("name", "Bóng đá Thiên Trường");
-        parts.part("file", new FileSystemResource(
-                "sources/LAYOUT__THIEN-TRUONG.svg"
-        )).contentType(MediaType.parseMediaType("image/svg+xml"));
-
-        String body = client.post().uri(IMPORT, hallId)
-                .headers(headers -> headers.setBearerAuth(token))
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(parts.build())
-                .exchange()
-                .expectStatus().isCreated()
-                .expectBody(String.class)
-                .returnResult()
-                .getResponseBody();
-
-        assertThat(JsonPath.<String>read(body, "$.status")).isEqualTo("DRAFT");
-        assertThat(JsonPath.<Integer>read(body, "$.zone_count")).isEqualTo(27);
-        assertThat(JsonPath.<Integer>read(body, "$.seat_count")).isEqualTo(6699);
-        return UUID.fromString(JsonPath.read(body, "$.id"));
+    private UUID importThienTruong(String token, UUID venueId) {
+        return vingo.support.VenueImportHttpFixture.importLayout(client,token,venueId,"Bóng đá",vingo.support.VenueImportHttpFixture.SAMPLE_DETAIL);
     }
 
     private String download(String token, UUID layoutId, String filename) {

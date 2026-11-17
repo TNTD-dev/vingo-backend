@@ -15,7 +15,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.internal.VenueRepository;
-import vingo.catalog.internal.VenueRepository.HallRow;
 import vingo.catalog.internal.VenueRepository.VenueData;
 import vingo.catalog.internal.VenueRepository.VenuePosition;
 import vingo.catalog.internal.VenueRepository.VenueRow;
@@ -44,27 +43,6 @@ public class VenueService {
         validateText(input.address(), "Địa chỉ");
         validateCoordinates(input);
         return repository.insert(input);
-    }
-
-    @Transactional
-    public HallRow createHall(UUID venueId, String name) {
-        validateText(name, "Tên hall");
-        String normalizedName = name.strip();
-
-        lockActiveVenue(venueId);
-
-        return repository.insertHall(venueId, normalizedName)
-                .orElseThrow(() -> new DomainException(
-                        ErrorCode.HALL_NAME_TAKEN,
-                        "Sân này đã có hall tên " + normalizedName + "."
-                ));
-    }
-    @Transactional(readOnly = true)
-    public Map<UUID, List<HallRow>> listHallsForVenues(
-            List<UUID> venueIds
-    ) {
-        return repository.findHallsForVenues(venueIds).stream()
-                .collect(Collectors.groupingBy(HallRow::venueId));
     }
 
     @Transactional(readOnly = true)

@@ -169,7 +169,7 @@ public class AuthRepository {
                         UPDATE sessions s SET refresh_token_hash = :newHash
                         FROM users u
                         WHERE s.refresh_token_hash = :oldHash AND s.revoked_at IS NULL AND s.expires_at > :now
-                          AND s.user_id = u.id AND u.status = 'ACTIVE'
+                          AND s.user_id = u.id AND u.status = 'ACTIVE' AND NOT u.admin_locked
                         RETURNING s.id AS session_id, s.expires_at, u.id, u.email, u.phone,
                                   u.full_name, u.avatar_url, u.role, u.status
                         """)
@@ -196,6 +196,36 @@ public class AuthRepository {
                 .param("now", now)
                 .update();
     }
+
+    public Optional<EditableAccount> findEditableAccount(UUID userId) {
+        return jdbc.sql("SELECT id, email, phone, full_name, avatar_url, role, status, password_hash FROM users WHERE id = :id FOR UPDATE")
+                .param("id", userId)
+                .query((rs, row) -> new EditableAccount(account(rs, row), rs.getString("password_hash")))
+                .optional();
+    }
+
+    public void updateAccount(UUID userId, String fullName, String phone, String passwordHash, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE users SET full_name = :name, phone = :phone,
+                            password_hash = COALESCE(:passwordHash, password_hash), updated_at = :now
+                        WHERE id = :id
+                        """)
+                .param("name", fullName).param("phone", phone).param("passwordHash", passwordHash)
+                .param("now", now).param("id", userId).update();
+    }
+
+    public void deleteAccount(UUID userId, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE users SET email = 'deleted+' || id || '@invalid.local', phone = NULL,
+                            full_name = 'Deleted user', password_hash = NULL, google_sub = NULL,
+                            avatar_url = NULL, status = 'DELETED', locked_until = NULL, updated_at = :now
+                        WHERE id = :id
+                        """)
+                .param("now", now).param("id", userId).update();
+        jdbc.sql("DELETE FROM buyer_profile WHERE user_id = :id").param("id", userId).update();
+    }
+
+    public record EditableAccount(AuthUser user, String passwordHash) {}
 
     /**
      * Ánh xạ các cột tài khoản, kể cả avatar có thể vắng mặt.
@@ -350,6 +380,45 @@ public class AuthRepository {
                 .update();
         jdbc.sql("DELETE FROM users WHERE id = :userId AND status = 'UNVERIFIED'")
                 .param("userId", userId)
+                .update();
+    }
+
+    public Optional<AuthUser> findByEmailForUpdate(String email) {
+        return jdbc.sql("""
+                        SELECT id, email, phone, full_name, avatar_url, role, status
+                        FROM users
+                        WHERE lower(email) = lower(:email)
+                        FOR UPDATE
+                        """)
+                .param("email", email)
+                .query(AuthRepository::account)
+                .optional();
+    }
+
+    public void consumeActiveOtpSessions(UUID userId, String purpose, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE otp_session
+                        SET consumed_at = :now
+                        WHERE user_id = :userId AND purpose = :purpose AND consumed_at IS NULL
+                        """)
+                .param("userId", userId)
+                .param("purpose", purpose)
+                .param("now", now)
+                .update();
+    }
+
+    public void updatePasswordAndUnlock(UUID userId, String passwordHash, OffsetDateTime now) {
+        jdbc.sql("""
+                        UPDATE users
+                        SET password_hash = :passwordHash,
+                            status = CASE WHEN status = 'LOCKED' AND NOT admin_locked THEN 'ACTIVE' ELSE status END,
+                            locked_until = NULL,
+                            updated_at = :now
+                        WHERE id = :userId
+                        """)
+                .param("userId", userId)
+                .param("passwordHash", passwordHash)
+                .param("now", now)
                 .update();
     }
 

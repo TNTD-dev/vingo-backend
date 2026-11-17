@@ -18,13 +18,24 @@ public class EventPublishingRepository {
         return jdbc.sql("""
             SELECT EXISTS(SELECT 1 FROM showtime WHERE event_id=:event AND status<>'CANCELLED')
             AND NOT EXISTS (
+              SELECT 1 FROM event e WHERE e.id=:event AND e.seat_layout_id IS NOT NULL AND (
+                (e.category='FOOTBALL' AND
+                 (SELECT count(*) FROM showtime WHERE event_id=e.id AND status<>'CANCELLED')<>1)
+                OR NOT EXISTS (
+                  SELECT 1 FROM seat_layout l JOIN venue_overview o ON o.id=l.overview_id
+                  WHERE l.id=e.seat_layout_id AND l.venue_id=e.venue_id
+                    AND l.layout_type=e.category AND o.status='PUBLISHED'
+                )
+              )
+            )
+            AND NOT EXISTS (
               SELECT 1 FROM showtime s
               JOIN seat_layout l ON l.id=s.seat_layout_id
-              JOIN hall h ON h.id=s.hall_id JOIN venue v ON v.id=h.venue_id
+              JOIN venue v ON v.id=l.venue_id
               WHERE s.event_id=:event AND s.status<>'CANCELLED' AND (
-                l.status<>'PUBLISHED' OR l.hall_id<>s.hall_id OR v.deleted_at IS NOT NULL
-                OR s.ends_at<=:now OR s.sale_closes_at<=:now OR s.ends_at<=s.starts_at
-                OR s.sale_closes_at<=s.sale_opens_at OR s.sale_closes_at>s.ends_at
+                l.status<>'PUBLISHED' OR v.deleted_at IS NOT NULL
+                OR s.ends_at<=:now OR s.ends_at<=s.starts_at
+                OR s.sale_closes_at<=:now OR s.sale_closes_at<=s.sale_opens_at OR s.sale_closes_at>s.ends_at
                 OR NOT EXISTS(SELECT 1 FROM zone z WHERE z.seat_layout_id=l.id)
                 OR EXISTS (
                   SELECT 1 FROM zone z LEFT JOIN zone_price zp ON zp.zone_id=z.id AND zp.event_id=:event
@@ -55,5 +66,41 @@ public class EventPublishingRepository {
                 .param("event",event).update();
         jdbc.sql("UPDATE event SET status='PUBLISHED',published_at=:now,updated_at=:now WHERE id=:event")
                 .param("event",event).param("now",now).update();
+    }
+
+    public record CancellationState(UUID id, String status, OffsetDateTime saleOpensAt, boolean hasOrders) {}
+
+    public List<CancellationState> cancellationStates(UUID event) {
+        return jdbc.sql("""
+                SELECT s.id,s.status,s.sale_opens_at,
+                    EXISTS(SELECT 1 FROM orders o WHERE o.showtime_id=s.id) AS has_orders
+                FROM showtime s WHERE s.event_id=:event ORDER BY s.id FOR UPDATE
+                """).param("event",event).query((rs,n)->new CancellationState(
+                    rs.getObject("id",UUID.class),rs.getString("status"),
+                    rs.getObject("sale_opens_at",OffsetDateTime.class),rs.getBoolean("has_orders"))).list();
+    }
+
+    public java.util.Optional<UUID> findShowtimeEvent(UUID showtime) {
+        return jdbc.sql("SELECT event_id FROM showtime WHERE id=:id").param("id",showtime)
+                .query(UUID.class).optional();
+    }
+
+    public void cancelShowtime(UUID id) {
+        jdbc.sql("UPDATE showtime SET status='CANCELLED' WHERE id=:id").param("id",id).update();
+    }
+
+    public void cancelEvent(UUID id,OffsetDateTime now) {
+        jdbc.sql("UPDATE event SET status='CANCELLED',updated_at=:now WHERE id=:id")
+                .param("id",id).param("now",now).update();
+    }
+
+    public void auditCancellation(UUID actor, String action, String entity, UUID id, String reason,
+            String before, OffsetDateTime now) {
+        jdbc.sql("""
+                INSERT INTO audit_log(actor_id,action,entity,entity_id,reason,at,before,after)
+                VALUES(:actor,:action,:entity,:id,:reason,:now,
+                  jsonb_build_object('status',CAST(:before AS text)),jsonb_build_object('status','CANCELLED'))
+                """).param("actor",actor).param("action",action).param("entity",entity).param("id",id)
+                .param("reason",reason).param("before",before).param("now",now).update();
     }
 }

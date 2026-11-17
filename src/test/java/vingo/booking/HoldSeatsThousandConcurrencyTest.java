@@ -24,6 +24,7 @@ class HoldSeatsThousandConcurrencyTest extends BookingTestSupport {
         var first = new LongAccumulator(Long::min, Long.MAX_VALUE);
         var last = new LongAccumulator(Long::max, Long.MIN_VALUE);
         var futures = new ArrayList<Future<Integer>>();
+        var transportErrors = new java.util.concurrent.ConcurrentLinkedQueue<String>();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (String token : tokens) {
                 futures.add(executor.submit(() -> {
@@ -35,6 +36,7 @@ class HoldSeatsThousandConcurrencyTest extends BookingTestSupport {
                     try {
                         return hold(token, show.id(), seats(seat)).expectBody().returnResult().getStatus().value();
                     } catch (org.springframework.web.client.ResourceAccessException ex) {
+                        transportErrors.add(ex.getMostSpecificCause().toString());
                         return 0; // Transport failure: report separately and fail the assertion below.
                     }
                 }));
@@ -48,6 +50,7 @@ class HoldSeatsThousandConcurrencyTest extends BookingTestSupport {
                     count, (last.get() - first.get()) / 1_000_000.0,
                     (System.nanoTime() - began) / 1_000_000.0,
                     statuses.stream().collect(java.util.stream.Collectors.groupingBy(s -> s, java.util.stream.Collectors.counting())));
+            assertThat(transportErrors).as("HTTP transport failures").isEmpty();
             assertThat(statuses).hasSize(count).containsOnly(201, 409);
             assertThat(statuses.stream().filter(s -> s == 201).count()).isEqualTo(1);
             assertThat(statuses.stream().filter(s -> s == 409).count()).isEqualTo(count - 1);

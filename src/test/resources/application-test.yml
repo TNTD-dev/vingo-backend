@@ -25,3 +25,6 @@ vingo:
     api-url: http://vnpay.invalid/querydr
     return-url: http://localhost:8080/api/v1/payments/vnpay/return
     frontend-return-url: http://localhost:5173/payment/result
+spring:
+  flyway:
+    locations: classpath:db/migration,filesystem:deploy/migrations-pending

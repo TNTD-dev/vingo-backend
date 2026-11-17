@@ -106,6 +106,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             case 401 -> ErrorCode.UNAUTHORIZED;
             case 403 -> ErrorCode.FORBIDDEN;
             case 404 -> ErrorCode.NOT_FOUND;
+            case 413 -> ErrorCode.PAYLOAD_TOO_LARGE;
+            case 415 -> ErrorCode.UNSUPPORTED_MEDIA_TYPE;
             case 429 -> ErrorCode.RATE_LIMITED;
             default -> ErrorCode.VALIDATION_ERROR;
         };

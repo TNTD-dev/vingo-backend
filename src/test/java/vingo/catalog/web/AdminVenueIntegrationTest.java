@@ -85,8 +85,6 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         String prefix = uniqueName();
         UUID first = createVenue(prefix + " A", "HN");
         UUID second = createVenue(prefix + " B", "HN");
-        postHall(first, "Hall A").expectStatus().isCreated();
-        postHall(second, "Hall B").expectStatus().isCreated();
         createVenue(prefix + " ngoài bộ lọc", "DN");
         createVenue(uniqueName(), "HN");
 
@@ -128,35 +126,15 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         assertThat(new String[] {firstId, secondId})
                 .containsExactlyInAnyOrder(first.toString(), second.toString());
         assertThat(nextCursor).isNull();
-        var hallNames = Map.of(first.toString(), "Hall A", second.toString(), "Hall B");
-        assertThat(JsonPath.<List<String>>read(pageOne, "$.data[0].halls[*].name"))
-                .containsExactly(hallNames.get(firstId));
-        assertThat(JsonPath.<List<String>>read(pageTwo, "$.data[0].halls[*].name"))
-                .containsExactly(hallNames.get(secondId));
+        assertThat(pageOne + pageTwo).doesNotContain("halls");
     }
 
     @Test
-    void listVenues_returnsOnlyOwnHallsAndEmptyListForVenueWithoutHall() {
-        String prefix = uniqueName();
-        UUID first = createVenue(prefix + " A", "HN");
-        UUID second = createVenue(prefix + " B", "HN");
-        UUID empty = createVenue(prefix + " C", "HN");
-        postHall(first, "Sân chính").expectStatus().isCreated();
-        postHall(first, "Khán đài phụ").expectStatus().isCreated();
-        postHall(second, "Hall B").expectStatus().isCreated();
-        String response = client.get().uri(builder -> builder.path(VENUES)
-                        .queryParam("q", prefix).queryParam("limit", 100).build())
-                .headers(h -> h.setBearerAuth(adminToken)).exchange().expectStatus().isOk()
-                .expectBody(String.class).returnResult().getResponseBody();
-        String firstPath = "$.data[?(@.id == '" + first + "')].halls";
-        String secondPath = "$.data[?(@.id == '" + second + "')].halls";
-        assertThat(JsonPath.<List<String>>read(response, firstPath + "[*].name"))
-                .containsExactlyInAnyOrder("Sân chính", "Khán đài phụ");
-        assertThat(JsonPath.<List<String>>read(response, secondPath + "[*].name")).containsExactly("Hall B");
-        assertThat(JsonPath.<List<String>>read(response, firstPath + "[*].venue_id")).containsOnly(first.toString());
-        assertThat(JsonPath.<List<String>>read(response, secondPath + "[*].venue_id")).containsOnly(second.toString());
-        assertThat(JsonPath.<List<List<Object>>>read(response,
-                "$.data[?(@.id == '" + empty + "')].halls")).containsExactly(List.of());
+    void listVenues_doesNotExposeRemovedHallModel() {
+        String prefix=uniqueName();UUID first=createVenue(prefix+" A","HN");UUID second=createVenue(prefix+" B","HN");
+        String response=client.get().uri(builder->builder.path(VENUES).queryParam("q",prefix).build()).headers(h->h.setBearerAuth(adminToken))
+            .exchange().expectStatus().isOk().expectBody(String.class).returnResult().getResponseBody();
+        assertThat(response).contains(first.toString(),second.toString()).doesNotContain("halls");
     }
 
     @Test
@@ -384,7 +362,7 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         return Stream.of(Arguments.of(HttpMethod.POST, VENUES),
                 Arguments.of(HttpMethod.PATCH, venue),
                 Arguments.of(HttpMethod.DELETE, venue),
-                Arguments.of(HttpMethod.POST, venue + "/halls"));
+                Arguments.of(HttpMethod.POST, "/api/v1/admin/venue-imports"));
     }
 
     @ParameterizedTest
@@ -407,61 +385,30 @@ class AdminVenueIntegrationTest extends IntegrationTest {
                 .expectBody().jsonPath("$.code").isEqualTo("FORBIDDEN");
     }
 
-    private static final String HALLS = VENUE + "/halls";
-
-    private org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec
-            postHall(UUID venueId, String name) {
-        return client.post().uri(HALLS, venueId)
-                .headers(headers -> headers.setBearerAuth(adminToken))
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("name", name))
-                .exchange();
+    @Test
+    void createImport_returns201ForActiveVenue() {
+        UUID venue=createVenue(uniqueName(),"HN");
+        client.post().uri("/api/v1/admin/venue-imports").headers(h->h.setBearerAuth(adminToken)).contentType(MediaType.APPLICATION_JSON)
+            .body(Map.of("target_venue_id",venue)).exchange().expectStatus().isCreated().expectBody()
+            .jsonPath("$.target_venue_id").isEqualTo(venue.toString()).jsonPath("$.status").isEqualTo("DRAFT");
     }
     @Test
-    void createHall_returns201ForActiveVenue() {
-        UUID venueId = createVenue(uniqueName(), "HN");
-
-        postHall(venueId, " Sân chính ")
-                .expectStatus().isCreated()
-                .expectBody()
-                .jsonPath("$.id").isNotEmpty()
-                .jsonPath("$.venue_id").isEqualTo(venueId.toString())
-                .jsonPath("$.name").isEqualTo("Sân chính");
+    void createImport_allowsSeparateDraftsForSameVenue() {
+        UUID venue=createVenue(uniqueName(),"HN");
+        String a=vingo.support.VenueImportHttpFixture.create(client,adminToken,venue);
+        String b=vingo.support.VenueImportHttpFixture.create(client,adminToken,venue);
+        assertThat(vingo.support.VenueImportHttpFixture.id(a)).isNotEqualTo(vingo.support.VenueImportHttpFixture.id(b));
     }
-
     @Test
-    void createHall_returns409WhenNameAlreadyExistsInSameVenue() {
-        UUID venueId = createVenue(uniqueName(), "HN");
-        postHall(venueId, "Sân chính").expectStatus().isCreated();
-
-        postHall(venueId, "Sân chính")
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("HALL_NAME_TAKEN");
+    void createImport_returns400ForMalformedVenueId() {
+        client.post().uri("/api/v1/admin/venue-imports").headers(h->h.setBearerAuth(adminToken)).contentType(MediaType.APPLICATION_JSON)
+            .body(Map.of("target_venue_id","bad-id")).exchange().expectStatus().isBadRequest();
     }
-
     @Test
-    void createHall_returns400WhenNameIsBlank() {
-        UUID venueId = createVenue(uniqueName(), "HN");
-
-        postHall(venueId, "   ")
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
-    }
-
-    @Test
-    void createHall_returns404ForDeactivatedVenue() {
-        UUID venueId = createVenue(uniqueName(), "HN");
-
-        client.delete().uri(VENUE, venueId)
-                .headers(headers -> headers.setBearerAuth(adminToken))
-                .exchange()
-                .expectStatus().isNoContent();
-
-        postHall(venueId, "Sân chính")
-                .expectStatus().isNotFound()
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("NOT_FOUND");
+    void createImport_returns404ForDeactivatedVenue() {
+        UUID venue=createVenue(uniqueName(),"HN");
+        client.delete().uri(VENUE,venue).headers(h->h.setBearerAuth(adminToken)).exchange().expectStatus().isNoContent();
+        client.post().uri("/api/v1/admin/venue-imports").headers(h->h.setBearerAuth(adminToken)).contentType(MediaType.APPLICATION_JSON)
+            .body(Map.of("target_venue_id",venue)).exchange().expectStatus().isNotFound();
     }
 }

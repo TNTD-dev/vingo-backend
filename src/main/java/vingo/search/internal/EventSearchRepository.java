@@ -99,8 +99,8 @@ class EventSearchRepository {
             }
             cand.append("""
                      UNION SELECT s.event_id FROM venue v
-                           JOIN hall h ON h.venue_id = v.id
-                           JOIN showtime s ON s.hall_id = h.id
+                           JOIN seat_layout sl ON sl.venue_id = v.id
+                           JOIN showtime s ON s.seat_layout_id = sl.id
                            WHERE v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now
                              AND\s""").append(venueMatch("v")).append(showtimeFilter);
             where.append(" AND e.id IN (").append(cand).append(')');
@@ -109,7 +109,8 @@ class EventSearchRepository {
             // Suất khớp sân nằm trong cùng bộ lọc; thẻ ưu tiên suất đó để hiện đúng sân người dùng vừa tìm.
             venueFlag = "(v0.deleted_at IS NULL AND " + venueMatch("v0") + ")";
             venueFirst = "CASE WHEN v.matched THEN 0 ELSE 1 END, ";
-            venueRank = "EXISTS (SELECT 1 FROM venue v JOIN hall h ON h.venue_id = v.id JOIN showtime s ON s.hall_id = h.id"
+            venueRank = "EXISTS (SELECT 1 FROM venue v JOIN seat_layout sl ON sl.venue_id = v.id"
+                    + " JOIN showtime s ON s.seat_layout_id = sl.id"
                     + " WHERE s.event_id = e.id AND v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now"
                     + " AND " + venueMatch("v") + showtimeFilter + ")";
         }
@@ -161,8 +162,8 @@ class EventSearchRepository {
                         FROM showtime s
                         CROSS JOIN LATERAL (
                             SELECT v0.name, v0.city, %s AS matched
-                            FROM hall h JOIN venue v0 ON v0.id = h.venue_id
-                            WHERE h.id = s.hall_id
+                            FROM seat_layout sl JOIN venue v0 ON v0.id = sl.venue_id
+                            WHERE sl.id = s.seat_layout_id
                             OFFSET 0
                         ) v
                         WHERE s.event_id = e.id AND s.status = 'SCHEDULED' AND s.starts_at >= :now%s

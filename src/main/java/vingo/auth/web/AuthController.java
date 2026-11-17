@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.AuthApi;
+import vingo.api.model.ForgotPasswordRequest;
 import vingo.api.model.LoginRequest;
 import vingo.api.model.LogoutRequest;
 import vingo.api.model.OtpSession;
@@ -19,6 +20,7 @@ import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
 import vingo.api.model.RegisterRequest;
 import vingo.api.model.ResendOtpRequest;
+import vingo.api.model.ResetPasswordRequest;
 import vingo.api.model.TokenPair;
 import vingo.api.model.User;
 import vingo.api.model.VerifyOtpRequest;
@@ -79,6 +81,28 @@ class AuthController implements AuthApi {
     public ResponseEntity<Void> resendOtp(ResendOtpRequest body) {
         auth.resendOtp(body.getOtpSessionId());
         return ResponseEntity.accepted().build();
+    }
+
+    /** Yêu cầu OTP đặt lại mật khẩu, luôn trả 202 để không lộ email tồn tại. */
+    @Override
+    public ResponseEntity<OtpSession> forgotPassword(ForgotPasswordRequest body) {
+        var session = auth.forgotPassword(body.getEmail(), request.getRemoteAddr());
+        var response = new OtpSession()
+                .otpSessionId(session.otpSessionId())
+                .expiresAt(session.expiresAt())
+                .channel(OtpSession.ChannelEnum.fromValue(session.channel()));
+        return ResponseEntity.accepted()
+                .cacheControl(CacheControl.noStore())
+                .body(response);
+    }
+
+    /** Đặt mật khẩu mới bằng OTP và thu hồi toàn bộ phiên của người dùng. */
+    @Override
+    public ResponseEntity<Void> resetPassword(ResetPasswordRequest body) {
+        auth.resetPassword(body.getOtpSessionId(), body.getOtp(), body.getNewPassword());
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.REFRESH, "", Duration.ZERO).toString())
+                .build();
     }
 
     /** Đăng nhập bằng email/SĐT và mật khẩu, cấp TokenPair và đặt cookie refresh. */

@@ -114,7 +114,8 @@ class SearchCacheTest extends IntegrationTest {
         assertThat(redis.keys("vingo:search:search-seatmap-layout:*")).hasSize(1);
 
         fixtures.sellSeat(showtime, seat);
-        jdbc.sql("UPDATE seat SET x = 999 WHERE id = :id").param("id", seat).update();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.sql("UPDATE seat SET x = 999 WHERE id = :id").param("id", seat).update())
+                .isInstanceOf(org.springframework.jdbc.UncategorizedSQLException.class);
 
         JsonNode second = get("/api/v1/showtimes/" + showtime + "/seatmap");
         JsonNode firstSeat = second.path("zones").get(0).path("seats").get(0);
@@ -126,7 +127,7 @@ class SearchCacheTest extends IntegrationTest {
                 publisher.publishEvent(new CatalogChanged(created.id(), Set.of(showtime))));
 
         JsonNode third = get("/api/v1/showtimes/" + showtime + "/seatmap");
-        assertThat(third.path("zones").get(0).path("seats").get(0).path("x").asInt()).isEqualTo(999);
+        assertThat(third.path("zones").get(0).path("seats").get(0).path("x").asInt()).isEqualTo(first.path("zones").get(0).path("seats").get(0).path("x").asInt());
     }
 
     @Test

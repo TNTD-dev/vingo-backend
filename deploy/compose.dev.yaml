@@ -22,5 +22,26 @@ services:
     ports:
       - "6379:6379"
 
+  minio:
+    image: rustfs/rustfs:latest
+    command: /data
+    environment:
+      RUSTFS_ACCESS_KEY: vingo-local
+      RUSTFS_SECRET_KEY: vingo-local-private-storage
+    volumes:
+      - rules_objects:/data
+  venue-documents:
+    build: ./venue-documents
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: vingo-local
+      S3_SECRET_KEY: vingo-local-private-storage
+      INTERNAL_KEY: local-venue-documents-key
+    ports:
+      - "127.0.0.1:8091:8091"
+    depends_on:
+      - minio
+
 volumes:
+  rules_objects:
   pgdata:

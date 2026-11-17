@@ -192,7 +192,7 @@ class PgSearchService implements SearchService {
 
     private static ShowtimeResult toShowtime(ShowtimeRow r, OffsetDateTime now, boolean soldOut) {
         ShowtimeStatus status = ShowtimeStatus.of(r.storedStatus(), r.saleOpensAt(), r.saleClosesAt(), r.endsAt(), now);
-        return new ShowtimeResult(r.id(), r.eventId(), r.hallId(), r.seatLayoutId(), r.startsAt(), r.endsAt(),
+        return new ShowtimeResult(r.id(), r.eventId(), r.seatLayoutId(), r.startsAt(), r.endsAt(),
                 r.saleOpensAt(), r.saleClosesAt(), status, soldOut, r.venue());
     }
 

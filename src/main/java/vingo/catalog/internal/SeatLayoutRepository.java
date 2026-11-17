@@ -28,25 +28,17 @@ public class SeatLayoutRepository {
         this.batches = batches;
     }
 
-    boolean lockActiveVenueForHall(UUID hallId) {
+    boolean lockActiveVenue(UUID venueId) {
         return jdbc.sql("""
                 SELECT v.id
-                FROM hall h JOIN venue v ON v.id = h.venue_id
-                WHERE h.id = :hallId AND v.deleted_at IS NULL
+                FROM venue v
+                WHERE v.id = :venueId AND v.deleted_at IS NULL
                 FOR UPDATE OF v
                 """)
-                .param("hallId", hallId)
+                .param("venueId", venueId)
                 .query(UUID.class)
                 .optional()
                 .isPresent();
-    }
-
-    LayoutVersion insertDraft(UUID hallId, String name) {
-        return jdbc.sql("INSERT INTO seat_layout (hall_id, name) VALUES (:hallId, :name) RETURNING id, version")
-                .param("hallId", hallId)
-                .param("name", name)
-                .query((rs, row) -> new LayoutVersion(rs.getObject("id", UUID.class), rs.getLong("version")))
-                .single();
     }
 
     void insertSvg(UUID layoutId, ParsedLayout layout) {
@@ -150,11 +142,12 @@ public class SeatLayoutRepository {
                 .list();
     }
 
-    record LayoutVersion(UUID id, long version) {}
 
     public record LayoutHeaderRow(
             UUID id,
-            UUID hallId,
+            UUID venueId,
+            UUID overviewId,
+            String layoutType,
             String name,
             String status,
             long version,
@@ -176,6 +169,7 @@ public class SeatLayoutRepository {
             String svgId,
             String contentSvgId,
             String pitchSideSvgId,
+            UUID overviewAreaId,
             Bounds bounds
     ) {}
 
@@ -183,10 +177,9 @@ public class SeatLayoutRepository {
 
     public record LayoutPosition(long version, UUID id) {}
 
-    public record LayoutAttachmentRow(UUID id, UUID hallId, String status) {}
+    public record LayoutAttachmentRow(UUID id, UUID venueId, String status, boolean legacy) {}
 
     public record ShowtimeData(
-            UUID hallId,
             UUID seatLayoutId,
             OffsetDateTime startsAt,
             OffsetDateTime endsAt,
@@ -203,7 +196,7 @@ public class SeatLayoutRepository {
 
     Optional<LayoutHeaderRow> findLayoutHeader(UUID layoutId) {
         return jdbc.sql("""
-                SELECT sl.id, sl.hall_id, sl.name, sl.status, sl.version, sl.published_at,
+                SELECT sl.id, sl.venue_id, sl.overview_id, sl.layout_type, sl.name, sl.status, sl.version, sl.published_at,
                        svg.schema_version,
                        svg.view_box_x, svg.view_box_y, svg.view_box_width, svg.view_box_height,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_layout_id = sl.id) AS zone_count,
@@ -215,7 +208,8 @@ public class SeatLayoutRepository {
                 .param("id", layoutId)
                 .query((rs, row) -> new LayoutHeaderRow(
                         rs.getObject("id", UUID.class),
-                        rs.getObject("hall_id", UUID.class),
+                        rs.getObject("venue_id", UUID.class),
+                        rs.getObject("overview_id", UUID.class), rs.getString("layout_type"),
                         rs.getString("name"),
                         rs.getString("status"),
                         rs.getLong("version"),
@@ -230,7 +224,7 @@ public class SeatLayoutRepository {
     List<ZoneSummaryRow> findZones(UUID layoutId) {
         return jdbc.sql("""
                 SELECT id, COALESCE(code, name) AS code, name, stand_code, level, kind, capacity,
-                       svg_id, content_svg_id, pitch_side_svg_id,
+                       svg_id, content_svg_id, pitch_side_svg_id, overview_area_id,
                        bounds_x, bounds_y, bounds_width, bounds_height
                 FROM zone
                 WHERE seat_layout_id = :layoutId
@@ -244,7 +238,7 @@ public class SeatLayoutRepository {
     Optional<ZoneSummaryRow> findZone(UUID layoutId, UUID zoneId) {
         return jdbc.sql("""
                 SELECT id, COALESCE(code, name) AS code, name, stand_code, level, kind, capacity,
-                       svg_id, content_svg_id, pitch_side_svg_id,
+                       svg_id, content_svg_id, pitch_side_svg_id, overview_area_id,
                        bounds_x, bounds_y, bounds_width, bounds_height
                 FROM zone
                 WHERE seat_layout_id = :layoutId AND id = :zoneId
@@ -266,7 +260,7 @@ public class SeatLayoutRepository {
                 rs.getInt("capacity"),
                 rs.getString("svg_id"),
                 rs.getString("content_svg_id"),
-                rs.getString("pitch_side_svg_id"),
+                rs.getString("pitch_side_svg_id"), rs.getObject("overview_area_id",UUID.class),
                 readBounds(rs, "bounds_x", "bounds_y", "bounds_width", "bounds_height")
         );
     }
@@ -309,17 +303,11 @@ public class SeatLayoutRepository {
     }
 
     Optional<UUID> lockPublishableLayout(UUID layoutId) {
-        return jdbc.sql("""
-                SELECT sl.id
-                FROM seat_layout sl
-                JOIN hall h ON h.id = sl.hall_id
-                JOIN venue v ON v.id = h.venue_id
-                WHERE sl.id = :id AND v.deleted_at IS NULL
-                FOR UPDATE OF v, sl
-                """)
-                .param("id", layoutId)
-                .query(UUID.class)
-                .optional();
+        var header=findLayoutHeader(layoutId);
+        if(header.isEmpty() || !lockActiveVenue(header.get().venueId())) return Optional.empty();
+        if(header.get().overviewId()!=null) jdbc.sql("SELECT id FROM venue_overview WHERE id=:id FOR UPDATE")
+                .param("id",header.get().overviewId()).query(UUID.class).single();
+        return jdbc.sql("SELECT id FROM seat_layout WHERE id=:id FOR UPDATE").param("id",layoutId).query(UUID.class).optional();
     }
 
     void markPublished(UUID layoutId, OffsetDateTime now) {
@@ -348,30 +336,32 @@ public class SeatLayoutRepository {
                         rs.getObject("id", UUID.class))).list();
     }
 
-    boolean activeHallExists(UUID hallId) {
+    boolean activeVenueExists(UUID venueId) {
         return jdbc.sql("""
                 SELECT EXISTS (
                     SELECT 1
-                    FROM hall h
-                    JOIN venue v ON v.id = h.venue_id
-                    WHERE h.id = :hallId AND v.deleted_at IS NULL
+                    FROM venue v
+                    WHERE v.id = :venueId AND v.deleted_at IS NULL
                 )
                 """)
-                .param("hallId", hallId)
+                .param("venueId", venueId)
                 .query(Boolean.class)
                 .single();
     }
     
-    List<LayoutHeaderRow> findByHall(UUID hallId, LayoutPosition after, int fetchSize) {
+    List<LayoutHeaderRow> findByVenue(UUID venueId, String type, String status, boolean legacy, LayoutPosition after, int fetchSize) {
         return jdbc.sql("""
-                SELECT sl.id, sl.hall_id, sl.name, sl.status, sl.version, sl.published_at,
+                SELECT sl.id, sl.venue_id, sl.overview_id, sl.layout_type, sl.name, sl.status, sl.version, sl.published_at,
                        svg.schema_version,
                        svg.view_box_x, svg.view_box_y, svg.view_box_width, svg.view_box_height,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_layout_id = sl.id) AS zone_count,
                        (SELECT COUNT(*) FROM seat s JOIN zone z ON z.id = s.zone_id WHERE z.seat_layout_id = sl.id) AS seat_count
                 FROM seat_layout sl
                 LEFT JOIN seat_layout_svg svg ON svg.seat_layout_id = sl.id
-                WHERE sl.hall_id = :hallId
+                WHERE sl.venue_id = :venueId
+                  AND (:legacy OR sl.layout_schema_version=2)
+                  AND (CAST(:type AS text) IS NULL OR sl.layout_type=:type)
+                  AND (CAST(:status AS text) IS NULL OR sl.status=:status)
                   AND (
                       CAST(:afterVersion AS bigint) IS NULL
                       OR (sl.version, sl.id) < (CAST(:afterVersion AS bigint), CAST(:afterId AS uuid))
@@ -379,13 +369,15 @@ public class SeatLayoutRepository {
                 ORDER BY sl.version DESC, sl.id DESC
                 LIMIT :fetchSize
                 """)
-                .param("hallId", hallId)
+                .param("venueId", venueId)
+                .param("type", type).param("status", status).param("legacy", legacy)
                 .param("afterVersion", after == null ? null : after.version())
                 .param("afterId", after == null ? null : after.id())
                 .param("fetchSize", fetchSize)
                 .query((rs, row) -> new LayoutHeaderRow(
                         rs.getObject("id", UUID.class),
-                        rs.getObject("hall_id", UUID.class),
+                        rs.getObject("venue_id", UUID.class),
+                        rs.getObject("overview_id", UUID.class), rs.getString("layout_type"),
                         rs.getString("name"),
                         rs.getString("status"),
                         rs.getLong("version"),
@@ -403,6 +395,20 @@ public class SeatLayoutRepository {
                 .param("id", eventId)
                 .query(String.class)
                 .optional();
+    }
+
+    boolean matchesSelectedEventLayout(UUID eventId, UUID layoutId) {
+        return jdbc.sql("SELECT seat_layout_id IS NULL OR seat_layout_id=:layout FROM event WHERE id=:event")
+                .param("event", eventId).param("layout", layoutId).query(Boolean.class).single();
+    }
+
+    boolean footballEventHasShowtime(UUID eventId) {
+        return jdbc.sql("""
+                SELECT EXISTS (
+                    SELECT 1 FROM event e JOIN showtime s ON s.event_id = e.id
+                    WHERE e.id = :id AND e.category = 'FOOTBALL' AND s.status <> 'CANCELLED'
+                )
+                """).param("id", eventId).query(Boolean.class).single();
     }
 
     Optional<UUID> findEventIdForShowtime(UUID showtimeId) {
@@ -427,17 +433,16 @@ public class SeatLayoutRepository {
 
     Optional<LayoutAttachmentRow> findLayoutForAttach(UUID layoutId) {
         return jdbc.sql("""
-                SELECT sl.id, sl.hall_id, sl.status
+                SELECT sl.id, sl.venue_id, sl.status, sl.layout_schema_version
                 FROM seat_layout sl
-                JOIN hall h ON h.id = sl.hall_id
-                JOIN venue v ON v.id = h.venue_id
+                JOIN venue v ON v.id = sl.venue_id
                 WHERE sl.id = :id AND v.deleted_at IS NULL
                 """)
                 .param("id", layoutId)
                 .query((rs, row) -> new LayoutAttachmentRow(
                         rs.getObject("id", UUID.class),
-                        rs.getObject("hall_id", UUID.class),
-                        rs.getString("status")
+                        rs.getObject("venue_id", UUID.class),
+                        rs.getString("status"), rs.getInt("layout_schema_version") == 1
                 ))
                 .optional();
     }
@@ -445,18 +450,17 @@ public class SeatLayoutRepository {
     ShowtimeRow insertShowtime(UUID eventId, String status, ShowtimeData data) {
         return jdbc.sql("""
                 INSERT INTO showtime (
-                    event_id, hall_id, seat_layout_id,
+                    event_id, seat_layout_id,
                     starts_at, ends_at, sale_opens_at, sale_closes_at, status
                 )
                 VALUES (
-                    :eventId, :hallId, :layoutId,
+                    :eventId, :layoutId,
                     :startsAt, :endsAt, :saleOpensAt, :saleClosesAt, :status
                 )
-                RETURNING id, event_id, status, hall_id, seat_layout_id,
+                RETURNING id, event_id, status, seat_layout_id,
                           starts_at, ends_at, sale_opens_at, sale_closes_at
                 """)
                 .param("eventId", eventId)
-                .param("hallId", data.hallId())
                 .param("layoutId", data.seatLayoutId())
                 .param("startsAt", data.startsAt())
                 .param("endsAt", data.endsAt())
@@ -469,7 +473,7 @@ public class SeatLayoutRepository {
 
     Optional<ShowtimeRow> lockShowtime(UUID showtimeId) {
         return jdbc.sql("""
-                SELECT id, event_id, status, hall_id, seat_layout_id,
+                SELECT id, event_id, status, seat_layout_id,
                        starts_at, ends_at, sale_opens_at, sale_closes_at
                 FROM showtime
                 WHERE id = :id
@@ -483,18 +487,16 @@ public class SeatLayoutRepository {
     ShowtimeRow updateShowtime(UUID showtimeId, ShowtimeData data) {
         return jdbc.sql("""
                 UPDATE showtime
-                SET hall_id = :hallId,
-                    seat_layout_id = :layoutId,
+                SET seat_layout_id = :layoutId,
                     starts_at = :startsAt,
                     ends_at = :endsAt,
                     sale_opens_at = :saleOpensAt,
                     sale_closes_at = :saleClosesAt
                 WHERE id = :id
-                RETURNING id, event_id, status, hall_id, seat_layout_id,
+                RETURNING id, event_id, status, seat_layout_id,
                           starts_at, ends_at, sale_opens_at, sale_closes_at
                 """)
                 .param("id", showtimeId)
-                .param("hallId", data.hallId())
                 .param("layoutId", data.seatLayoutId())
                 .param("startsAt", data.startsAt())
                 .param("endsAt", data.endsAt())
@@ -543,7 +545,6 @@ public class SeatLayoutRepository {
                 rs.getObject("event_id", UUID.class),
                 rs.getString("status"),
                 new ShowtimeData(
-                        rs.getObject("hall_id", UUID.class),
                         rs.getObject("seat_layout_id", UUID.class),
                         rs.getObject("starts_at", OffsetDateTime.class),
                         rs.getObject("ends_at", OffsetDateTime.class),
