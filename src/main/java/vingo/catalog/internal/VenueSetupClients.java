@@ -18,15 +18,12 @@ import vingo.shared.error.*;
 @Component
 public class VenueSetupClients {
     private final JsonMapper json;
-    private final String geoKey, llmKey, llmBase, model, documentsBase, documentsKey;
+    private final String geoKey, llmKey, llmBase, model;
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     public VenueSetupClients(JsonMapper json,
         @Value("${GEOAPIFY_API_KEY:}") String geoKey, @Value("${LLM_API_KEY:}") String llmKey,
-        @Value("${LLM_BASE_URL:}") String llmBase, @Value("${LLM_MODEL:gpt-6-luna}") String model,
-        @Value("${VENUE_DOCUMENTS_URL:http://localhost:8091}") String documentsBase,
-        @Value("${VENUE_DOCUMENTS_KEY:local-venue-documents-key}") String documentsKey) {
+        @Value("${LLM_BASE_URL:}") String llmBase, @Value("${LLM_MODEL:gpt-6-luna}") String model) {
         this.json=json;this.geoKey=geoKey;this.llmKey=llmKey;this.llmBase=llmBase;this.model=model;
-        this.documentsBase=documentsBase;this.documentsKey=documentsKey;
     }
     private static String encode(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
     private JsonNode geo(String path){
@@ -111,21 +108,6 @@ public class VenueSetupClients {
         return result;
     }
     public String model(){return model;}
-    public JsonNode upload(UUID id,byte[] pdf){return json.readTree(docRequest(id,"","PUT",pdf));}
-    public JsonNode document(UUID id){return json.readTree(docRequest(id,"/status","GET",null));}
-    public byte[] download(UUID id){return docRequest(id,"/file","GET",null);}
-    public void delete(UUID id){docRequest(id,"","DELETE",null);}
-    private byte[] docRequest(UUID id,String suffix,String method,byte[] body){
-        var response = exchange(HttpRequest.newBuilder(URI.create(documentsBase+"/documents/"+id+suffix)).timeout(Duration.ofSeconds(30))
-            .header("X-Internal-Key",documentsKey).header("Content-Type","application/pdf")
-            .method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(body)).build());
-        return switch (response.statusCode()) {
-            case 413 -> throw new DomainException(ErrorCode.PAYLOAD_TOO_LARGE,"PDF vượt giới hạn 20 MiB.");
-            case 415 -> throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE,"Chỉ nhận PDF hợp lệ.");
-            case 422 -> throw new DomainException(ErrorCode.PDF_NOT_PROCESSABLE,"PDF hỏng, có mật khẩu hoặc vượt 100 trang.");
-            default -> responseBody(response);
-        };
-    }
     private byte[] send(HttpRequest request) {
         return responseBody(exchange(request));
     }

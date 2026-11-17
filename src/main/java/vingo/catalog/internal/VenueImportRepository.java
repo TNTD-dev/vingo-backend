@@ -180,7 +180,5 @@ public class VenueImportRepository {
                     .param("data",json.writeValueAsString(p)).update();
             }
         }
-        jdbc.sql("UPDATE venue_rules_documents SET venue_id=:venue WHERE session_id=:session AND deleted_at IS NULL")
-            .param("venue",venue).param("session",session).update();
     }
 }
