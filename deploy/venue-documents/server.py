@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -13,9 +14,12 @@ from pathlib import Path
 import boto3
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import Response
+from botocore.exceptions import ClientError
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+# Uvicorn runs one process. Serialize object writes and deletes across its threads.
+object_lock = threading.Lock()
 bucket = 'venue-rules'
 s3 = boto3.client('s3', endpoint_url=os.environ['S3_ENDPOINT'],
                   aws_access_key_id=os.environ['S3_ACCESS_KEY'], aws_secret_access_key=os.environ['S3_SECRET_KEY'])
@@ -31,13 +35,27 @@ def key(raw):
 def put_status(doc_id, data):
     s3.put_object(Bucket=bucket, Key=doc_id+'.json', Body=json.dumps(data).encode(), ContentType='application/json')
 
+def put_extraction_status(doc_id, data):
+    with object_lock:
+        try:
+            current = json.loads(s3.get_object(Bucket=bucket, Key=doc_id+'.json')['Body'].read())
+        except ClientError as error:
+            if error.response['Error']['Code'] in ('NoSuchKey', '404'):
+                return False
+            raise
+        if current.get('generation') != data.get('generation'):
+            return False
+        put_status(doc_id, data)
+        return True
+
 def run(command, timeout=60):
     return subprocess.run(command, capture_output=True, timeout=timeout, check=True).stdout
 
 def extract(doc_id, data):
     try:
         data['extraction_status'] = 'PROCESSING'
-        put_status(doc_id, data)
+        if not put_extraction_status(doc_id, data):
+            return
         body = s3.get_object(Bucket=bucket, Key=doc_id+'.pdf')['Body'].read()
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'input.pdf'
@@ -57,7 +75,7 @@ def extract(doc_id, data):
             data.update(extraction_status=status, extracted_text=text[:250000], extracted_text_truncated=len(text)>250000)
     except Exception:
         data.update(extraction_status='OCR_FAILED', error_code='OCR_FAILED')
-    put_status(doc_id, data)
+    put_extraction_status(doc_id, data)
 
 @app.on_event('startup')
 def startup():
@@ -93,14 +111,19 @@ async def upload(doc_id: str, request: Request):
         pages = int(re.search(r'Pages:\s+(\d+)', info).group(1))
         if not 1<=pages<=100: raise HTTPException(422, 'PDF_PAGE_LIMIT')
     data = dict(page_count=pages, size_bytes=len(body), sha256=hashlib.sha256(body).hexdigest(), extraction_status='QUEUED', extracted_text_truncated=False)
-    s3.put_object(Bucket=bucket, Key=doc_id+'.pdf', Body=bytes(body), ContentType='application/pdf')
-    put_status(doc_id, data)
-    pool.submit(extract, doc_id, data.copy())
+    with object_lock:
+        s3.put_object(Bucket=bucket, Key=doc_id+'.pdf', Body=bytes(body), ContentType='application/pdf')
+        queued = dict(data, generation=uuid.uuid4().hex)
+        put_status(doc_id, queued)
+    pool.submit(extract, doc_id, queued)
     return data
 
 @app.get('/documents/{doc_id}/status', dependencies=[Depends(auth)])
 def status(doc_id: str):
-    try: return json.loads(s3.get_object(Bucket=bucket,Key=key(doc_id)+'.json')['Body'].read())
+    try:
+        data = json.loads(s3.get_object(Bucket=bucket,Key=key(doc_id)+'.json')['Body'].read())
+        data.pop('generation', None)
+        return data
     except Exception: raise HTTPException(404)
 
 @app.get('/documents/{doc_id}/file', dependencies=[Depends(auth)])
@@ -111,5 +134,8 @@ def download(doc_id: str):
 @app.delete('/documents/{doc_id}', dependencies=[Depends(auth)])
 def delete(doc_id: str):
     doc_id=key(doc_id)
-    s3.delete_objects(Bucket=bucket, Delete={'Objects':[{'Key':doc_id+'.pdf'},{'Key':doc_id+'.json'}]})
+    with object_lock:
+        result = s3.delete_objects(Bucket=bucket, Delete={'Objects':[{'Key':doc_id+'.pdf'},{'Key':doc_id+'.json'}]})
+        if result.get('Errors'):
+            raise HTTPException(503, 'DOCUMENT_DELETE_FAILED')
     return Response(status_code=204)

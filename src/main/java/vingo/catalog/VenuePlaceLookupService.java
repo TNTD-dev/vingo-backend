@@ -255,7 +255,7 @@ public class VenuePlaceLookupService {
                 putSource(aggregatedSources, source);
             }
         }
-        if (parkingLots.isEmpty() && groundedFee.isPresent() && groundedFee.get().venueFeeText() != null) {
+        if (groundedFee.isPresent() && groundedFee.get().venueFeeText() != null) {
             for (Source webSource : webSources) {
                 putSource(aggregatedSources, webSource);
             }
@@ -313,7 +313,7 @@ public class VenuePlaceLookupService {
                 parkingType = venuePlace.parkingType();
             }
 
-            String matchedFee = matchLotFee(lotName, distanceMeters, groundedFee);
+            String matchedFee = matchLotFee(lotName, groundedFee);
             boolean feeVerified = matchedFee != null && !webSources.isEmpty();
             String feeText = feeVerified ? matchedFee : UNVERIFIED_FEE_TEXT;
 
@@ -350,22 +350,11 @@ public class VenuePlaceLookupService {
         return List.copyOf(lots);
     }
 
-    private static String matchLotFee(String lotName, Integer distanceMeters, GroundedParkingFee groundedFee) {
+    private static String matchLotFee(String lotName, GroundedParkingFee groundedFee) {
         if (groundedFee == null || groundedFee.sources().isEmpty()) {
             return null;
         }
-        String normalizedLot = lotName.strip().toLowerCase(Locale.ROOT);
-        for (var entry : groundedFee.lotFeesByName().entrySet()) {
-            String key = entry.getKey();
-            if (normalizedLot.equals(key)
-                    || (key.length() >= 4 && (normalizedLot.contains(key) || key.contains(normalizedLot)))) {
-                return entry.getValue();
-            }
-        }
-        if (groundedFee.venueFeeText() != null && distanceMeters != null && distanceMeters <= 200) {
-            return groundedFee.venueFeeText();
-        }
-        return null;
+        return groundedFee.lotFeesByName().get(lotName.strip().toLowerCase(Locale.ROOT));
     }
 
     private static Confidence computeOverallConfidence(
@@ -402,15 +391,19 @@ public class VenuePlaceLookupService {
                     + "m; mức phí: " + UNVERIFIED_FEE_TEXT + ".";
         }
 
-        ParkingLot nearest = parkingLots.getFirst();
+        ParkingLot nearest = parkingLots.stream().filter(lot -> lot.distanceMeters() != null)
+                .min(java.util.Comparator.comparingInt(ParkingLot::distanceMeters)).orElse(null);
         StringBuilder sb = new StringBuilder();
-        sb.append("Tìm thấy ").append(parkingLots.size()).append(" bãi xe lân cận. Gần nhất: ")
-                .append(nearest.name());
-        if (nearest.distanceMeters() != null) {
-            sb.append(" (").append(nearest.distanceMeters()).append("m)");
+        sb.append("Tìm thấy ").append(parkingLots.size()).append(" bãi xe lân cận.");
+        if (nearest != null) {
+            sb.append(" Gần nhất: ").append(nearest.name())
+                    .append(" (").append(nearest.distanceMeters()).append("m)")
+                    .append(", loại: ").append(describeParkingType(nearest.parkingType()))
+                    .append(", phí: ").append(nearest.feeText()).append(".");
         }
-        sb.append(", loại: ").append(describeParkingType(nearest.parkingType()));
-        sb.append(", phí: ").append(nearest.feeText());
+        if (groundedFee != null && groundedFee.venueFeeText() != null && !groundedFee.sources().isEmpty()) {
+            sb.append(" Phí tham khảo tại sân: ").append(groundedFee.venueFeeText()).append(".");
+        }
         return sb.toString();
     }
 

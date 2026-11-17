@@ -334,6 +334,12 @@ paths:
       summary: Xoá tài khoản (soft-delete) và thu hồi mọi phiên
       responses:
         '204': { description: Đã xoá }
+        '409':
+          description: Không thể xóa ADMIN hoạt động cuối cùng (ACTION_STATE_INVALID).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Trạng thái không hợp lệ, status: 409, code: ACTION_STATE_INVALID, detail: Không thể xóa ADMIN hoạt động cuối cùng. }
   /me/profile:
     get:
       operationId: getBuyerProfile
@@ -1803,6 +1809,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Sơ đồ sân không hợp lệ (INVALID_SEAT_LAYOUT).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sơ đồ sân không hợp lệ, status: 422, code: INVALID_SEAT_LAYOUT, detail: Chọn layout đã phát hành, đúng sân đang hoạt động và đúng loại sự kiện. }
   /admin/events/{event_id}:
     get:
       operationId: getAdminEvent
@@ -1847,8 +1859,13 @@ paths:
         Chỉ cập nhật trường có giá trị khác null; trường không gửi hoặc null giữ nguyên.
         attributes khác null thay thế toàn bộ object thuộc tính.
         Body rỗng là thao tác không thay đổi dữ liệu.
-        Không sửa trạng thái, sơ đồ, suất, hạng giá, giá khu hoặc tồn kho qua endpoint này.
-        Sự kiện ENDED hoặc CANCELLED bị khóa (EVENT_LOCKED).
+        Chỉ sự kiện DRAFT được đổi sân hoặc layout. Gửi cả venue_id và seat_layout_id.
+        Layout và sơ đồ tổng quát của layout phải đã công bố, thuộc sân đang hoạt động được chọn,
+        và layout phải cùng loại với sự kiện sau cập nhật. Hủy các suất còn dùng layout cũ trước khi đổi.
+        Thiếu một trong hai ID hoặc còn suất dùng layout cũ trả 400 VALIDATION_ERROR.
+        Layout không đáp ứng điều kiện trả 422 INVALID_SEAT_LAYOUT.
+        Sự kiện ENDED hoặc CANCELLED, hoặc yêu cầu đổi sân/layout hay đổi loại của sự kiện đã
+        chọn layout sau công bố, trả 409 EVENT_LOCKED.
         Sau khi cập nhật thành công, Search làm mới cache sau commit.
       parameters: [ { $ref: '#/components/parameters/EventId' } ]
       requestBody:
@@ -1863,7 +1880,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
         '400':
-          description: Tên, loại, poster, tuổi hoặc giới hạn vé không hợp lệ (VALIDATION_ERROR).
+          description: Thông tin sự kiện hoặc yêu cầu đổi layout không hợp lệ (VALIDATION_ERROR).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1872,11 +1889,17 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Sự kiện đã kết thúc hoặc hủy (EVENT_LOCKED).
+          description: Sự kiện hoặc cấu hình layout đã bị khóa (EVENT_LOCKED).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
               example: { title: Sự kiện bị khóa, status: 409, code: EVENT_LOCKED, detail: Không thể sửa sự kiện đã kết thúc hoặc hủy. }
+        '422':
+          description: Sơ đồ sân không hợp lệ (INVALID_SEAT_LAYOUT).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sơ đồ sân không hợp lệ, status: 422, code: INVALID_SEAT_LAYOUT, detail: Chọn layout đã phát hành, đúng sân đang hoạt động và đúng loại sự kiện. }
   /admin/events/{event_id}/price-tiers:
     put:
       operationId: putPriceTiers
@@ -2729,6 +2752,12 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: PDF không xử lý được (PDF_NOT_PROCESSABLE).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: PDF không xử lý được, status: 422, code: PDF_NOT_PROCESSABLE, detail: PDF hỏng, có mật khẩu hoặc vượt 100 trang. }
         "503":
           description: Yêu cầu không hợp lệ hoặc dịch vụ không khả dụng.
           content:
@@ -2877,7 +2906,7 @@ components:
                  SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
                  VENUE_IN_USE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
-                 SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
+                 SHOWTIME_LOCKED, ACTION_STATE_INVALID, PDF_NOT_PROCESSABLE, RATE_LIMITED]
         errors:
           type: array
           description: Lỗi theo field (VALIDATION_ERROR)

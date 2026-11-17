@@ -197,8 +197,12 @@ public class EventService {
     }
 
     private void validateSelection(UUID venue, UUID layout, String category) {
-        if (venue == null || layout == null || !repository.isPublishedLayout(venue, layout, category)) {
-            throw invalid("Chọn layout đã phát hành, đúng sân đang hoạt động và đúng loại sự kiện.");
+        if (venue == null || layout == null) {
+            throw invalid("Chọn sân và layout của sự kiện.");
+        }
+        if (!repository.isPublishedLayout(venue, layout, category)) {
+            throw new DomainException(ErrorCode.INVALID_SEAT_LAYOUT,
+                    "Chọn layout đã phát hành, đúng sân đang hoạt động và đúng loại sự kiện.");
         }
     }
 

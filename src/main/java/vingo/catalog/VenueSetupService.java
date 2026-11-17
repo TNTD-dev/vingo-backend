@@ -43,13 +43,16 @@ public class VenueSetupService {
     public LocationSuggestion reverse(java.math.BigDecimal lat,java.math.BigDecimal lng){rates.check(user.require().id(),"geo-reverse",60,Duration.ofMinutes(1));return clients.reverse(lat,lng);}
     public VenueImportSession generate(UUID id,ImportParkingGuidanceRequest body){
         var state=editable(id,body.getRevision());
-        var draft=state.draft();validateDraft(draft);
+        var draft=state.draft();
+        var origin=location(imports,state,draft);
+        validateDraft(draft,origin);
         var list=draft.getParkingLocations();
         int index=body.getParkingIndex();if(list==null||index>=list.size())throw invalid("Chọn bãi xe trước khi sinh hướng dẫn.");
+        if(origin==null)throw invalid("Chọn vị trí sân trước khi sinh hướng dẫn.");
         rates.check(user.require().id(),"parking-guidance",5,Duration.ofMinutes(1));
-        var parking=list.get(index);clients.route(location(state),parking);
-        String text=clients.guidance(location(state),parking);
-        parking.guidanceText(text).guidanceApproved(false).guidanceInputHash(fingerprint(location(state),parking))
+        var parking=list.get(index);clients.route(origin,parking);
+        String text=clients.guidance(origin,parking);
+        parking.guidanceText(text).guidanceApproved(false).guidanceInputHash(fingerprint(origin,parking))
             .guidanceModel(clients.model()).guidanceGeneratedAt(now());
         return tx.execute(status->{
             var locked=imports.find(id,user.require().id(),true).orElseThrow(VenueSetupService::missing);
@@ -58,10 +61,12 @@ public class VenueSetupService {
             return sessions.get(id);
         });
     }
-    private VenueLocationInput location(VenueImportRepository.Snapshot state){
-        if(state.venueId()==null)return state.draft().getVenue().getLocation();
-        return jdbc.sql("SELECT COALESCE(location, jsonb_build_object('display_address',address,'latitude',lat,'longitude',lng,'source','LEGACY'))::text FROM venue WHERE id=:id")
-            .param("id",state.venueId()).query(String.class).optional().map(s->json.readValue(s,VenueLocationInput.class)).orElseThrow(VenueSetupService::missing);
+    static VenueLocationInput location(VenueImportRepository imports, VenueImportRepository.Snapshot state,
+                                       VenueImportDraft draft) {
+        if (state.venueId() == null) {
+            return draft.getVenue() == null ? null : draft.getVenue().getLocation();
+        }
+        return imports.venueLocation(state.venueId()).orElseThrow(VenueSetupService::missing);
     }
     private VenueImportRepository.Snapshot editable(UUID id,long revision){
         var s=imports.find(id,user.require().id(),false).orElseThrow(VenueSetupService::missing);
@@ -106,25 +111,29 @@ public class VenueSetupService {
         return model;
     }
     public byte[] download(UUID session){var d=document(session);return clients.download(d.getId());}
-    public static void protectMetadata(VenueImportDraft previous,VenueImportDraft draft){
+    static void protectMetadata(VenueImportDraft previous,VenueImportDraft draft,VenueLocationInput origin){
         if(draft.getParkingLocations()==null)return;
         var old=previous.getParkingLocations()==null?List.<ParkingSetupDraft>of():previous.getParkingLocations();
         for(var p:draft.getParkingLocations()){
-            if(draft.getVenue()==null||draft.getVenue().getLocation()==null||p.getLocation()==null)continue;
-            String hash=fingerprint(draft.getVenue().getLocation(),p);
+            if(origin==null||p.getLocation()==null)continue;
+            String hash=fingerprint(origin,p);
             var source=old.stream().filter(o->hash.equals(o.getGuidanceInputHash())).findFirst();
             if(source.isPresent()){
                 var o=source.get();p.guidanceInputHash(o.getGuidanceInputHash()).guidanceModel(o.getGuidanceModel())
                     .guidanceGeneratedAt(o.getGuidanceGeneratedAt()).straightLineMeters(o.getStraightLineMeters())
                     .routeDistanceMeters(o.getRouteDistanceMeters()).routeDurationSeconds(o.getRouteDurationSeconds());
             }else{
+                boolean stale = (p.getGuidanceInputHash() != null && !hash.equals(p.getGuidanceInputHash()))
+                        || (p.getGuidanceText() != null && old.stream().anyMatch(o -> o.getGuidanceInputHash() != null
+                            && !hash.equals(o.getGuidanceInputHash()) && p.getGuidanceText().equals(o.getGuidanceText())));
+                if (stale && Boolean.TRUE.equals(p.getGuidanceApproved())) p.guidanceApproved(false);
                 p.guidanceInputHash(null).guidanceModel(null).guidanceGeneratedAt(null).straightLineMeters(null)
                     .routeDistanceMeters(null).routeDurationSeconds(null);
                 if(p.getGuidanceText()!=null&&!p.getGuidanceText().isBlank())p.guidanceModel("MANUAL").guidanceInputHash(hash);
             }
         }
     }
-    public static void validateDraft(VenueImportDraft draft){
+    static void validateDraft(VenueImportDraft draft,VenueLocationInput origin){
         if(draft.getVenue()!=null&&draft.getVenue().getLocation()!=null){
             var l=draft.getVenue().getLocation();VenueSetupClients.coordinates(l.getLatitude(),l.getLongitude());
             if(l.getDisplayAddress()==null||l.getDisplayAddress().isBlank()||l.getDisplayAddress().length()>500)throw invalid("Chọn địa chỉ sân trên bản đồ.");
@@ -140,9 +149,9 @@ public class VenueSetupService {
             VenueSetupClients.coordinates(p.getLocation().getLatitude(),p.getLocation().getLongitude());
             if(p.getPriceStatus()==ParkingSetupDraft.PriceStatusEnum.UNVERIFIED)p.priceVnd(null).priceUnit(null);
             else if(p.getPriceVnd()==null||p.getPriceVnd()<0||p.getPriceUnit()==null)throw invalid("Giá đã xác minh cần số tiền và đơn vị.");
-            if(draft.getVenue()!=null&&draft.getVenue().getLocation()!=null){
-                var l=draft.getVenue().getLocation();if(VenueSetupClients.distance(l,p.getLocation())>3000)throw invalid("Bãi xe phải cách sân tối đa 3 km đường chim bay.");
-                if(Boolean.TRUE.equals(p.getGuidanceApproved())&&p.getGuidanceInputHash()!=null&&!p.getGuidanceInputHash().equals(fingerprint(l,p)))throw conflict();
+            if(origin!=null){
+                if(VenueSetupClients.distance(origin,p.getLocation())>3000)throw invalid("Bãi xe phải cách sân tối đa 3 km đường chim bay.");
+                if(Boolean.TRUE.equals(p.getGuidanceApproved())&&p.getGuidanceInputHash()!=null&&!p.getGuidanceInputHash().equals(fingerprint(origin,p)))throw conflict();
             }
         }
     }

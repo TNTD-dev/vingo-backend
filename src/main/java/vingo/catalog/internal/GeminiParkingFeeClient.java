@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
+import java.net.http.HttpClient;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 /** Gemini grounded search; không có key thì không suy đoán phí gửi xe. */
@@ -15,7 +17,10 @@ public class GeminiParkingFeeClient {
     public record WebCitation(String title, URI uri, String snippet) {}
     public record GroundedParkingFee(String venueFeeText, Map<String, String> lotFeesByName, List<WebCitation> sources) {}
     public GeminiParkingFeeClient(GoogleVenueLookupSettings settings) {
-        this.http = RestClient.builder().baseUrl("https://generativelanguage.googleapis.com/v1beta").build();
+        var client = HttpClient.newBuilder().connectTimeout(settings.timeout()).build();
+        var factory = new JdkClientHttpRequestFactory(client);
+        factory.setReadTimeout(settings.timeout());
+        this.http = RestClient.builder().requestFactory(factory).baseUrl("https://generativelanguage.googleapis.com/v1beta").build();
         this.settings = settings;
     }
     public Optional<GroundedParkingFee> lookupParkingFee(String venueName, String address, List<String> lotNames) {
@@ -42,8 +47,7 @@ public class GeminiParkingFeeClient {
         try {
             Map<?, ?> candidate = (Map<?, ?>) ((List<?>) response.get("candidates")).getFirst();
             Map<?, ?> metadata = (Map<?, ?>) candidate.get("groundingMetadata");
-            Map<?, ?> grounding = (Map<?, ?>) metadata.get("groundingAttributions");
-            Object raw = grounding.get("groundingChunks");
+            Object raw = metadata.get("groundingChunks");
             if (!(raw instanceof List<?> chunks)) return List.of();
             return chunks.stream().filter(Map.class::isInstance).map(Map.class::cast).map(chunk -> {
                 Map<?, ?> web = chunk.get("web") instanceof Map<?, ?> w ? w : Map.of();

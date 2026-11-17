@@ -116,18 +116,26 @@ public class VenueSetupClients {
     public byte[] download(UUID id){return docRequest(id,"/file","GET",null);}
     public void delete(UUID id){docRequest(id,"","DELETE",null);}
     private byte[] docRequest(UUID id,String suffix,String method,byte[] body){
-        return send(HttpRequest.newBuilder(URI.create(documentsBase+"/documents/"+id+suffix)).timeout(Duration.ofSeconds(30))
+        var response = exchange(HttpRequest.newBuilder(URI.create(documentsBase+"/documents/"+id+suffix)).timeout(Duration.ofSeconds(30))
             .header("X-Internal-Key",documentsKey).header("Content-Type","application/pdf")
             .method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(body)).build());
+        return switch (response.statusCode()) {
+            case 413 -> throw new DomainException(ErrorCode.PAYLOAD_TOO_LARGE,"PDF vượt giới hạn 20 MiB.");
+            case 415 -> throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE,"Chỉ nhận PDF hợp lệ.");
+            case 422 -> throw new DomainException(ErrorCode.PDF_NOT_PROCESSABLE,"PDF hỏng, có mật khẩu hoặc vượt 100 trang.");
+            default -> responseBody(response);
+        };
     }
     private byte[] send(HttpRequest request) {
+        return responseBody(exchange(request));
+    }
+    private static byte[] responseBody(HttpResponse<byte[]> response) {
+        if(response.statusCode()<200||response.statusCode()>=300)throw unavailable();
+        return response.body();
+    }
+    private HttpResponse<byte[]> exchange(HttpRequest request) {
         try {
-            var response=http.send(request,HttpResponse.BodyHandlers.ofByteArray());
-            if(response.statusCode()==413)throw new DomainException(ErrorCode.PAYLOAD_TOO_LARGE,"PDF vượt giới hạn 20 MiB.");
-            if(response.statusCode()==415)throw new DomainException(ErrorCode.UNSUPPORTED_MEDIA_TYPE,"Chỉ nhận PDF hợp lệ.");
-            if(response.statusCode()==422)throw new DomainException(ErrorCode.PDF_NOT_PROCESSABLE,"PDF hỏng, có mật khẩu hoặc vượt 100 trang.");
-            if(response.statusCode()<200||response.statusCode()>=300)throw unavailable();
-            return response.body();
+            return http.send(request,HttpResponse.BodyHandlers.ofByteArray());
         } catch(InterruptedException ex){Thread.currentThread().interrupt();throw unavailable();}
         catch(java.io.IOException|IllegalArgumentException ex){throw unavailable();}
     }

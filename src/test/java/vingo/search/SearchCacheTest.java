@@ -111,7 +111,11 @@ class SearchCacheTest extends IntegrationTest {
         UUID seat = fixtures.seatIds(zone).getFirst();
         JsonNode first = get("/api/v1/showtimes/" + showtime + "/seatmap");
         assertThat(first.path("zones").get(0).path("seats").get(0).path("status").asString()).isEqualTo("AVAILABLE");
-        assertThat(redis.keys("vingo:search:search-seatmap-layout:*")).hasSize(1);
+        String layoutPrefix = "vingo:search:search-seatmap-layout:";
+        String generationKey = "vingo:search:gen:showtime:" + showtime;
+        String originalKey = layoutPrefix + showtime + ":g"
+                + java.util.Objects.requireNonNullElse(redis.opsForValue().get(generationKey), "0");
+        assertThat(redis.hasKey(originalKey)).isTrue();
 
         fixtures.sellSeat(showtime, seat);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.sql("UPDATE seat SET x = 999 WHERE id = :id").param("id", seat).update())
@@ -126,7 +130,13 @@ class SearchCacheTest extends IntegrationTest {
         tx.executeWithoutResult(status ->
                 publisher.publishEvent(new CatalogChanged(created.id(), Set.of(showtime))));
 
+        String freshKey = layoutPrefix + showtime + ":g" + redis.opsForValue().get(generationKey);
+        // The prior generation expires by TTL. The new generation must miss before the GET.
+        assertThat(freshKey).isNotEqualTo(originalKey);
+        assertThat(redis.hasKey(freshKey)).isFalse();
+
         JsonNode third = get("/api/v1/showtimes/" + showtime + "/seatmap");
+        assertThat(redis.hasKey(freshKey)).isTrue();
         assertThat(third.path("zones").get(0).path("seats").get(0).path("x").asInt()).isEqualTo(first.path("zones").get(0).path("seats").get(0).path("x").asInt());
     }
 

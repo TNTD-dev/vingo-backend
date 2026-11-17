@@ -1,6 +1,7 @@
 package vingo.auth.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doReturn;
 
 import java.util.Map;
 import java.util.UUID;
@@ -9,11 +10,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import vingo.api.model.AdminAccount;
 import vingo.api.model.AdminAccountPage;
 import vingo.api.model.LoginRequest;
 import vingo.api.model.TokenPair;
+import vingo.auth.internal.AdminAccountRepository;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
 
@@ -21,6 +24,7 @@ import vingo.support.IntegrationTest;
 class AdminAccountIntegrationTest extends IntegrationTest {
     private static final String ROOT = "/api/v1/admin/users";
     @Autowired PasswordEncoder passwords;
+    @MockitoSpyBean AdminAccountRepository accounts;
 
     @Test
     void accountEndpoints_requireAdmin() {
@@ -35,6 +39,18 @@ class AdminAccountIntegrationTest extends IntegrationTest {
         client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(buyer))
                 .body(Map.of("role", "ADMIN", "reason", "Test"))
                 .exchange().expectStatus().isForbidden();
+    }
+
+    @Test
+    void deleteMe_rejectsLastActiveAdmin() {
+        String admin = tokenFor(Role.ADMIN);
+        // The shared test database also contains admins created by other tests.
+        doReturn(1L).when(accounts).activeAdmins();
+        client.delete().uri("/api/v1/me").headers(h -> h.setBearerAuth(admin))
+                .exchange().expectStatus().isEqualTo(409)
+                .expectBody().jsonPath("$.code").isEqualTo("ACTION_STATE_INVALID");
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(admin))
+                .exchange().expectStatus().isOk();
     }
 
     @Test
