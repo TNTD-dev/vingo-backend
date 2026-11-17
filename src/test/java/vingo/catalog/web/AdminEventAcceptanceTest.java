@@ -76,7 +76,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
     @Test void publish_returns422_whenShowtimeSalesAlreadyClosed() {
         var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
         var s=catalog.showtime(e,Window.draft());
-        // Giờ đóng bán đã qua nhưng suất chưa kết thúc: công bố xong sẽ hiện SALES_CLOSED ngay.
+        // Suất chưa kết thúc nhưng đã đóng bán nên sự kiện chưa đủ điều kiện công bố.
         jdbc.sql("UPDATE showtime SET sale_opens_at=:opens, sale_closes_at=:closes WHERE id=:id")
                 .param("opens",java.time.OffsetDateTime.parse("2026-11-10T09:00:00Z"))
                 .param("closes",java.time.OffsetDateTime.parse("2026-11-12T08:00:00Z")).param("id",s.id()).update();

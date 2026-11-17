@@ -47,7 +47,8 @@ public class TicketEmailRenderer {
             throw new PayloadUnavailableException();
         }
         var rows=jdbc.sql("""
-                SELECT t.code,o.code AS order_code,e.title,s.starts_at,v.name AS venue,COALESCE(i.zone_name_snapshot,z.name) AS zone,
+                SELECT t.code,t.status,o.code AS order_code,e.title,s.starts_at,v.name AS venue,
+                    COALESCE(i.zone_name_snapshot,z.name) AS zone,
                     CASE WHEN se.id IS NULL THEN 'Khu đứng' ELSE se.row_label || se.number::text END AS seat,
                     COALESCE(i.tier_name_snapshot,pt.name) AS tier
                 FROM ticket t JOIN order_item i ON i.id=t.order_item_id JOIN orders o ON o.id=i.order_id

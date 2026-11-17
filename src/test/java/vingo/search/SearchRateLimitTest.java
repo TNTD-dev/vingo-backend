@@ -74,12 +74,6 @@ class SearchRateLimitTest extends IntegrationTest {
     void getSeatmapSvg_returns429_whenIpExceedsLimit() {
         UUID showtimeId = new CatalogFixtures(jdbc, clock).event().showtime(s -> s.onSale().seated(2)).create()
                 .showtimeId();
-        jdbc.sql("""
-                INSERT INTO seat_layout_svg (seat_layout_id, schema_version, svg_content,
-                                             view_box_x, view_box_y, view_box_width, view_box_height)
-                SELECT seat_layout_id, 1, '<svg xmlns="http://www.w3.org/2000/svg"/>', 0, 0, 100, 100
-                FROM showtime WHERE id = :id
-                """).param("id", showtimeId).update();
         String path = "/api/v1/showtimes/" + showtimeId + "/seatmap.svg";
         for (int i = 0; i < 3; i++) {
             client.get().uri(path).exchange().expectStatus().isOk();

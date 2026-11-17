@@ -6,19 +6,19 @@ import java.util.UUID;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import vingo.support.IntegrationTest;
+import vingo.support.TestcontainersConfig;
 
 /** Chạy file chờ bằng Flyway trong schema riêng; không đưa migration vào app hiện tại. */
 class VenueSchemaMigrationTest extends IntegrationTest {
     private final DataSource migrationSource;
 
-    @Autowired
-    VenueSchemaMigrationTest(PostgreSQLContainer postgres) {
+    VenueSchemaMigrationTest() {
+        PostgreSQLContainer postgres = TestcontainersConfig.postgres();
         migrationSource = new DriverManagerDataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
     }
 

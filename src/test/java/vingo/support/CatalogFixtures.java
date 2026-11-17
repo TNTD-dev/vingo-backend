@@ -82,9 +82,27 @@ public final class CatalogFixtures {
         private String city;
         private String venueName;
         private int sold;
+        private String layoutSvg;
+        private boolean publishLayout = true;
+        private boolean omitLayoutSvg;
         private final List<ZoneSpec> zones = new ArrayList<>();
 
         private ShowtimeBuilder() {
+        }
+
+        public ShowtimeBuilder layoutSvg(String svg) {
+            this.layoutSvg = svg;
+            return this;
+        }
+
+        public ShowtimeBuilder draftLayout() {
+            this.publishLayout = false;
+            return this;
+        }
+
+        public ShowtimeBuilder draftLayoutWithoutSvg() {
+            this.omitLayoutSvg = true;
+            return draftLayout();
         }
 
         public ShowtimeBuilder startsAt(Instant startsAt) {
@@ -305,7 +323,16 @@ public final class CatalogFixtures {
                     var seats=seatsByZone.get(created.keySet().iterator().next());
                     makeCouple(seats.get(s.coupleFirst),seats.get(s.coupleFirst+1));
                 }
-                VenueSchemaFixture.publish(jdbc,layoutId);
+                if (s.omitLayoutSvg) {
+                    jdbc.sql("DELETE FROM seat_layout_svg WHERE seat_layout_id = :id")
+                            .param("id", layoutId).update();
+                } else if (s.layoutSvg != null) {
+                    jdbc.sql("UPDATE seat_layout_svg SET svg_content = :svg WHERE seat_layout_id = :id")
+                            .param("svg", s.layoutSvg).param("id", layoutId).update();
+                }
+                if (s.publishLayout) {
+                    VenueSchemaFixture.publish(jdbc, layoutId);
+                }
                 UUID showtimeId=insertShowtime(eventId,layoutId,s);
                 showtimeIds.add(showtimeId);
 

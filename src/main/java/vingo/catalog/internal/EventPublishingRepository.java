@@ -35,7 +35,7 @@ public class EventPublishingRepository {
               WHERE s.event_id=:event AND s.status<>'CANCELLED' AND (
                 l.status<>'PUBLISHED' OR v.deleted_at IS NOT NULL
                 OR s.ends_at<=:now OR s.ends_at<=s.starts_at
-                OR s.sale_closes_at<=s.sale_opens_at OR s.sale_closes_at>s.ends_at
+                OR s.sale_closes_at<=:now OR s.sale_closes_at<=s.sale_opens_at OR s.sale_closes_at>s.ends_at
                 OR NOT EXISTS(SELECT 1 FROM zone z WHERE z.seat_layout_id=l.id)
                 OR EXISTS (
                   SELECT 1 FROM zone z LEFT JOIN zone_price zp ON zp.zone_id=z.id AND zp.event_id=:event
