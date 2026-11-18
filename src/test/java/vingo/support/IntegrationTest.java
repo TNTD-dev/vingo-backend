@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.context.annotation.Profile;
@@ -34,8 +36,18 @@ import vingo.shared.security.SecurityConfig;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles({"api", "test"})
-@Import({TestcontainersConfig.class, TestClockConfig.class, IntegrationTest.ApiClientConfig.class})
+@Import({TestcontainersConfig.class, TestClockConfig.class, IntegrationTest.ApiClientConfig.class,
+        IntegrationTest.SmsConfig.class})
 public abstract class IntegrationTest {
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class SmsConfig {
+        @Bean
+        @Primary
+        RecordingSmsSender recordingSmsSender() {
+            return new RecordingSmsSender();
+        }
+    }
 
     /** Chỉ API cần client HTTP; worker vẫn dùng chung DB/Testcontainers của base. */
     @TestConfiguration(proxyBeanMethods = false)
@@ -84,11 +96,13 @@ public abstract class IntegrationTest {
     /** Tạo user trong DB và trả access token hợp lệ của user đó. */
     protected String tokenFor(Role role) {
         UUID userId = jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status)
-                        VALUES (:email, 'Test User', 'x', :role, 'ACTIVE') RETURNING id
+                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
+                        VALUES (:email, 'Test User', 'x', :role, 'ACTIVE', :phone, :now) RETURNING id
                         """)
                 .param("email", UUID.randomUUID() + "@test.vingo")
                 .param("role", role.name())
+                .param("phone", CatalogFixture.uniquePhone())
+                .param("now", java.time.OffsetDateTime.now(clock))
                 .query(UUID.class)
                 .single();
         return tokenFor(userId, role);

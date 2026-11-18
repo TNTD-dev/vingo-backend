@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -20,6 +21,7 @@ public class CatalogFixture {
 
     public static final long VIP_PRICE = 500_000;
     public static final long GA_PRICE = 200_000;
+    private static final AtomicInteger PHONE_SEQUENCE = new AtomicInteger(10_000_000);
 
     private final JdbcClient jdbc;
     private final Clock clock;
@@ -132,10 +134,16 @@ public class CatalogFixture {
 
     public UUID buyer() {
         return jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status)
-                        VALUES (:email, 'Test buyer', 'x', 'BUYER', 'ACTIVE') RETURNING id
+                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
+                        VALUES (:email, 'Test buyer', 'x', 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
                         """)
+                .param("phone", uniquePhone()).param("now", now())
                 .param("email", UUID.randomUUID() + "@test.vingo").query(UUID.class).single();
+    }
+
+    /** Sinh số E.164 không trùng giữa các fixture và luồng trong cùng lần chạy test. */
+    public static String uniquePhone() {
+        return "+849" + PHONE_SEQUENCE.getAndIncrement();
     }
 
     public UUID order(UUID userId, UUID showtimeId, String status, OffsetDateTime expiresAt) {
