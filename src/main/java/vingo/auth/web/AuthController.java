@@ -172,6 +172,7 @@ class AuthController implements AuthApi {
 
     private static User toApiUser(AuthUser account) {
         return new User().id(account.id()).email(account.email()).phone(account.phone())
+                .phoneVerified(account.phoneVerified())
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name()))
                 .status(User.StatusEnum.fromValue(account.status()));

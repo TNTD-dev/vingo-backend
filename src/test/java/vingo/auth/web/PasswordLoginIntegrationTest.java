@@ -26,6 +26,7 @@ import vingo.api.model.TokenPair;
 import vingo.api.model.User;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
+import vingo.support.CatalogFixture;
 
 /** Dùng cấu hình chung trong application-test.yml: secure-cookies=false, khóa sau 3 lần sai trong 15 phút. */
 class PasswordLoginIntegrationTest extends IntegrationTest {
@@ -46,9 +47,11 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     @Test
     void activeBuyerAndAdmin_canLoginByEmailCaseInsensitive_andPhone_withCorrectRoleAndRefreshLogout() {
         String buyerEmail = "Buyer." + UUID.randomUUID() + "@Vingo.Local";
-        String buyerPhone = "09" + Math.abs(UUID.randomUUID().getMostSignificantBits() % 100000000L);
+        String buyerPhone = CatalogFixture.uniquePhone();
         UUID buyerId = insertUser(buyerEmail.toLowerCase(), buyerPhone, "Buyer User",
                 passwordEncoder.encode(PASSWORD), Role.BUYER, "ACTIVE", null, null);
+        jdbc.sql("UPDATE users SET phone_verified_at = :now WHERE id = :id")
+                .param("now", OffsetDateTime.now(clock)).param("id", buyerId).update();
 
         var emailLogin = client.post().uri(LOGIN)
                 .body(new LoginRequest("  " + buyerEmail.toUpperCase() + "  ", PASSWORD).device("Chrome"))
@@ -62,6 +65,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         assertThat(buyerTokens).isNotNull();
         assertThat(buyerTokens.getUser().getId()).isEqualTo(buyerId);
         assertThat(buyerTokens.getUser().getRole()).isEqualTo(User.RoleEnum.BUYER);
+        assertThat(buyerTokens.getUser().getPhoneVerified()).isTrue();
         assertThat(buyerTokens.getAccessToken()).isNotBlank();
         assertThat(buyerTokens.getRefreshToken()).isNotBlank();
 
@@ -81,6 +85,11 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(phoneTokens).isNotNull();
         assertThat(phoneTokens.getUser().getId()).isEqualTo(buyerId);
+        assertThat(phoneTokens.getUser().getPhoneVerified()).isTrue();
+        client.post().uri(LOGIN).body(new LoginRequest("0" + buyerPhone.substring(3), PASSWORD))
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.user.id").isEqualTo(buyerId.toString())
+                .jsonPath("$.user.phone_verified").isEqualTo(true);
 
         // Refresh rotation with cookie works
         String cookieHeader = emailLogin.getResponseHeaders().getFirst(HttpHeaders.SET_COOKIE);
@@ -95,6 +104,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(rotated).isNotNull();
         assertThat(rotated.getAccessToken()).isNotBlank();
+        assertThat(rotated.getUser().getPhoneVerified()).isTrue();
 
         // Old refresh token is invalidated after rotation
         client.post().uri(REFRESH)
@@ -275,6 +285,49 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .query(String.class)
                 .single();
         assertThat(status).isEqualTo("LOCKED");
+    }
+
+    @Test
+    void unverifiedPhone_returns401ForPhone_butAllowsEmailLogin() {
+        String email = UUID.randomUUID() + "@phone-login.test";
+        String phone = CatalogFixture.uniquePhone();
+        UUID user = insertUser(email, phone, "Unverified phone", passwordEncoder.encode(PASSWORD),
+                Role.BUYER, "ACTIVE", null, null);
+        client.post().uri(LOGIN).body(new LoginRequest(phone, PASSWORD))
+                .exchange().expectStatus().isUnauthorized().expectBody()
+                .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
+        client.post().uri(LOGIN).body(new LoginRequest(email, PASSWORD))
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.user.id").isEqualTo(user.toString())
+                .jsonPath("$.user.phone_verified").isEqualTo(false);
+    }
+
+    @Test
+    void duplicateUnverifiedPhones_allowEachEmailLogin_andReturn401InsteadOf500ForPhone() {
+        String phone = CatalogFixture.uniquePhone();
+        String firstEmail = UUID.randomUUID() + "@phone-login.test";
+        String secondEmail = UUID.randomUUID() + "@phone-login.test";
+        String hash = passwordEncoder.encode(PASSWORD);
+        UUID first = insertUser(firstEmail, phone, "First", hash, Role.BUYER, "ACTIVE", null, null);
+        UUID second = insertUser(secondEmail, phone, "Second", hash, Role.BUYER, "ACTIVE", null, null);
+        client.post().uri(LOGIN).body(new LoginRequest(firstEmail, PASSWORD))
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.user.id").isEqualTo(first.toString());
+        client.post().uri(LOGIN).body(new LoginRequest(secondEmail, PASSWORD))
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.user.id").isEqualTo(second.toString());
+        for (String identifier : List.of(phone, "0" + phone.substring(3))) {
+            client.post().uri(LOGIN).body(new LoginRequest(identifier, PASSWORD))
+                    .exchange().expectStatus().isUnauthorized().expectBody()
+                    .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
+        }
+    }
+
+    @Test
+    void invalidVietnamesePhone_returnsSame401CodeAsUnknownCredentials() {
+        for (String identifier : List.of("+12025550123", "0912", "09abc45678")) {
+            client.post().uri(LOGIN).body(new LoginRequest(identifier, PASSWORD))
+                    .exchange().expectStatus().isUnauthorized().expectBody()
+                    .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
+        }
     }
 
     private UUID insertUser(String email, String phone, String fullName, String passwordHash,
