@@ -64,6 +64,6 @@ class GoogleLoginServiceTest {
 
     /** Tạo buyer Google với trạng thái tài khoản mà test cần. */
     private static AuthUser account(String status) {
-        return new AuthUser(UUID.randomUUID(), EMAIL, null, EMAIL, null, Role.BUYER, status);
+        return new AuthUser(UUID.randomUUID(), EMAIL, null, EMAIL, null, Role.BUYER, status, false);
     }
 }

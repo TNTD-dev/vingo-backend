@@ -5,7 +5,9 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -20,6 +22,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
@@ -32,7 +35,11 @@ import vingo.auth.internal.AccountSecurityState;
 import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.LoginProperties;
 import vingo.auth.internal.OtpProperties;
+import vingo.auth.internal.PhoneNumbers;
+import vingo.auth.internal.PhoneOtpProperties;
 import vingo.auth.internal.TokenSecrets;
+import vingo.auth.internal.sms.SmsDeliveryException;
+import vingo.auth.internal.sms.SmsSender;
 import vingo.notifications.NotificationsService;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
@@ -58,6 +65,8 @@ public class AuthService {
     private final AuthProperties authProperties;
     private final LoginProperties loginProperties;
     private final OtpProperties otpProperties;
+    private final PhoneOtpProperties phoneOtpProperties;
+    private final SmsSender sms;
     private final NotificationsService notifications;
     private final RateLimiter rateLimiter;
     private final PasswordEncoder passwordEncoder;
@@ -67,7 +76,8 @@ public class AuthService {
 
     /** Dùng cùng cấu hình ký JWT mà resource server dùng để xác minh. */
     AuthService(AuthRepository accounts, AdminAccountRepository administration, JwtProperties jwt, AuthProperties authProperties,
-                LoginProperties loginProperties, OtpProperties otpProperties,
+                LoginProperties loginProperties, OtpProperties otpProperties, PhoneOtpProperties phoneOtpProperties,
+                SmsSender sms,
                 NotificationsService notifications, RateLimiter rateLimiter,
                 PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock,
                 AccountSecurityState securityState) {
@@ -78,6 +88,8 @@ public class AuthService {
         this.authProperties = authProperties;
         this.loginProperties = loginProperties;
         this.otpProperties = otpProperties;
+        this.phoneOtpProperties = phoneOtpProperties;
+        this.sms = sms;
         this.notifications = notifications;
         this.rateLimiter = rateLimiter;
         this.passwordEncoder = passwordEncoder;
@@ -178,7 +190,7 @@ public class AuthService {
         accounts.consumeOtpSession(session.id(), now);
         accounts.activateUser(user.id(), now);
         AuthUser activeUser = new AuthUser(user.id(), user.email(), user.phone(), user.fullName(), user.avatar(),
-                user.role(), "ACTIVE");
+                user.role(), "ACTIVE", user.phoneVerified());
         String refreshToken = TokenSecrets.generate();
         OffsetDateTime expiresAt = now.plus(authProperties.refreshTokenTtl());
         UUID sessionId = accounts.createSession(activeUser.id(), TokenSecrets.hash(refreshToken), null, expiresAt);
@@ -339,7 +351,7 @@ public class AuthService {
             if (message.contains("users_email_uk")) {
                 return new DomainException(ErrorCode.EMAIL_TAKEN, "Email đã tồn tại");
             }
-            if (message.contains("users_phone_uk")) {
+            if (message.contains("users_verified_phone_uk")) {
                 return new DomainException(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
             }
         }
@@ -402,7 +414,7 @@ public class AuthService {
         if (expiredTempLock) {
             accounts.unlockAfterExpiry(user.id(), now);
             user = new AuthUser(user.id(), user.email(), user.phone(), user.fullName(), user.avatar(),
-                    user.role(), "ACTIVE");
+                    user.role(), "ACTIVE", user.phoneVerified());
         }
         accounts.recordLoginAttempt(user.id(), true, now);
         String refreshToken = TokenSecrets.generate();
@@ -468,13 +480,16 @@ public class AuthService {
                 || (normalizedPhone != null && !normalizedPhone.isBlank() && normalizedPhone.length() > 32)) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "Tên hoặc số điện thoại không hợp lệ");
         }
+        String nextPhone = phone == null ? account.user().phone()
+                : StringUtils.hasText(normalizedPhone) ? PhoneNumbers.normalize(normalizedPhone).orElse(normalizedPhone) : null;
+        String previousPhone = PhoneNumbers.normalize(account.user().phone()).orElse(account.user().phone());
+        boolean phoneChanged = phone != null && !Objects.equals(previousPhone, nextPhone);
         String hash = changePassword ? passwordEncoder.encode(newPassword) : null;
         try {
-            accounts.updateAccount(userId, normalizedName, StringUtils.hasText(normalizedPhone) ? normalizedPhone : null,
-                    hash, OffsetDateTime.now(clock));
+            accounts.updateAccount(userId, normalizedName, nextPhone, hash, phoneChanged, OffsetDateTime.now(clock));
         } catch (DataIntegrityViolationException ex) {
             String message = ex.getMostSpecificCause().getMessage();
-            if (message != null && message.contains("users_phone_uk")) {
+            if (message != null && message.contains("users_verified_phone_uk")) {
                 throw new DomainException(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
             }
             throw ex;
@@ -494,6 +509,144 @@ public class AuthService {
         OffsetDateTime now = OffsetDateTime.now(clock);
         accounts.revoke(userId, null, true, now);
         accounts.deleteAccount(userId, now);
+    }
+
+    /** Yêu cầu SMS OTP xác minh số điện thoại cho user hiện tại. */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public OtpSessionInfo requestPhoneOtp(UUID userId, String phone, String clientIp) {
+        rateLimiter.check(clientKey(clientIp), "auth-phone-otp",
+                phoneOtpProperties.ipMaxPerWindow(), phoneOtpProperties.window());
+        String e164 = PhoneNumbers.normalize(phone)
+                .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR, "Số điện thoại Việt Nam không hợp lệ"));
+        var outcome = tx.execute(status -> preparePhoneOtp(userId, e164));
+        // Ném sau commit để lượt dò số đã xác minh vẫn tính vào cooldown và hạn mức.
+        if (outcome instanceof PhoneOtpOutcome.Failure(var code, var message)) {
+            throw new DomainException(code, message);
+        }
+        var prepared = (PhoneOtpOutcome.Success) outcome;
+        int minutes = Math.toIntExact(Math.max(1, (otpProperties.ttl().toSeconds() + 59) / 60));
+        try {
+            sms.sendOtp(UUID.randomUUID(), e164, prepared.code(), minutes);
+        } catch (SmsDeliveryException ex) {
+            // Không đính kèm lỗi nhà cung cấp để tránh vô tình lộ nội dung SMS hoặc số đích.
+            log.atWarn()
+                    .addKeyValue("user_id", userId)
+                    .addKeyValue("otp_session_id", prepared.session().otpSessionId())
+                    .addKeyValue("error", ex.getClass().getSimpleName())
+                    .log("Phone verification SMS delivery failed");
+            throw new DomainException(ErrorCode.SERVICE_UNAVAILABLE, "Dịch vụ SMS tạm thời không khả dụng");
+        }
+        log.atInfo()
+                .addKeyValue("user_id", userId)
+                .addKeyValue("otp_session_id", prepared.session().otpSessionId())
+                .log("Sent phone verification SMS OTP");
+        return prepared.session();
+    }
+
+    private PhoneOtpOutcome preparePhoneOtp(UUID userId, String phone) {
+        // Khoá user bảo vệ cả lần gửi đầu chưa có phiên; khoá số bảo vệ hạn mức qua nhiều user.
+        accounts.lockPhoneOtpScope("user:" + userId);
+        var open = accounts.findOpenPhoneOtpForUpdate(userId);
+        var account = accounts.findEditableAccount(userId)
+                .orElseThrow(() -> new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động"));
+        if (!"ACTIVE".equals(account.user().status())) {
+            throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động");
+        }
+        accounts.lockPhoneOtpScope("phone:" + phone);
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        OffsetDateTime since = now.minus(phoneOtpProperties.window());
+        var recentSends = accounts.recentPhoneSendsByUser(userId, since, phoneOtpProperties.userMaxPerWindow());
+        if (!recentSends.isEmpty()) {
+            requireSendTime(now, recentSends.getFirst().plus(phoneOtpProperties.resendCooldown()));
+        }
+        enforcePhoneSendLimit(recentSends, phoneOtpProperties.userMaxPerWindow(), now);
+        enforcePhoneSendLimit(accounts.recentPhoneSendsByPhone(phone, since, phoneOtpProperties.phoneMaxPerWindow()),
+                phoneOtpProperties.phoneMaxPerWindow(), now);
+        accounts.recordPhoneOtpSend(userId, phone, now);
+        if (accounts.isPhoneVerifiedByOther(userId, phone)) {
+            return new PhoneOtpOutcome.Failure(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
+        }
+
+        String code = generateOtp();
+        String hash = passwordEncoder.encode(code);
+        OffsetDateTime expiresAt = now.plus(otpProperties.ttl());
+        UUID sessionId;
+        if (open.isPresent()) {
+            sessionId = open.get().id();
+            accounts.refreshPhoneOtpSession(sessionId, phone, hash, now, expiresAt);
+        } else {
+            sessionId = accounts.createOtpSession(userId, "PHONE", "SMS", hash, now, expiresAt, phone).id();
+        }
+        return new PhoneOtpOutcome.Success(new OtpSessionInfo(sessionId, expiresAt, "SMS"), code);
+    }
+
+    private void enforcePhoneSendLimit(List<OffsetDateTime> sends, int limit, OffsetDateTime now) {
+        if (sends.size() >= limit) {
+            requireSendTime(now, sends.getLast().plus(phoneOtpProperties.window()));
+        }
+    }
+
+    private static void requireSendTime(OffsetDateTime now, OffsetDateTime nextAllowed) {
+        if (nextAllowed.isAfter(now)) {
+            Duration remaining = Duration.between(now, nextAllowed);
+            throw new RateLimitedException(remaining.toSeconds() + (remaining.getNano() == 0 ? 0 : 1));
+        }
+    }
+
+    /** Xác minh phiên PHONE thuộc user hiện tại và trả thông tin tài khoản. */
+    public AuthUser verifyPhone(UUID userId, UUID otpSessionId, String otp) {
+        PhoneVerifyOutcome outcome;
+        try {
+            outcome = tx.execute(status -> verifyPhoneInTransaction(userId, otpSessionId, otp));
+        } catch (DataIntegrityViolationException ex) {
+            String message = ex.getMostSpecificCause().getMessage();
+            if (message != null && message.contains("users_verified_phone_uk")) {
+                throw new DomainException(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
+            }
+            throw ex;
+        }
+        // Ném sau commit để số lần nhập sai không bị rollback cùng lỗi nghiệp vụ.
+        if (outcome instanceof PhoneVerifyOutcome.Failure(var code, var message)) {
+            throw new DomainException(code, message);
+        }
+        log.atInfo()
+                .addKeyValue("user_id", userId)
+                .addKeyValue("otp_session_id", otpSessionId)
+                .log("Verified phone number");
+        return ((PhoneVerifyOutcome.Success) outcome).user();
+    }
+
+    private PhoneVerifyOutcome verifyPhoneInTransaction(UUID userId, UUID otpSessionId, String otp) {
+        var found = accounts.findOwnedOtpForUpdate(userId, otpSessionId);
+        if (found.isEmpty()) {
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ");
+        }
+        var session = found.get();
+        if (!"PHONE".equals(session.purpose()) || session.consumedAt() != null) {
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
+        }
+        var account = accounts.findEditableAccount(userId);
+        if (account.isEmpty() || !"ACTIVE".equals(account.get().user().status())) {
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ");
+        }
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        if (!session.expiresAt().isAfter(now)) {
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_EXPIRED, "OTP đã hết hạn");
+        }
+        if (session.attempts() >= otpProperties.maxAttempts()) {
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_TOO_MANY_ATTEMPTS, "Nhập sai OTP quá số lần cho phép");
+        }
+        if (!passwordEncoder.matches(otp, session.otpHash())) {
+            accounts.incrementOtpAttempts(session.id());
+            return new PhoneVerifyOutcome.Failure(ErrorCode.OTP_INVALID, "OTP không đúng");
+        }
+        accounts.consumeOtpSession(session.id(), now);
+        return new PhoneVerifyOutcome.Success(accounts.verifyPhone(userId, session.phone(), now));
+    }
+
+    /** Kiểm tra số điện thoại đã xác minh trước khi giữ ghế. */
+    public boolean isPhoneVerified(UUID userId) {
+        return accounts.isPhoneVerified(userId);
     }
 
     /** Kiểm tra người mua đã có hồ sơ trước khi tạo thanh toán. */
@@ -569,6 +722,16 @@ public class AuthService {
 
         record Failure(ErrorCode code, String message) implements ResetOutcome {
         }
+    }
+
+    private sealed interface PhoneOtpOutcome {
+        record Success(OtpSessionInfo session, String code) implements PhoneOtpOutcome {}
+        record Failure(ErrorCode code, String message) implements PhoneOtpOutcome {}
+    }
+
+    private sealed interface PhoneVerifyOutcome {
+        record Success(AuthUser user) implements PhoneVerifyOutcome {}
+        record Failure(ErrorCode code, String message) implements PhoneVerifyOutcome {}
     }
 
     public record OtpSessionInfo(UUID otpSessionId, OffsetDateTime expiresAt, String channel) {

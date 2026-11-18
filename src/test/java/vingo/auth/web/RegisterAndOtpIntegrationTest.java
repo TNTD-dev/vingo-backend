@@ -125,9 +125,9 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void register_returns409_whenEmailOrPhoneAlreadyTaken() {
+    void register_returns409_whenEmailOrVerifiedPhoneAlreadyTaken() {
         String email = "dup." + UUID.randomUUID() + "@vingo.local";
-        String phone = randomPhone();
+        String phone = "+84" + randomPhone().substring(1);
 
         client.post().uri(REGISTER)
                 .body(new RegisterRequest("First User", email, phone, PASSWORD))
@@ -143,6 +143,9 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(emailConflict).isNotNull();
         assertThat(emailConflict.getCode()).isEqualTo(Problem.CodeEnum.EMAIL_TAKEN);
+
+        jdbc.sql("UPDATE users SET phone_verified_at = :now WHERE email = :email")
+                .param("now", java.time.OffsetDateTime.now(clock)).param("email", email).update();
 
         Problem phoneConflict = client.post().uri(REGISTER)
                 .body(new RegisterRequest("Third User", "other." + UUID.randomUUID() + "@vingo.local", phone, PASSWORD))
@@ -221,6 +224,7 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(tokens.getUser().getEmail()).isEqualTo(email);
         assertThat(tokens.getUser().getStatus()).isEqualTo(User.StatusEnum.ACTIVE);
         assertThat(tokens.getUser().getRole()).isEqualTo(User.RoleEnum.BUYER);
+        assertThat(tokens.getUser().getPhoneVerified()).isFalse();
 
         // Dùng lại phiên OTP đã xác thực phải bị từ chối
         Problem reused = client.post().uri(VERIFY_OTP)

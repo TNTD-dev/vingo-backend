@@ -553,9 +553,10 @@ public final class CatalogFixtures {
 
     private UUID insertBuyer() {
         return jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status)
-                        VALUES (:email, 'Người mua test', 'x', 'BUYER', 'ACTIVE') RETURNING id
+                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
+                        VALUES (:email, 'Người mua test', 'x', 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
                         """)
+                .param("phone", CatalogFixture.uniquePhone()).param("now", utc(clock.instant()))
                 .param("email", UUID.randomUUID() + "@test.vingo").query(UUID.class).single();
     }
 

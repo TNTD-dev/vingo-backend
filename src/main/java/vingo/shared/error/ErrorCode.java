@@ -26,6 +26,7 @@ public enum ErrorCode {
     ORDER_STATE_INVALID(HttpStatus.CONFLICT, "Trạng thái đơn không cho phép thao tác này"),
     HOLD_EXPIRED(HttpStatus.CONFLICT, "Đơn đã quá hạn giữ ghế"),
     PROFILE_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "Chưa có hồ sơ người mua"),
+    PHONE_VERIFICATION_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "Chưa xác minh số điện thoại để giữ ghế"),
     MAX_TICKETS_EXCEEDED(HttpStatus.UNPROCESSABLE_CONTENT, "Vượt số vé tối đa mỗi đơn"),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "Trùng Idempotency-Key nhưng khác nội dung"),
     TICKET_NOT_VALID(HttpStatus.CONFLICT, "Vé không còn hiệu lực"),

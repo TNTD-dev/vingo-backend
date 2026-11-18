@@ -34,6 +34,7 @@ import vingo.api.model.ListMyOrders200Response;
 import vingo.api.model.Order;
 import vingo.api.model.OrderStatus;
 import vingo.api.model.ResolveReviewRequest.ActionEnum;
+import vingo.auth.AuthService;
 import vingo.booking.internal.BookingRepository;
 import vingo.booking.internal.BookingRepository.HoldItem;
 import vingo.booking.internal.BookingRepository.OrderPosition;
@@ -49,6 +50,7 @@ import vingo.shared.idempotency.IdempotencyService;
 import vingo.shared.logging.LogKeys;
 import vingo.shared.ratelimit.RateLimitedException;
 import vingo.shared.security.CurrentUser;
+import vingo.shared.security.Role;
 
 /** Xử lý giữ chỗ và chuyển trạng thái đơn trong transaction nghiệp vụ. */
 @Service
@@ -61,6 +63,7 @@ public class BookingService {
     private final BookingRepository repository;
     private final OrderReader orders;
     private final CurrentUser currentUser;
+    private final AuthService auth;
     private final RealtimeService realtime;
     private final IdempotencyService idempotency;
     private final SearchService search;
@@ -72,7 +75,7 @@ public class BookingService {
     private final Duration reholdWindow;
     private final Duration reholdCooldown;
 
-    public BookingService(BookingRepository repository, OrderReader orders, CurrentUser currentUser,
+    public BookingService(BookingRepository repository, OrderReader orders, CurrentUser currentUser, AuthService auth,
                           RealtimeService realtime, IdempotencyService idempotency,
                           SearchService search, PlatformTransactionManager transactionManager,
                           ApplicationEventPublisher events, Clock clock,
@@ -83,6 +86,7 @@ public class BookingService {
         this.repository = repository;
         this.orders = orders;
         this.currentUser = currentUser;
+        this.auth = auth;
         this.realtime = realtime;
         this.idempotency = idempotency;
         this.search = search;
@@ -400,6 +404,7 @@ public class BookingService {
      * @throws SeatTakenException với {@code SEAT_TAKEN} nếu không giữ được đủ ghế
      * @throws DomainException với {@code UNAUTHORIZED} nếu chưa đăng nhập;
      *         {@code VALIDATION_ERROR} nếu yêu cầu hoặc ghế/khu không hợp lệ;
+     *         {@code PHONE_VERIFICATION_REQUIRED} nếu buyer chưa xác minh số điện thoại;
      *         {@code NOT_FOUND} nếu suất không tồn tại hoặc DRAFT;
      *         {@code SHOWTIME_NOT_ON_SALE} nếu suất chưa/không còn mở bán hoặc khu chưa có giá;
      *         {@code MAX_TICKETS_EXCEEDED} nếu vượt số vé tối đa, kể cả ghế đôi được thêm;
@@ -408,7 +413,11 @@ public class BookingService {
      *         {@code IDEMPOTENCY_CONFLICT} nếu key còn hiệu lực có body khác hoặc thiếu kết quả đã lưu
      */
     public Order holdSeats(UUID showtimeId, UUID idempotencyKey, HoldRequest request) {
-        UUID userId = currentUser.require().id();
+        var user = currentUser.require();
+        UUID userId = user.id();
+        if (user.role() != Role.ADMIN && !auth.isPhoneVerified(userId)) {
+            throw new DomainException(ErrorCode.PHONE_VERIFICATION_REQUIRED, "Chưa xác minh số điện thoại để giữ ghế");
+        }
         // Gắn suất vào endpoint để cùng key ở suất khác có phạm vi độc lập.
         String endpoint = "POST /showtimes/{id}/holds:" + showtimeId;
         try {

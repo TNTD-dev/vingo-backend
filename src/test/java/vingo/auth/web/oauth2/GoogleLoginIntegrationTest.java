@@ -127,6 +127,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .expectBody()
                 .jsonPath("$.user.id").isEqualTo(userId.toString())
                 .jsonPath("$.user.avatar_url").isEqualTo(AVATAR)
+                .jsonPath("$.user.phone_verified").isEqualTo(false)
                 .jsonPath("$.expires_in").isEqualTo(900)
                 .jsonPath("$.refresh_token").doesNotExist()
                 .returnResult();

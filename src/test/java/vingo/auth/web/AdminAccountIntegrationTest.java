@@ -157,9 +157,11 @@ class AdminAccountIntegrationTest extends IntegrationTest {
 
     private UUID user(String name) {
         return jdbc.sql("""
-                INSERT INTO users (email, full_name, password_hash, role, status)
-                VALUES (:email, :name, :hash, 'BUYER', 'ACTIVE') RETURNING id
+                INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
+                VALUES (:email, :name, :hash, 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
                 """).param("email", name + UUID.randomUUID() + "@accounts.test").param("name", name)
+                .param("phone", vingo.support.CatalogFixture.uniquePhone())
+                .param("now", java.time.OffsetDateTime.now(clock))
                 .param("hash", passwords.encode("Password#2026")).query(UUID.class).single();
     }
 
