@@ -57,14 +57,14 @@ sequenceDiagram
 
 ## 4. Giới hạn gửi SMS (SMS tốn tiền)
 
-Đếm trong PostgreSQL (bảng `phone_otp_send`), không dùng Redis, vì Redis chỉ chạy kiểu fail-open. Riêng giới hạn theo IP dùng Redis.
+Cả bốn giới hạn đều đếm trong PostgreSQL (bảng `phone_otp_send`), không dùng Redis, vì Redis chạy kiểu fail-open (Redis chết thì bỏ qua giới hạn) mà SMS tốn tiền thật. IP được lưu dưới dạng bản băm (`client_key`), không lưu IP thô.
 
 | Giới hạn | Mặc định | Biến cấu hình |
 |---|---|---|
 | Giữa hai lần gửi của một user | 60 giây | `AUTH_PHONE_OTP_RESEND_COOLDOWN` |
 | Mỗi user | 5 tin / 24 giờ | `AUTH_PHONE_OTP_USER_MAX` |
 | Mỗi số điện thoại (mọi user) | 5 tin / 24 giờ | `AUTH_PHONE_OTP_PHONE_MAX` |
-| Mỗi IP (Redis) | 20 tin / 24 giờ | `AUTH_PHONE_OTP_IP_MAX` |
+| Mỗi IP | 20 tin / 24 giờ | `AUTH_PHONE_OTP_IP_MAX` |
 | Cửa sổ đếm | 24 giờ | `AUTH_PHONE_OTP_WINDOW` |
 
 - Lần dò số đã bị người khác xác minh (`PHONE_TAKEN`) **cũng tính lượt** và cooldown, để không dò số vô hạn.
@@ -78,7 +78,7 @@ Migration `V20261118_1000__auth_phone_verification.sql`:
 - `users.phone_verified_at` + ràng buộc: có xác minh thì phải có `phone`.
 - `users_phone_uk` (unique mọi số) được thay bằng `users_verified_phone_uk` (unique **chỉ số đã xác minh**).
 - `otp_session`: mục đích mới `PHONE`, cột `phone` (số đang xác minh). Chỉ có một phiên `PHONE` đang mở cho mỗi user.
-- `phone_otp_send(id, user_id, phone, sent_at)` để đếm giới hạn và làm nhật ký chi phí. Bảng chưa có job dọn dẹp; mỗi user tối đa 5 dòng mỗi ngày.
+- `phone_otp_send(id, user_id, phone, client_key, sent_at)` để đếm giới hạn và làm nhật ký chi phí. `client_key` là UUID băm từ IP. Bảng chưa có job dọn dẹp; mỗi user tối đa 5 dòng mỗi ngày.
 
 ## 6. Cấu hình
 
@@ -142,11 +142,11 @@ Dùng database riêng `vingo_phone` để migration mới không ảnh hưởng 
    | C | `POST /me/phone/verify` với mã `000000` | 400 `OTP_INVALID` |
    | D | `POST /me/phone/verify` với mã đúng | 200, `phone_verified:true`, `phone:"+84912345678"` |
    | E | Giữ ghế lại | 404 `NOT_FOUND` (đã qua cổng; 404 vì suất không có thật) |
-   | F1 | Xin OTP cho `0900000003` (số buyer2 đã xác minh) | 409 `PHONE_TAKEN` |
-   | F2 | Chạy lại F1 ngay | 429 kèm `Retry-After` |
+   | F1 | Chờ ít nhất 60 giây sau lần gửi OTP ở ca B (cooldown), rồi xin OTP cho `0900000003` (số buyer2 đã xác minh). Làm sớm hơn sẽ ra 429 thay vì 409 | 409 `PHONE_TAKEN` |
+   | F2 | Chạy lại F1 ngay sau F1 (lần dò F1 đã tính cooldown mới) | 429 kèm `Retry-After` |
    | F3 | Đăng nhập bằng `0912345678` | 200 |
 
-7. Thử gọi SpeedSMS thật (tốn tiền, chỉ vài tin bằng số của bạn): đổi `.env.local` thành
+7. Thử gọi SpeedSMS thật (tốn tiền, chỉ vài tin bằng số của bạn). Nhà cung cấp SMS được chọn một lần lúc app khởi động, nên **dừng app (Ctrl+C)**, sửa `.env.local` thành bên dưới, rồi **chạy lại app** (bước 3) trước khi gửi:
    ```
    DB_URL=jdbc:postgresql://localhost:5432/vingo_phone
    SMS_PROVIDER=speedsms
@@ -191,5 +191,5 @@ Server đọc biến từ `deploy/.env` (không có trong git, mẫu ở `deploy
 
 - Chưa gọi SpeedSMS thật trong test tự động (test dùng server giả). SpeedSMS không có sandbox.
 - Chưa có job dọn bảng `phone_otp_send`.
-- Giới hạn theo IP dùng Redis; Redis chết thì bỏ qua giới hạn IP, các giới hạn theo user và theo số vẫn chạy (đếm trong PostgreSQL).
+- Giới hạn theo IP dựa vào địa chỉ client mà Spring thấy (`getRemoteAddr`). Sau Caddy, server bật `forward-headers-strategy: native` nên đó là IP thật của client; chạy không qua proxy thì mọi người cùng một IP của proxy sẽ chung hạn mức.
 - Người dùng có thể hỏi `PHONE_TAKEN` để biết một số đã có tài khoản Vingo hay chưa. Mỗi lần hỏi bị tính lượt và cooldown nên không dò hàng loạt được.

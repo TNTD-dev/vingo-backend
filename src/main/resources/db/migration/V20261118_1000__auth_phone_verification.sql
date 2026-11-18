@@ -16,10 +16,12 @@ ALTER TABLE otp_session
 
 -- Lưu cả lần gửi nhà cung cấp báo lỗi để giới hạn chi phí không phụ thuộc Redis.
 CREATE TABLE phone_otp_send (
-    id      uuid        PRIMARY KEY DEFAULT uuidv7(),
-    user_id uuid        NOT NULL REFERENCES users (id),
-    phone   text        NOT NULL,
-    sent_at timestamptz NOT NULL
+    id         uuid        PRIMARY KEY DEFAULT uuidv7(),
+    user_id    uuid        NOT NULL REFERENCES users (id),
+    client_key uuid        NOT NULL,
+    phone      text        NOT NULL,
+    sent_at    timestamptz NOT NULL
 );
 CREATE INDEX phone_otp_send_user_sent_idx ON phone_otp_send (user_id, sent_at DESC);
+CREATE INDEX phone_otp_send_client_sent_idx ON phone_otp_send (client_key, sent_at DESC);
 CREATE INDEX phone_otp_send_phone_sent_idx ON phone_otp_send (phone, sent_at DESC);

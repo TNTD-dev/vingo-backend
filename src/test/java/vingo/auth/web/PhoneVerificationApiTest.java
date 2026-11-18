@@ -7,6 +7,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -51,6 +53,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
     @Autowired private PasswordEncoder passwords;
     @Autowired private OtpProperties otpProperties;
 
+    private final List<UUID> buyers = new ArrayList<>();
     private UUID buyer;
     private String phone;
 
@@ -65,9 +68,9 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @AfterEach
-    void restoreClockAndReleaseFixedNormalizationTestNumber() {
-        // Các biến thể dùng cùng số mẫu; không để nhật ký của ca trước ăn hạn mức ca sau.
-        jdbc.sql("DELETE FROM phone_otp_send WHERE user_id = :id").param("id", buyer).update();
+    void restoreClockAndReleasePhoneSendLimits() {
+        // Các user phụ cũng dùng chung IP; dọn đủ lượt của ca này để không ăn hạn mức ca sau.
+        jdbc.sql("DELETE FROM phone_otp_send WHERE user_id IN (:ids)").param("ids", buyers).update();
         sms.reset();
         clock.reset();
     }
@@ -265,11 +268,27 @@ class PhoneVerificationApiTest extends IntegrationTest {
 
     @Test
     void requestPhoneOtp_limitsTwentyPerIpAcrossDifferentUsersAndPhones() {
+        clock.set(Instant.parse("2026-11-18T23:59:30Z"));
         for (int i = 0; i < 20; i++) requestOk(unverifiedBuyer(), uniquePhone());
-        error(request(buyer, phone).expectHeader().valueMatches(HttpHeaders.RETRY_AFTER, "[1-9][0-9]*"),
+        error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "86400"),
                 429, "RATE_LIMITED");
         assertThat(sms.sent()).hasSize(20);
         assertThat(sendCount(buyer)).isZero();
+
+        // Đầu vào sai vẫn trả 400, kể cả khi IP đã hết hạn mức.
+        error(request(buyer, "09123"), 400, "VALIDATION_ERROR");
+        assertThat(sendCount(buyer)).isZero();
+
+        clock.advance(Duration.ofMinutes(1));
+        error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "86340"),
+                429, "RATE_LIMITED");
+        clock.advance(Duration.ofHours(24).minusSeconds(61));
+        error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "1"),
+                429, "RATE_LIMITED");
+        clock.advance(Duration.ofSeconds(1));
+        requestOk(buyer, phone);
+        assertThat(sms.sent()).hasSize(21);
+        assertThat(sendCount(buyer)).isEqualTo(1);
     }
 
     @Test
@@ -527,6 +546,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
 
     private UUID unverifiedBuyer() {
         UUID id = catalog.buyer();
+        buyers.add(id);
         jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", id).update();
         return id;
     }

@@ -115,7 +115,9 @@ class SpeedSmsSender implements SmsSender {
 
     private Map<?, ?> parse(String responseBody) {
         try {
-            return json.readValue(responseBody, Map.class);
+            // Thân "null" hợp lệ về JSON nhưng readValue trả null; coi như phản hồi không hiểu được.
+            Map<?, ?> parsed = json.readValue(responseBody, Map.class);
+            return parsed == null ? Map.of() : parsed;
         } catch (RuntimeException ex) {
             return Map.of();
         }

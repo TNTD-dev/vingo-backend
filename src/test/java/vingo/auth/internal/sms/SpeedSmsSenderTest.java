@@ -166,6 +166,22 @@ class SpeedSmsSenderTest {
     }
 
     @Test
+    void sendOtp_throwsDeliveryExceptionNotNullPointerWhenResponseBodyIsJsonNull() {
+        responseBody = "null";
+
+        assertThatThrownBy(() -> sender("4").sendOtp(UUID.randomUUID(), PHONE, CODE, 5))
+                .isInstanceOf(SmsDeliveryException.class);
+    }
+
+    @Test
+    void sendOtp_throwsDeliveryExceptionWhenResponseBodyIsEmpty() {
+        responseBody = "";
+
+        assertThatThrownBy(() -> sender("4").sendOtp(UUID.randomUUID(), PHONE, CODE, 5))
+                .isInstanceOf(SmsDeliveryException.class);
+    }
+
+    @Test
     void sendOtp_transportFailureCarriesNeitherCauseNorSecrets() {
         var unreachable = SpeedSmsSender.forLoopbackTest(
                 new SmsProperties.Speedsms("http://127.0.0.1:1/index.php", TOKEN, "4", ""));

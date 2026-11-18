@@ -469,6 +469,15 @@ public class AuthRepository {
                 .query(OffsetDateTime.class).list();
     }
 
+    /** Đọc tối đa ngưỡng tin gần nhất của IP đã băm trên mọi user và số đích. */
+    public List<OffsetDateTime> recentPhoneSendsByClient(UUID clientKey, OffsetDateTime since, int limit) {
+        return jdbc.sql("""
+                SELECT sent_at FROM phone_otp_send WHERE client_key = :clientKey AND sent_at > :since
+                ORDER BY sent_at DESC LIMIT :limit
+                """).param("clientKey", clientKey).param("since", since).param("limit", limit)
+                .query(OffsetDateTime.class).list();
+    }
+
     /** Đọc tối đa ngưỡng tin gần nhất của số đích trên mọi user. */
     public List<OffsetDateTime> recentPhoneSendsByPhone(String phone, OffsetDateTime since, int limit) {
         return jdbc.sql("""
@@ -478,7 +487,7 @@ public class AuthRepository {
                 .query(OffsetDateTime.class).list();
     }
 
-    /** Kiểm tra số đã xác minh của người khác sau khi ghi nhận lượt yêu cầu. */
+    /** Kiểm tra số đã xác minh của người khác. */
     public boolean isPhoneVerifiedByOther(UUID userId, String phone) {
         return jdbc.sql("""
                 SELECT EXISTS (SELECT 1 FROM users
@@ -487,9 +496,11 @@ public class AuthRepository {
     }
 
     /** Ghi lượt yêu cầu trong transaction, kể cả lượt bị từ chối do số đã xác minh. */
-    public void recordPhoneOtpSend(UUID userId, String phone, OffsetDateTime now) {
-        jdbc.sql("INSERT INTO phone_otp_send (user_id, phone, sent_at) VALUES (:user, :phone, :now)")
-                .param("user", userId).param("phone", phone).param("now", now).update();
+    public void recordPhoneOtpSend(UUID userId, UUID clientKey, String phone, OffsetDateTime now) {
+        jdbc.sql("""
+                INSERT INTO phone_otp_send (user_id, client_key, phone, sent_at)
+                VALUES (:user, :clientKey, :phone, :now)
+                """).param("user", userId).param("clientKey", clientKey).param("phone", phone).param("now", now).update();
     }
 
     /** Đổi số đích và mã, đặt lại attempts và hạn dùng của phiên PHONE đang mở. */

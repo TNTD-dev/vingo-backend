@@ -339,7 +339,7 @@ public class AuthService {
         return String.format(Locale.ROOT, "%06d", OTP_RANDOM.nextInt(1_000_000));
     }
 
-    /** Băm IP client thành UUID ổn định để không lưu IP thô trong khoá Redis. */
+    /** Băm IP client thành UUID ổn định để không lưu IP thô. */
     private static UUID clientKey(String remoteAddress) {
         String address = remoteAddress == null ? "" : remoteAddress.strip();
         return UUID.nameUUIDFromBytes(address.getBytes(StandardCharsets.UTF_8));
@@ -514,11 +514,10 @@ public class AuthService {
     /** Yêu cầu SMS OTP xác minh số điện thoại cho user hiện tại. */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OtpSessionInfo requestPhoneOtp(UUID userId, String phone, String clientIp) {
-        rateLimiter.check(clientKey(clientIp), "auth-phone-otp",
-                phoneOtpProperties.ipMaxPerWindow(), phoneOtpProperties.window());
         String e164 = PhoneNumbers.normalize(phone)
                 .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR, "Số điện thoại Việt Nam không hợp lệ"));
-        var outcome = tx.execute(status -> preparePhoneOtp(userId, e164));
+        UUID clientKey = clientKey(clientIp);
+        var outcome = tx.execute(status -> preparePhoneOtp(userId, clientKey, e164));
         // Ném sau commit để lượt dò số đã xác minh vẫn tính vào cooldown và hạn mức.
         if (outcome instanceof PhoneOtpOutcome.Failure(var code, var message)) {
             throw new DomainException(code, message);
@@ -543,8 +542,8 @@ public class AuthService {
         return prepared.session();
     }
 
-    private PhoneOtpOutcome preparePhoneOtp(UUID userId, String phone) {
-        // Khoá user bảo vệ cả lần gửi đầu chưa có phiên; khoá số bảo vệ hạn mức qua nhiều user.
+    private PhoneOtpOutcome preparePhoneOtp(UUID userId, UUID clientKey, String phone) {
+        // Khoá theo thứ tự user → IP → số để tuần tự hoá đếm/ghi và tránh deadlock.
         accounts.lockPhoneOtpScope("user:" + userId);
         var open = accounts.findOpenPhoneOtpForUpdate(userId);
         var account = accounts.findEditableAccount(userId)
@@ -552,6 +551,7 @@ public class AuthService {
         if (!"ACTIVE".equals(account.user().status())) {
             throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động");
         }
+        accounts.lockPhoneOtpScope("ip:" + clientKey);
         accounts.lockPhoneOtpScope("phone:" + phone);
         OffsetDateTime now = OffsetDateTime.now(clock);
         OffsetDateTime since = now.minus(phoneOtpProperties.window());
@@ -560,10 +560,13 @@ public class AuthService {
             requireSendTime(now, recentSends.getFirst().plus(phoneOtpProperties.resendCooldown()));
         }
         enforcePhoneSendLimit(recentSends, phoneOtpProperties.userMaxPerWindow(), now);
+        enforcePhoneSendLimit(accounts.recentPhoneSendsByClient(clientKey, since, phoneOtpProperties.ipMaxPerWindow()),
+                phoneOtpProperties.ipMaxPerWindow(), now);
         enforcePhoneSendLimit(accounts.recentPhoneSendsByPhone(phone, since, phoneOtpProperties.phoneMaxPerWindow()),
                 phoneOtpProperties.phoneMaxPerWindow(), now);
-        accounts.recordPhoneOtpSend(userId, phone, now);
-        if (accounts.isPhoneVerifiedByOther(userId, phone)) {
+        boolean phoneTaken = accounts.isPhoneVerifiedByOther(userId, phone);
+        accounts.recordPhoneOtpSend(userId, clientKey, phone, now);
+        if (phoneTaken) {
             return new PhoneOtpOutcome.Failure(ErrorCode.PHONE_TAKEN, "Số điện thoại đã tồn tại");
         }
 

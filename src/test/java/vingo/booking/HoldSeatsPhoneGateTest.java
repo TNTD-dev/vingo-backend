@@ -42,6 +42,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
 
     @AfterEach
     void restoreClock() {
+        jdbc.sql("DELETE FROM phone_otp_send WHERE user_id = :id").param("id", buyer).update();
         sms.reset();
         clock.reset();
     }
