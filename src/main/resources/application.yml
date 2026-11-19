@@ -97,8 +97,8 @@ vingo:
       phone-max-per-window: ${AUTH_PHONE_OTP_PHONE_MAX:5}
       ip-max-per-window: ${AUTH_PHONE_OTP_IP_MAX:20}
       window: ${AUTH_PHONE_OTP_WINDOW:PT24H}
-  # SMS OTP xác minh số điện thoại. provider: speedsms (gọi SpeedSMS, tốn tiền) hoặc log (chỉ profile local/test,
-  # không gọi ra ngoài, in mã ra log). SpeedSMS không có chế độ thử: gọi thật là gửi thật.
+  # SMS OTP xác minh số điện thoại. provider: speedsms (gọi SpeedSMS, tốn tiền), log (chỉ profile local/test,
+  # không gọi ra ngoài, in mã ra log) hoặc demo (không gửi SMS, trả mã trong header X-Demo-Otp; chỉ để demo, không dữ liệu thật). SpeedSMS không có chế độ thử: gọi thật là gửi thật.
   sms:
     provider: ${SMS_PROVIDER:speedsms}
     # true: vẫn gọi SpeedSMS nhưng in thêm mã OTP ra log (chỉ profile local/test, nơi khác app không khởi động).

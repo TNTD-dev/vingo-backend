@@ -158,6 +158,17 @@ class SpeedSmsSenderTest {
     }
 
     @Test
+    void sendOtp_httpErrorIncludesBodyWithAccessTokenRedacted() {
+        status = 500;
+        responseBody = "Provider error: " + TOKEN;
+
+        assertThatThrownBy(() -> sender("4").sendOtp(UUID.randomUUID(), PHONE, CODE, 5))
+                .isInstanceOf(SmsDeliveryException.class)
+                .hasMessageContaining("HTTP 500").hasMessageContaining("***")
+                .hasMessageNotContaining(TOKEN).hasNoCause();
+    }
+
+    @Test
     void sendOtp_throwsWhenResponseBodyIsNotJson() {
         responseBody = "<html>oops</html>";
 

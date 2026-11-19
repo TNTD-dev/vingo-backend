@@ -532,7 +532,8 @@ public class AuthService {
                     .addKeyValue("user_id", userId)
                     .addKeyValue("otp_session_id", prepared.session().otpSessionId())
                     .addKeyValue("error", ex.getClass().getSimpleName())
-                    .log("Phone verification SMS delivery failed");
+                    .addKeyValue("reason", ex.getMessage())
+                    .log("Phone verification SMS delivery failed: {}", ex.getMessage());
             throw new DomainException(ErrorCode.SERVICE_UNAVAILABLE, "Dịch vụ SMS tạm thời không khả dụng");
         }
         log.atInfo()

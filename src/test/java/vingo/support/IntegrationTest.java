@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -42,8 +43,10 @@ public abstract class IntegrationTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class SmsConfig {
+        // Chế độ demo dùng DemoSmsSender thật của ứng dụng.
         @Bean
         @Primary
+        @ConditionalOnProperty(name = "vingo.sms.provider", havingValue = "speedsms", matchIfMissing = true)
         RecordingSmsSender recordingSmsSender() {
             return new RecordingSmsSender();
         }

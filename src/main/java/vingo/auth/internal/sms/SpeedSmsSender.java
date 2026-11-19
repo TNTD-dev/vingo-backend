@@ -99,11 +99,13 @@ class SpeedSmsSender implements SmsSender {
             throw new SmsDeliveryException("Không gọi được nhà cung cấp SMS (" + ex.getClass().getSimpleName() + ")");
         }
         if (response.statusCode() / 100 != 2) {
-            throw new SmsDeliveryException("Nhà cung cấp SMS trả HTTP " + response.statusCode());
+            throw new SmsDeliveryException("Nhà cung cấp SMS trả HTTP " + response.statusCode()
+                    + ", body=" + safeBody(response.body()));
         }
         Map<?, ?> result = parse(response.body());
         if (!"success".equals(result.get("status")) || !"00".equals(String.valueOf(result.get("code")))) {
-            throw new SmsDeliveryException("Nhà cung cấp SMS từ chối, code=" + result.get("code"));
+            throw new SmsDeliveryException("Nhà cung cấp SMS từ chối, code=" + result.get("code")
+                    + ", body=" + safeBody(response.body()));
         }
     }
 
@@ -111,6 +113,14 @@ class SpeedSmsSender implements SmsSender {
     static String content(String code, int validMinutes) {
         return "Vingo: ma xac minh cua ban la " + code + ". Co hieu luc " + validMinutes
                 + " phut. Khong chia se ma nay cho bat ky ai.";
+    }
+
+    private String safeBody(String body) {
+        body = body == null ? "" : body;
+        if (settings.accessToken() != null && !settings.accessToken().isBlank()) {
+            body = body.replace(settings.accessToken(), "***");
+        }
+        return body.length() > 200 ? body.substring(0, 200) : body;
     }
 
     private Map<?, ?> parse(String responseBody) {
@@ -129,7 +139,9 @@ class SpeedSmsSender implements SmsSender {
                 .append("&to=").append(phoneE164.substring(1))
                 .append("&content=").append(enc(content(code, validMinutes)))
                 .append("&type=").append(settings.smsType());
-        if (TYPE_OWN_BRANDNAME.equals(settings.smsType())) {
+        // Tài liệu SpeedSMS truyền sender ở mọi loại (loại 4: Verify hoặc Notify); loại 3 bắt buộc.
+        if (TYPE_OWN_BRANDNAME.equals(settings.smsType())
+                || (settings.sender() != null && !settings.sender().isBlank())) {
             query.append("&sender=").append(enc(settings.sender()));
         }
         return URI.create(base() + "/sms/send" + query);

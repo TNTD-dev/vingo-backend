@@ -4,8 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
- * Cấu hình gửi SMS OTP. {@code provider} là {@code speedsms} (gọi nhà cung cấp, mặc định) hoặc {@code log}
- * (chỉ cho profile local/test, không gọi ra ngoài). Token lấy từ biến môi trường, không có giá trị mặc định chứa secret.
+ * Cấu hình gửi SMS OTP. {@code provider} là {@code speedsms} (gọi nhà cung cấp, mặc định), {@code log}
+ * (chỉ cho profile local/test, không gọi ra ngoài) hoặc {@code demo} (không gửi SMS, trả mã qua header cho môi trường demo). Token lấy từ biến môi trường, không có giá trị mặc định chứa secret.
  * {@code logCode} in thêm mã OTP ra log khi vẫn gọi nhà cung cấp; chỉ chạy được ở profile local/test.
  */
 @ConfigurationProperties("vingo.sms")

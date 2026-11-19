@@ -17,6 +17,7 @@ import vingo.api.model.UpdateMeRequest;
 import vingo.api.model.User;
 import vingo.auth.AuthService;
 import vingo.auth.AuthUser;
+import vingo.auth.internal.sms.DemoSmsSender;
 import vingo.shared.security.CurrentUser;
 
 @RestController
@@ -42,7 +43,10 @@ class MeController implements MeApi {
     @Override
     public ResponseEntity<OtpSession> requestPhoneOtp(PhoneOtpRequest body) {
         var session = auth.requestPhoneOtp(currentUser.require().id(), body.getPhone(), request.getRemoteAddr());
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new OtpSession()
+        var response = ResponseEntity.ok().cacheControl(CacheControl.noStore());
+        // Chỉ có khi chạy SMS_PROVIDER=demo: trả mã để web demo hiện lên màn hình.
+        DemoSmsSender.takeCode().ifPresent(code -> response.header(DemoSmsSender.HEADER, code));
+        return response.body(new OtpSession()
                 .otpSessionId(session.otpSessionId()).expiresAt(session.expiresAt())
                 .channel(OtpSession.ChannelEnum.fromValue(session.channel())));
     }
