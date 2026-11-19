@@ -368,6 +368,13 @@ paths:
       responses:
         '200':
           description: Đã tạo hoặc làm mới phiên PHONE và gửi SMS OTP
+          headers:
+            X-Demo-Otp:
+              required: false
+              description: |
+                Chỉ có khi backend chạy SMS_PROVIDER=demo (môi trường demo/thực tập, không dữ liệu thật);
+                chế độ thường không bao giờ trả header này.
+              schema: { type: string, pattern: '^[0-9]{6}$' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OtpSession' }

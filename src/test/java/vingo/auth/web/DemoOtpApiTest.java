@@ -7,38 +7,27 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
 
 import vingo.api.model.OtpSession;
 import vingo.api.model.PhoneOtpRequest;
 import vingo.api.model.PhoneVerifyRequest;
 import vingo.auth.internal.sms.DemoSmsSender;
+import vingo.auth.internal.sms.SmsSender;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
 
 /** Chế độ SMS_PROVIDER=demo: không gửi SMS, mã OTP nằm trong header phản hồi và dùng được để xác minh. */
-// Thay thế bean recordingSmsSender của base bằng bản demo (cùng tên, cùng @Primary).
-@TestPropertySource(properties = "spring.main.allow-bean-definition-overriding=true")
-@Import(DemoOtpApiTest.DemoSmsConfig.class)
+@TestPropertySource(properties = "vingo.sms.provider=demo")
 class DemoOtpApiTest extends IntegrationTest {
 
     private static final String REQUEST = "/api/v1/me/phone/otp";
     private static final String VERIFY = "/api/v1/me/phone/verify";
 
-    private UUID buyer;
+    @Autowired private SmsSender sms;
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class DemoSmsConfig {
-        @Bean("recordingSmsSender")
-        @Primary
-        DemoSmsSender demoSmsSender() {
-            return new DemoSmsSender();
-        }
-    }
+    private UUID buyer;
 
     @AfterEach
     void releaseSendLimits() {
@@ -49,6 +38,7 @@ class DemoOtpApiTest extends IntegrationTest {
 
     @Test
     void requestPhoneOtp_returnsCodeInHeader_andTheCodeVerifiesThePhone() {
+        assertThat(sms).isInstanceOf(DemoSmsSender.class);
         buyer = catalog.buyer();
         jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
         String phone = "09" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
