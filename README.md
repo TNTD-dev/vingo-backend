@@ -334,6 +334,7 @@ Lưu ý: trang return của VNPay **chỉ để hiển thị**. Trạng thái đ
 | `SPEEDSMS_ACCESS_TOKEN` | (token SpeedSMS) | SMS OTP xác minh SĐT; trống thì xin OTP trả 503. Xem [xác minh SĐT](docs/phone-verification.md) |
 | `SPEEDSMS_SMS_TYPE` | `4` | `2` đầu số ngẫu nhiên, `3` brandname riêng (thêm `SPEEDSMS_SENDER`), `4` brandname mặc định |
 | `SMS_PROVIDER`, `SMS_LOG_CODE` | `log` / `true` | Chỉ cho profile `local`: in mã OTP ra log, đặt ở server thì app không khởi động |
+| `SMS_PROVIDER=demo` | (không đặt) | Demo/thực tập: không gửi SMS, trả mã OTP trong header `X-Demo-Otp`. Không đặt ở production |
 | `SENTRY_DSN` | | Báo lỗi |
 
 Không commit `.env*` (trừ `.env.example`). Secret production lưu trong GitHub Secrets.

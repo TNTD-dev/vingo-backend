@@ -87,10 +87,10 @@ Khai báo trong `application.yml` mục `vingo.sms`. Đặt giá trị thật tr
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `SPEEDSMS_ACCESS_TOKEN` | (trống) | Token SpeedSMS: connect.speedsms.vn → Cài đặt → Hồ sơ. Trống thì xin OTP trả 503. **Bí mật, không commit, không dán vào chat.** |
-| `SPEEDSMS_SMS_TYPE` | `4` | `2` đầu số ngẫu nhiên, `3` brandname riêng (cần `SPEEDSMS_SENDER`), `4` brandname mặc định Verify/Notify. |
+| `SPEEDSMS_SMS_TYPE` | `4` | `2` đầu số ngẫu nhiên, `3` brandname riêng (cần `SPEEDSMS_SENDER`), `4` brandname mặc định Verify/Notify. Nhà mạng đã ngừng brandname dùng chung: tài khoản chưa đăng ký brandname riêng gửi loại 2/4 sẽ nhận `sender not found`. |
 | `SPEEDSMS_SENDER` | (trống) | Brandname, chỉ cần khi loại `3`. |
 | `SPEEDSMS_BASE_URL` | `https://api.speedsms.vn/index.php` | Chỉ nhận HTTPS. |
-| `SMS_PROVIDER` | `speedsms` | `speedsms` hoặc `log`. |
+| `SMS_PROVIDER` | `speedsms` | `speedsms`, `log` (chỉ local/test) hoặc `demo` (xem dưới). |
 | `SMS_LOG_CODE` | `false` | `true` thì vẫn gọi SpeedSMS nhưng in mã OTP ra log. |
 
 **Chế độ chỉ dùng trên máy dev (profile `local`):**
@@ -98,6 +98,11 @@ Khai báo trong `application.yml` mục `vingo.sms`. Đặt giá trị thật tr
 - `SMS_PROVIDER=log`: không gọi SpeedSMS, mã OTP in ra log dòng `DEV ONLY - mã OTP SMS: ...`.
 - `SMS_LOG_CODE=true`: gọi SpeedSMS thật và in thêm mã ra log.
 - Đặt hai biến này ở profile khác (`api`, `worker`) thì **app không khởi động**. Đây là chốt chặn có chủ ý, vì ghi OTP ra log trái quy tắc bảo mật.
+
+**Chế độ demo (`SMS_PROVIDER=demo`), dùng được cả trên staging:** không gọi nhà cung cấp, không gửi SMS. Phản hồi của `POST /me/phone/otp`
+kèm header `X-Demo-Otp: <mã 6 số>` để web (bật `VITE_DEMO_OTP=true`) hiện mã lên màn hình. Mã vẫn được băm, vẫn hết hạn sau 5 phút và vẫn
+bị giới hạn số lần nhập sai như thường; chỉ khác là ai gọi API xin mã cũng đọc được mã. Vì vậy chế độ này chỉ dành cho môi trường
+demo/thực tập không có dữ liệu thật. **Không đặt ở production**: app chỉ in cảnh báo khi khởi động, không tự chặn.
 
 **SpeedSMS không có sandbox**: mỗi lần gọi thật là gửi thật và tính tiền. Muốn thử luồng không tốn tiền thì dùng `SMS_PROVIDER=log`.
 

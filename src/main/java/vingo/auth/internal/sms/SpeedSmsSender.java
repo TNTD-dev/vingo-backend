@@ -103,7 +103,12 @@ class SpeedSmsSender implements SmsSender {
         }
         Map<?, ?> result = parse(response.body());
         if (!"success".equals(result.get("status")) || !"00".equals(String.valueOf(result.get("code")))) {
-            throw new SmsDeliveryException("Nhà cung cấp SMS từ chối, code=" + result.get("code"));
+            String body = response.body() == null ? "" : response.body();
+            if (settings.accessToken() != null && !settings.accessToken().isBlank()) {
+                body = body.replace(settings.accessToken(), "***");
+            }
+            body = body.length() > 200 ? body.substring(0, 200) : body;
+            throw new SmsDeliveryException("Nhà cung cấp SMS từ chối, code=" + result.get("code") + ", body=" + body);
         }
     }
 
@@ -129,7 +134,9 @@ class SpeedSmsSender implements SmsSender {
                 .append("&to=").append(phoneE164.substring(1))
                 .append("&content=").append(enc(content(code, validMinutes)))
                 .append("&type=").append(settings.smsType());
-        if (TYPE_OWN_BRANDNAME.equals(settings.smsType())) {
+        // Tài liệu SpeedSMS truyền sender ở mọi loại (loại 4: Verify hoặc Notify); loại 3 bắt buộc.
+        if (TYPE_OWN_BRANDNAME.equals(settings.smsType())
+                || (settings.sender() != null && !settings.sender().isBlank())) {
             query.append("&sender=").append(enc(settings.sender()));
         }
         return URI.create(base() + "/sms/send" + query);

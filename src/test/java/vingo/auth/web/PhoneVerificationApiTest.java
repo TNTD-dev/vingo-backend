@@ -76,6 +76,11 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @Test
+    void requestPhoneOtp_neverExposesTheCodeInHeaders_whenNotInDemoMode() {
+        request(buyer, phone).expectStatus().isOk().expectHeader().doesNotExist("X-Demo-Otp");
+    }
+
+    @Test
     void requestPhoneOtp_returnsSmsSession_persistsHashAndE164_andSendsOutsideTransaction() {
         String previousPhone = userPhone(buyer);
         OtpSession session = requestOk(buyer, phone);
