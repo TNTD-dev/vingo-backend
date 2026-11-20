@@ -50,7 +50,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         String buyerPhone = CatalogFixture.uniquePhone();
         UUID buyerId = insertUser(buyerEmail.toLowerCase(), buyerPhone, "Buyer User",
                 passwordEncoder.encode(PASSWORD), Role.BUYER, "ACTIVE", null, null);
-        jdbc.sql("UPDATE users SET phone_verified_at = :now WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE id = :id")
                 .param("now", OffsetDateTime.now(clock)).param("id", buyerId).update();
 
         var emailLogin = client.post().uri(LOGIN)
@@ -216,7 +216,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .jsonPath("$.code").isEqualTo("ACCOUNT_LOCKED");
 
         // Simulate expired temporary lock -> correct password unlocks account and issues tokens
-        jdbc.sql("UPDATE users SET locked_until = :past WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET locked_until = :past WHERE id = :id")
                 .param("past", OffsetDateTime.now(clock).minusMinutes(1))
                 .param("id", userId)
                 .update();
@@ -229,13 +229,14 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .returnResult()
                 .getResponseBody();
         assertThat(unlockedTokens).isNotNull();
-        assertThat(unlockedTokens.getUser().getStatus()).isEqualTo(User.StatusEnum.ACTIVE);
+        assertThat(unlockedTokens.getUser().getEmailVerified()).isTrue();
 
-        String statusAfter = jdbc.sql("SELECT status FROM users WHERE id = :id")
+        OffsetDateTime lockedUntilAfter = jdbc.sql("SELECT locked_until FROM user_account WHERE id = :id")
                 .param("id", userId)
-                .query(String.class)
-                .single();
-        assertThat(statusAfter).isEqualTo("ACTIVE");
+                .query(OffsetDateTime.class)
+                .optional()
+                .orElse(null);
+        assertThat(lockedUntilAfter).isNull();
     }
 
     @Test
@@ -274,17 +275,11 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         assertThat(unauthorizedCount).isEqualTo(3);
         assertThat(lockedCount).isEqualTo(3);
 
-        int attemptsRecorded = jdbc.sql("SELECT count(*) FROM login_attempt WHERE user_id = :id AND success = false")
+        OffsetDateTime lockedUntil = jdbc.sql("SELECT locked_until FROM user_account WHERE id = :id")
                 .param("id", userId)
-                .query(Integer.class)
+                .query(OffsetDateTime.class)
                 .single();
-        assertThat(attemptsRecorded).isEqualTo(3);
-
-        String status = jdbc.sql("SELECT status FROM users WHERE id = :id")
-                .param("id", userId)
-                .query(String.class)
-                .single();
-        assertThat(status).isEqualTo("LOCKED");
+        assertThat(lockedUntil).isAfter(OffsetDateTime.now(clock));
     }
 
     @Test
@@ -332,9 +327,15 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
 
     private UUID insertUser(String email, String phone, String fullName, String passwordHash,
                             Role role, String status, String googleSub, OffsetDateTime lockedUntil) {
+        OffsetDateTime emailVerifiedAt = "UNVERIFIED".equals(status) ? null : OffsetDateTime.now(clock);
+        OffsetDateTime deletedAt = "DELETED".equals(status) ? OffsetDateTime.now(clock) : null;
+        OffsetDateTime effectiveLockedUntil = lockedUntil != null ? lockedUntil
+                : ("LOCKED".equals(status) ? OffsetDateTime.now(clock).plusMinutes(15) : null);
         return jdbc.sql("""
-                        INSERT INTO users (email, phone, full_name, password_hash, google_sub, role, status, locked_until)
-                        VALUES (:email, :phone, :fullName, :passwordHash, :googleSub, :role, :status, :lockedUntil)
+                        INSERT INTO user_account (email, phone, full_name, password_hash, google_sub, role,
+                                                  email_verified_at, deleted_at, locked_until)
+                        VALUES (:email, :phone, :fullName, :passwordHash, :googleSub, :role::user_role,
+                                :emailVerifiedAt, :deletedAt, :lockedUntil)
                         RETURNING id
                         """)
                 .param("email", email)
@@ -343,8 +344,9 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .param("passwordHash", passwordHash)
                 .param("googleSub", googleSub)
                 .param("role", role.name())
-                .param("status", status)
-                .param("lockedUntil", lockedUntil)
+                .param("emailVerifiedAt", emailVerifiedAt)
+                .param("deletedAt", deletedAt)
+                .param("lockedUntil", effectiveLockedUntil)
                 .query(UUID.class)
                 .single();
     }

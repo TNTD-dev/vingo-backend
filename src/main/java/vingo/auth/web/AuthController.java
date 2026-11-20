@@ -56,7 +56,7 @@ class AuthController implements AuthApi {
         var session = auth.register(body.getFullName(), body.getEmail(), body.getPhone(),
                 body.getPassword(), request.getRemoteAddr());
         var response = new OtpSession()
-                .otpSessionId(session.otpSessionId())
+                .otpSessionId(session.otpId())
                 .expiresAt(session.expiresAt())
                 .channel(OtpSession.ChannelEnum.fromValue(session.channel()));
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -76,11 +76,13 @@ class AuthController implements AuthApi {
                 .body(result);
     }
 
-    /** Gửi lại OTP cho phiên đang chờ xác thực. */
+    /** Gửi lại OTP: mỗi lần gửi là một phiên mới; phiên cũ hết hiệu lực, dùng otp_session_id trong phản hồi. */
     @Override
-    public ResponseEntity<Void> resendOtp(ResendOtpRequest body) {
-        auth.resendOtp(body.getOtpSessionId());
-        return ResponseEntity.accepted().build();
+    public ResponseEntity<OtpSession> resendOtp(ResendOtpRequest body) {
+        var session = auth.resendOtp(body.getOtpSessionId());
+        return ResponseEntity.accepted().body(new OtpSession()
+                .otpSessionId(session.otpId()).expiresAt(session.expiresAt())
+                .channel(OtpSession.ChannelEnum.fromValue(session.channel())));
     }
 
     /** Yêu cầu OTP đặt lại mật khẩu, luôn trả 202 để không lộ email tồn tại. */
@@ -88,7 +90,7 @@ class AuthController implements AuthApi {
     public ResponseEntity<OtpSession> forgotPassword(ForgotPasswordRequest body) {
         var session = auth.forgotPassword(body.getEmail(), request.getRemoteAddr());
         var response = new OtpSession()
-                .otpSessionId(session.otpSessionId())
+                .otpSessionId(session.otpId())
                 .expiresAt(session.expiresAt())
                 .channel(OtpSession.ChannelEnum.fromValue(session.channel()));
         return ResponseEntity.accepted()
@@ -175,7 +177,7 @@ class AuthController implements AuthApi {
                 .phoneVerified(account.phoneVerified())
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name()))
-                .status(User.StatusEnum.fromValue(account.status()));
+                .emailVerified(!"UNVERIFIED".equals(account.status()));
     }
 
     /** Dùng chung ProblemDetail cho các đường dẫn Google khi tính năng tắt. */

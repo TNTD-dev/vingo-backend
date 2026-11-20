@@ -77,13 +77,12 @@ public class VenueService {
 
         var merged = new VenueData(
                 keepIfAbsent(patch.name(), current.name()),
-                keepIfAbsent(patch.type(), current.type()),
                 keepIfAbsent(patch.address(), current.address()),
                 keepIfAbsent(patch.city(), current.city()),
                 keepIfAbsent(patch.district(), current.district()),
                 keepIfAbsent(patch.lat(), current.lat()),
                 keepIfAbsent(patch.lng(), current.lng()),
-                keepIfAbsent(patch.infoJson(), current.infoJson())
+                keepIfAbsent(patch.rules(), current.rules())
         );
 
         validateCoordinates(merged);

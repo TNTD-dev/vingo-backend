@@ -18,9 +18,9 @@ class VnpayIpnTest extends PaymentTestSupport {
         var showtime = catalog.onSaleShowtime();
         UUID orderId = holdStandingOrder(buyerWithProfile(), showtime, 1);
         String old = openIntent(orderId);
-        jdbc.sql("UPDATE payment_intent SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", old).update();
+        jdbc.sql("UPDATE payment SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", old).update();
         String next = old + "-new";
-        jdbc.sql("INSERT INTO payment_intent(order_id, txn_ref, amount, expires_at) SELECT order_id, :next, amount, expires_at FROM payment_intent WHERE txn_ref = :old")
+        jdbc.sql("INSERT INTO payment(order_id, txn_ref, payment_url) SELECT order_id, :next, payment_url FROM payment WHERE txn_ref = :old")
                 .param("next", next).param("old", old).update();
         assertThat(rspCode(callIpn(signedIpnParams(old, CatalogFixture.GA_PRICE, "07", "00", "123")))).isEqualTo("00");
         assertThat(intentStatus(old)).isEqualTo("FAILED");
@@ -54,9 +54,9 @@ class VnpayIpnTest extends PaymentTestSupport {
         UUID buyer = buyerWithProfile();
         UUID orderId = holdStandingOrder(buyer, showtime, 1);
         String first = openIntent(orderId);
-        jdbc.sql("UPDATE payment_intent SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", first).update();
+        jdbc.sql("UPDATE payment SET status = 'FAILED' WHERE txn_ref = :ref").param("ref", first).update();
         String second = first + "-second";
-        jdbc.sql("INSERT INTO payment_intent(order_id, txn_ref, amount, expires_at) SELECT order_id, :ref, amount, expires_at FROM payment_intent WHERE txn_ref = :first")
+        jdbc.sql("INSERT INTO payment(order_id, txn_ref, payment_url) SELECT order_id, :ref, payment_url FROM payment WHERE txn_ref = :first")
                 .param("ref", second).param("first", first).update();
         assertThat(rspCode(callIpn(signedSuccessIpn(first, CatalogFixture.GA_PRICE)))).isEqualTo("00");
         assertThat(rspCode(callIpn(signedSuccessIpn(second, CatalogFixture.GA_PRICE)))).isEqualTo("00");

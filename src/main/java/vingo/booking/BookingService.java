@@ -163,11 +163,24 @@ public class BookingService {
             repository.markPaid(orderId, now);
             target = "PAID";
         } else {
-            repository.markRefunded(orderId, now);
-            target = "REFUNDED";
+            repository.markRejected(orderId, now);
+            target = "REJECTED";
         }
         repository.insertHistory(orderId, "NEEDS_REVIEW", target, adminId, reason, now);
         return orders.readOrder(orderId, now);
+    }
+
+    /** Kiểm tra đơn đã có thông tin người mua chưa (trong transaction của payment). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean hasBuyer(UUID orderId) {
+        return repository.hasBuyer(orderId);
+    }
+
+    /** Ghi hoặc cập nhật thông tin người mua trên đơn PENDING (trong transaction của payment). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void saveBuyer(UUID orderId, String fullName, String email, String phone) {
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        repository.saveBuyer(orderId, fullName, email, phone, now);
     }
 
     /** Đọc email của đơn trong transaction gửi vé; rỗng khi đơn không khai báo email. */
@@ -212,7 +225,6 @@ public class BookingService {
         if (!order.status().equals("PENDING")) {
             throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Chỉ được bán đơn PENDING");
         }
-        repository.snapshotBuyer(orderId);
         // Kiểm hết tồn kho dưới khoá trước khi bán để đơn có cả ghế và khu đứng không bị bán dở.
         boolean seatsAvailable = repository.lockSeatsForSale(orderId, order.showtimeId());
         boolean standingAvailable = repository.lockStandingForSale(orderId, order.showtimeId());
@@ -269,14 +281,13 @@ public class BookingService {
             throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đơn không thể chuyển sang NEEDS_REVIEW");
         }
         Objects.requireNonNull(reason, "reason");
-        repository.snapshotBuyer(orderId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         if (order.status().equals("PENDING")) {
             repository.releaseSeats(orderId);
             repository.releaseStanding(orderId, order.showtimeId());
         }
-        repository.markNeedsReview(orderId, reason, now);
-        repository.insertHistory(orderId, order.status(), "NEEDS_REVIEW", null, now);
+        repository.markNeedsReview(orderId, now);
+        repository.insertHistory(orderId, order.status(), "NEEDS_REVIEW", null, reason.name(), now);
         realtime.publish(order.userId(), RealtimeEventType.ORDER_NEEDS_REVIEW,
                 Map.of("order_id", orderId, "reason", reason.name()));
         logTransition(orderId, order.userId(), order.status(), "NEEDS_REVIEW");
@@ -463,16 +474,12 @@ public class BookingService {
         List<HoldItem> items;
         if (seated) {
             var seatIds = new LinkedHashSet<>(request.getSeatIds());
-            items = repository.seatItems(showtimeId, seatIds);
+            items = repository.seatItems(showtimeId, seatIds, now);
             requireAllSeats(items, seatIds.size());
-            if (seatIds.addAll(repository.pairedSeats(seatIds))) {
-                items = repository.seatItems(showtimeId, seatIds);
-                requireAllSeats(items, seatIds.size());
-            }
             // Sau khi đơn cũ quá hạn đã được đóng ở trên, để lần hết hạn vừa rồi cũng được tính.
             enforceReholdCooldown(userId, showtimeId, items, now);
         } else {
-            items = List.of(repository.standingItem(showtimeId, request.getZoneId(), request.getQuantity())
+            items = List.of(repository.standingItem(showtimeId, request.getZoneId(), request.getQuantity(), now)
                     .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR,
                             "Khu đứng không thuộc suất diễn")));
         }
@@ -482,7 +489,7 @@ public class BookingService {
         }
         long total = 0;
         for (var item : items) {
-            if (item.priceTierId() == null) {
+            if (item.skuPriceId() == null) {
                 throw new DomainException(ErrorCode.SHOWTIME_NOT_ON_SALE, "Suất diễn chưa có giá cho khu này");
             }
             total = Math.addExact(total, Math.multiplyExact(item.unitPrice(), item.quantity()));
@@ -508,7 +515,7 @@ public class BookingService {
         }
 
         for (var item : items) {
-            repository.insertItem(orderId, item);
+            repository.insertItem(orderId, showtimeId, item);
         }
         repository.insertHistory(orderId, null, "PENDING", userId, now);
         realtime.publish(userId, RealtimeEventType.ORDER_HELD,
@@ -518,11 +525,6 @@ public class BookingService {
         return order;
     }
 
-    /**
-     * Chặn giữ lại ghế mà user đã giữ rồi nhả không thanh toán (hết hạn hoặc huỷ) từ {@code reholdMax} lần trở lên
-     * trong {@code reholdWindow}: phải chờ {@code reholdCooldown} kể từ lần nhả gần nhất. Chỉ cần một ghế trong
-     * yêu cầu vướng cooldown là cả yêu cầu bị từ chối. Dùng chung mã {@code RATE_LIMITED} (429, kèm Retry-After).
-     */
     private void enforceReholdCooldown(UUID userId, UUID showtimeId, List<HoldItem> items, OffsetDateTime now) {
         var seatIds = items.stream().map(HoldItem::seatId).toList();
         repository.lastReleaseOfOverheldSeats(userId, showtimeId, seatIds, now.minus(reholdWindow), reholdMax)
@@ -570,7 +572,7 @@ public class BookingService {
                 }
             } catch (DuplicateKeyException ex) {
                 if (String.valueOf(ex.getMostSpecificCause().getMessage())
-                        .contains("orders_one_pending_per_showtime_uk")) {
+                        .contains("ticket_order_one_pending_uk")) {
                     throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đã có đơn đang giữ cho suất này");
                 }
                 throw ex;

@@ -99,7 +99,7 @@ abstract class BookingTestSupport extends IntegrationTest {
 
     protected SeatState seatState(UUID showtimeId, UUID seatId) {
         return jdbc.sql("""
-                        SELECT status, order_id, held_until FROM showtime_seat
+                        SELECT status, order_id, held_until FROM seat_inventory
                         WHERE showtime_id = :showtime AND seat_id = :seat
                         """)
                 .param("showtime", showtimeId).param("seat", seatId)
@@ -108,23 +108,23 @@ abstract class BookingTestSupport extends IntegrationTest {
     }
 
     protected String orderStatus(UUID orderId) {
-        return jdbc.sql("SELECT status FROM orders WHERE id = :id")
+        return jdbc.sql("SELECT status FROM ticket_order WHERE id = :id")
                 .param("id", orderId).query(String.class).single();
     }
 
     protected int held(Showtime showtime) {
-        return jdbc.sql("SELECT held FROM showtime_zone_stock WHERE showtime_id = :showtime AND zone_id = :zone")
+        return jdbc.sql("SELECT held FROM standing_inventory WHERE showtime_id = :showtime AND zone_id = :zone")
                 .param("showtime", showtime.id()).param("zone", showtime.event().standingZoneId())
                 .query(Integer.class).single();
     }
 
     protected int orderCount(UUID userId) {
-        return jdbc.sql("SELECT count(*) FROM orders WHERE user_id = :user")
+        return jdbc.sql("SELECT count(*) FROM ticket_order WHERE user_id = :user")
                 .param("user", userId).query(Integer.class).single();
     }
 
     protected int pendingCount(UUID showtimeId) {
-        return jdbc.sql("SELECT count(*) FROM orders WHERE showtime_id = :id AND status = 'PENDING'")
+        return jdbc.sql("SELECT count(*) FROM ticket_order WHERE showtime_id = :id AND status = 'PENDING'")
                 .param("id", showtimeId).query(Integer.class).single();
     }
 
@@ -137,7 +137,7 @@ abstract class BookingTestSupport extends IntegrationTest {
     protected int historyCount(UUID orderId, String from, String to) {
         return jdbc.sql("""
                         SELECT count(*) FROM order_status_history WHERE order_id = :id
-                        AND from_status IS NOT DISTINCT FROM CAST(:from AS text) AND to_status = :to
+                        AND from_status IS NOT DISTINCT FROM CAST(:from AS order_status) AND to_status = CAST(:to AS order_status)
                         """)
                 .param("id", orderId).param("from", from, java.sql.Types.VARCHAR).param("to", to)
                 .query(Integer.class).single();
@@ -145,7 +145,7 @@ abstract class BookingTestSupport extends IntegrationTest {
 
     protected void assertHistoryActor(UUID orderId, String to, UUID actorId) {
         assertThat(jdbc.sql("""
-                        SELECT actor_id FROM order_status_history WHERE order_id = :id AND to_status = :to
+                        SELECT actor_id FROM order_status_history WHERE order_id = :id AND to_status = CAST(:to AS order_status)
                         """)
                 .param("id", orderId).param("to", to).query().singleRow()).containsEntry("actor_id", actorId);
     }
@@ -159,11 +159,19 @@ abstract class BookingTestSupport extends IntegrationTest {
                 .query(Integer.class).single();
     }
 
+    /** v2: đơn PAID bắt buộc có buyer_email; test gán người mua như payment làm lúc tạo thanh toán. */
+    protected void setBuyer(UUID orderId) {
+        jdbc.sql("""
+                UPDATE ticket_order SET buyer_name = 'Người Mua', buyer_email = 'buyer@vingo.test',
+                                        buyer_phone = '+84979107396' WHERE id = :id
+                """).param("id", orderId).update();
+    }
+
     protected void makeOverdue(UUID orderId) {
         var past = catalog.now().minusMinutes(1);
-        jdbc.sql("UPDATE orders SET expires_at = :past WHERE id = :id")
+        jdbc.sql("UPDATE ticket_order SET expires_at = :past WHERE id = :id")
                 .param("past", past).param("id", orderId).update();
-        jdbc.sql("UPDATE showtime_seat SET held_until = :past WHERE order_id = :id AND status = 'HELD'")
+        jdbc.sql("UPDATE seat_inventory SET held_until = :past WHERE order_id = :id AND status = 'HELD'")
                 .param("past", past).param("id", orderId).update();
     }
 

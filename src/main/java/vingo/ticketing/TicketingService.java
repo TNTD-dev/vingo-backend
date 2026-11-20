@@ -35,13 +35,14 @@ import vingo.shared.error.ErrorCode;
 import vingo.shared.logging.LogKeys;
 import vingo.shared.ratelimit.RateLimiter;
 import vingo.shared.security.CurrentUser;
+import vingo.ticketing.internal.QrCodec;
 import vingo.ticketing.internal.QrPng;
 import vingo.ticketing.internal.TicketingReader;
 import vingo.ticketing.internal.TicketingRepository;
-import vingo.ticketing.internal.TicketingRepository.PagePosition;
 import vingo.ticketing.internal.TicketingRepository.ManagedTicket;
+import vingo.ticketing.internal.TicketingRepository.PagePosition;
 
-/** API công khai để payment phát vé trong transaction chốt bán. */
+/** API công khai để payment phát vé trong transaction chốt bán và soát vé tại cổng. */
 @Service
 public class TicketingService {
 
@@ -52,19 +53,20 @@ public class TicketingService {
     private final BookingService booking;
     private final TicketingRepository repository;
     private final TicketingReader reader;
+    private final QrCodec qrCodec;
     private final CurrentUser currentUser;
     private final RealtimeService realtime;
     private final NotificationsService notifications;
     private final RateLimiter rateLimiter;
     private final Clock clock;
 
-    /** Dùng chung transaction của booking, phát vé và realtime. */
     public TicketingService(BookingService booking, TicketingRepository repository, TicketingReader reader,
-                            CurrentUser currentUser, RealtimeService realtime, NotificationsService notifications,
-                            RateLimiter rateLimiter, Clock clock) {
+                            QrCodec qrCodec, CurrentUser currentUser, RealtimeService realtime,
+                            NotificationsService notifications, RateLimiter rateLimiter, Clock clock) {
         this.booking = booking;
         this.repository = repository;
         this.reader = reader;
+        this.qrCodec = qrCodec;
         this.currentUser = currentUser;
         this.realtime = realtime;
         this.notifications = notifications;
@@ -72,20 +74,19 @@ public class TicketingService {
         this.clock = clock;
     }
 
-    /** Tra cứu vé cho adminops theo keyset issued_at/id, đọc theo lô và luôn ẩn QR. */
+    /** Tra cứu vé cho adminops theo keyset id giảm dần, đọc theo lô và luôn ẩn QR. */
     @Transactional(readOnly = true)
     public ListMyTickets200Response adminListTickets(
             String code, UUID orderId, UUID showtimeId, TicketStatus status, String cursor, Integer limit) {
         int size = pageSize(limit);
-        var positions = repository.adminListTickets(code, orderId, showtimeId,
-                status == null ? null : status.getValue(), cursor == null ? null : decodeCursor(cursor), size + 1);
-        var page = positions.subList(0, Math.min(size, positions.size()));
-        var tickets = reader.readTickets(page.stream().map(PagePosition::id).toList(), now());
-        // Admin không nhận QR, kể cả khi chính admin là chủ vé ISSUED.
+        var ids = repository.adminListTickets(code, orderId, showtimeId,
+                status == null ? null : status.getValue(), cursor == null ? null : decodeUuidCursor(cursor), size + 1);
+        var page = ids.subList(0, Math.min(size, ids.size()));
+        var tickets = reader.readTickets(page, now());
         tickets.forEach(ticket -> ticket.setQrToken(null));
         var response = new ListMyTickets200Response().data(tickets);
-        if (positions.size() > size) {
-            response.nextCursor(encodeCursor(page.getLast()));
+        if (ids.size() > size) {
+            response.nextCursor(page.getLast().toString());
         }
         return response;
     }
@@ -102,16 +103,12 @@ public class TicketingService {
         if (!existing.isEmpty()) {
             return existing;
         }
-        OffsetDateTime now = now();
         List<UUID> ids = new ArrayList<>();
         for (var line : booking.orderLines(orderId)) {
             int quantity = line.seatId() == null ? line.quantity() : 1;
             for (int seq = 1; seq <= quantity; seq++) {
                 while (true) {
-                    byte[] token = new byte[32];
-                    random.nextBytes(token);
-                    var id = repository.insertTicket(line, seq, randomCode(),
-                            Base64.getUrlEncoder().withoutPadding().encodeToString(token), now);
+                    var id = repository.insertTicket(orderId, line, seq, randomCode());
                     if (id.isPresent()) {
                         ids.add(id.get());
                         break;
@@ -144,33 +141,26 @@ public class TicketingService {
     @Transactional(propagation = Propagation.MANDATORY)
     public Ticket voidTicket(UUID ticketId, OffsetDateTime now) {
         lockIssuedTicket(ticketId);
-        repository.voidTicket(ticketId, now);
+        repository.voidTicket(ticketId);
         return reader.readTickets(List.of(ticketId), now).getFirst();
     }
 
-    /** Khoá vé ISSUED và chỉ đổi qr_token trong transaction audit của adminops. */
+    /** Khoá vé ISSUED và tăng qr_version trong transaction audit của adminops. */
     @Transactional(propagation = Propagation.MANDATORY)
     public Ticket reissueTicketQr(UUID ticketId) {
         lockIssuedTicket(ticketId);
-        // 32 byte ngẫu nhiên: trùng gần như không thể; nếu có, UNIQUE chặn và transaction rollback.
-        byte[] token = new byte[32];
-        random.nextBytes(token);
-        repository.reissueQr(ticketId, Base64.getUrlEncoder().withoutPadding().encodeToString(token));
-        // Admin không nhận QR vào cổng: lộ tài khoản admin không được kéo theo lộ vé; khách nhận QR mới qua gửi lại vé.
+        repository.reissueQr(ticketId);
         return reader.readTickets(List.of(ticketId), now()).getFirst().qrToken(null);
     }
 
-    /** Giữ khoá vé ISSUED đến hết transaction gửi email; trả id đơn để đọc email qua booking. */
     @Transactional(propagation = Propagation.MANDATORY)
     public UUID lockIssuedTicketOrder(UUID ticketId) {
         return lockIssuedTicket(ticketId).orderId();
     }
 
-    /** Chủ vé gửi lại qua outbox, giới hạn 3 lần/giờ/user và không ghi audit admin. */
     @Transactional
     public void resendMyTicket(UUID ticketId) {
         UUID userId = currentUser.require().id();
-        // Đếm cả yêu cầu sai chủ hoặc không tồn tại để không cho dò id vé không giới hạn.
         rateLimiter.check(userId, "ticket-resend", 3, Duration.ofHours(1));
         var ticket = lockTicket(ticketId);
         currentUser.requireOwner(ticket.userId());
@@ -194,15 +184,14 @@ public class TicketingService {
     }
 
     private static void requireIssued(ManagedTicket ticket) {
-        if (ticket.status().equals("USED")) {
+        if ("USED".equals(ticket.status())) {
             throw new DomainException(ErrorCode.TICKET_USED, "Vé đã sử dụng");
         }
-        if (!ticket.status().equals("ISSUED")) {
+        if (!"ISSUED".equals(ticket.status())) {
             throw new DomainException(ErrorCode.TICKET_NOT_VALID, "Vé không còn hiệu lực");
         }
     }
 
-    /** Đọc vé của chủ sở hữu; vé không tồn tại hoặc khác chủ đều trả NOT_FOUND. */
     @Transactional(readOnly = true)
     public Ticket getTicket(UUID ticketId) {
         UUID owner = repository.ticketOwner(ticketId)
@@ -212,40 +201,53 @@ public class TicketingService {
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy vé"));
     }
 
-    /** Liệt kê vé của người gọi theo giờ kết thúc suất, trạng thái và cursor mới nhất trước. */
     @Transactional(readOnly = true)
     public ListMyTickets200Response listMyTickets(String when, TicketStatus status, String cursor, Integer limit) {
         UUID userId = currentUser.require().id();
         int size = pageSize(limit);
         String window = when == null ? "upcoming" : when;
-        if (!window.equals("upcoming") && !window.equals("past")) {
+        if (!"upcoming".equals(window) && !"past".equals(window)) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "when phải là upcoming hoặc past");
         }
         OffsetDateTime now = now();
-        var positions = repository.listTickets(userId, window.equals("past"),
-                status == null ? null : status.getValue(), cursor == null ? null : decodeCursor(cursor), now, size + 1);
-        var page = positions.subList(0, Math.min(size, positions.size()));
-        var result = new ListMyTickets200Response()
-                .data(reader.readTickets(page.stream().map(PagePosition::id).toList(), now));
-        if (positions.size() > size) {
-            result.nextCursor(encodeCursor(page.getLast()));
+        var ids = repository.listTickets(userId, "past".equals(window),
+                status == null ? null : status.getValue(),
+                cursor == null ? null : decodeUuidCursor(cursor), now, size + 1);
+        var page = ids.subList(0, Math.min(size, ids.size()));
+        var result = new ListMyTickets200Response().data(reader.readTickets(page, now));
+        if (ids.size() > size) {
+            result.nextCursor(page.getLast().toString());
         }
         return result;
     }
 
-    /** Khoá vé theo QR, đổi ISSUED thành USED và ghi mọi lượt quét tìm thấy vé, kể cả kết quả từ chối. */
+    /** Kiểm HMAC QR, khoá vé theo id, đổi ISSUED thành USED và ghi mọi lượt quét (kể cả INVALID_QR). */
     @Transactional
     public CheckinResult checkIn(CheckInRequest request) {
         UUID scanner = currentUser.require().id();
-        var ticket = repository.lockTicket(request.getQrToken())
-                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy vé"));
         OffsetDateTime now = now();
+
+        var parsed = qrCodec.verify(request.getQrToken());
+        if (parsed.isEmpty()) {
+            repository.insertCheckin(null, request.getShowtimeId(), scanner, request.getGate(),
+                    ResultEnum.INVALID_QR, now);
+            return new CheckinResult().result(ResultEnum.INVALID_QR).scannedAt(now);
+        }
+
+        var locked = repository.lockTicketForScan(parsed.get().ticketId());
+        if (locked.isEmpty() || locked.get().qrVersion() != parsed.get().qrVersion()) {
+            repository.insertCheckin(null, request.getShowtimeId(), scanner, request.getGate(),
+                    ResultEnum.INVALID_QR, now);
+            return new CheckinResult().result(ResultEnum.INVALID_QR).scannedAt(now);
+        }
+
+        var ticket = locked.get();
         ResultEnum outcome;
-        if (ticket.status().equals("VOID")) {
+        if ("VOID".equals(ticket.status())) {
             outcome = ResultEnum.TICKET_VOID;
         } else if (!ticket.showtimeId().equals(request.getShowtimeId())) {
             outcome = ResultEnum.WRONG_SHOWTIME;
-        } else if (ticket.status().equals("USED")) {
+        } else if ("USED".equals(ticket.status())) {
             outcome = ResultEnum.ALREADY_USED;
         } else {
             repository.markUsed(ticket.id(), now);
@@ -254,12 +256,16 @@ public class TicketingService {
         repository.insertCheckin(ticket.id(), request.getShowtimeId(), scanner, request.getGate(), outcome, now);
         log.atInfo().addKeyValue("ticket_id", ticket.id()).addKeyValue(LogKeys.USER_ID, scanner)
                 .addKeyValue("result", outcome.getValue()).log("Check-in {}", outcome.getValue());
-        return new CheckinResult().result(outcome).ticketCode(ticket.code()).zone(ticket.zone())
-                .row(ticket.row()).number(ticket.number()).scannedAt(now)
+        return new CheckinResult()
+                .result(outcome)
+                .ticketCode(ticket.code())
+                .zone(ticket.zone())
+                .row(ticket.row())
+                .number(ticket.number())
+                .scannedAt(now)
                 .firstUsedAt(outcome == ResultEnum.ALREADY_USED ? ticket.usedAt() : null);
     }
 
-    /** Liệt kê lịch sử của suất được quét, mới nhất trước theo scanned_at rồi id. */
     @Transactional(readOnly = true)
     public ListShowtimeCheckins200Response listShowtimeCheckins(UUID showtimeId, String cursor, Integer limit) {
         int size = pageSize(limit);
@@ -277,20 +283,24 @@ public class TicketingService {
         return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
     }
 
+    private static int pageSize(Integer limit) {
+        return limit == null ? 20 : limit;
+    }
+
     private static String randomCode() {
         var code = new StringBuilder(8);
-        for (int index = 0; index < 8; index++) {
+        for (int i = 0; i < 8; i++) {
             code.append(CODE_ALPHABET.charAt(random.nextInt(CODE_ALPHABET.length())));
         }
         return code.toString();
     }
 
-    private static int pageSize(Integer limit) {
-        int size = limit == null ? 20 : limit;
-        if (size < 1 || size > 100) {
-            throw new DomainException(ErrorCode.VALIDATION_ERROR, "limit phải từ 1 đến 100");
+    private static UUID decodeUuidCursor(String cursor) {
+        try {
+            return UUID.fromString(cursor);
+        } catch (IllegalArgumentException ex) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Cursor không hợp lệ");
         }
-        return size;
     }
 
     private static String encodeCursor(PagePosition position) {
@@ -300,7 +310,8 @@ public class TicketingService {
 
     private static PagePosition decodeCursor(String cursor) {
         try {
-            String[] parts = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8).split("\\|", -1);
+            String[] parts = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8)
+                    .split("\\|", -1);
             if (parts.length != 2) {
                 throw new IllegalArgumentException("Invalid cursor format");
             }

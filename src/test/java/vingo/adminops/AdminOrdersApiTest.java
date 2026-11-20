@@ -41,8 +41,8 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
         UUID otherBuyer = catalog.buyer();
         otherShowtime = catalog.onSaleShowtime();
         String otherEmail = otherBuyer + "@tickets.vingo.test";
-        phone = "+84 9" + String.format(Locale.ROOT, "%07d", Math.floorMod(buyer.hashCode(), 10_000_000));
-        String otherPhone = "+84 8" + String.format(Locale.ROOT, "%07d", Math.floorMod(otherBuyer.hashCode(), 10_000_000));
+        phone = "+849" + String.format(Locale.ROOT, "%07d", Math.floorMod(buyer.hashCode(), 10_000_000));
+        String otherPhone = "+848" + String.format(Locale.ROOT, "%07d", Math.floorMod(otherBuyer.hashCode(), 10_000_000));
         var now = catalog.now();
         paid = readOrderFixture(buyer, showtime, "PAID", buyerEmail, phone, now.minusSeconds(3));
         cancelled = readOrderFixture(otherBuyer, otherShowtime, "CANCELLED", otherEmail, otherPhone, now.minusSeconds(4));
@@ -80,7 +80,7 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
     @Test
     void adminListOrders_matchesLowercaseOrderCodeExactlyAfterTrim() {
         String code = "Z" + UUID.randomUUID().toString().substring(0, 5).toUpperCase(Locale.ROOT);
-        jdbc.sql("UPDATE orders SET code = :code WHERE id = :id").param("code", code).param("id", paid).update();
+        jdbc.sql("UPDATE ticket_order SET code = :code WHERE id = :id").param("code", code).param("id", paid).update();
 
         assertIds(query("  " + code.toLowerCase(Locale.ROOT) + "  "), paid);
         assertIds(query(code.substring(0, 3)));
@@ -94,7 +94,7 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
     @Test
     void adminListOrders_matchesPhoneVerbatimAfterTrim() {
         assertIds(query("  " + phone + "  "), pending, review, paid);
-        assertIds(query(phone.replace(" ", "")));
+        assertIds(query("+84 9" + phone.substring(4)));
     }
 
     @Test
@@ -135,10 +135,10 @@ class AdminOrdersApiTest extends AdminOpsTestSupport {
     @Test
     void adminListOrders_paginatesByTwoWithoutDuplicatesOrGapsAndEndsWithNullCursor() {
         String sharedEmail = UUID.randomUUID() + "@page.vingo.test";
-        jdbc.sql("UPDATE orders SET buyer_email = :email, created_at = :at WHERE showtime_id IN (:first, :second)")
+        jdbc.sql("UPDATE ticket_order SET buyer_email = :email, created_at = :at WHERE showtime_id IN (:first, :second)")
                 .param("email", sharedEmail).param("at", catalog.now())
                 .param("first", showtime.id()).param("second", otherShowtime.id()).update();
-        var expected = jdbc.sql("SELECT id FROM orders WHERE buyer_email = :email ORDER BY created_at DESC, id DESC")
+        var expected = jdbc.sql("SELECT id FROM ticket_order WHERE buyer_email = :email ORDER BY created_at DESC, id DESC")
                 .param("email", sharedEmail).query(String.class).list();
 
         readPages("/api/v1/admin/orders?q=" + sharedEmail, 2, expected);

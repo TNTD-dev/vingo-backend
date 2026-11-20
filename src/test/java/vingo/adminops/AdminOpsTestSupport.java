@@ -73,10 +73,11 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
 
     protected UUID createAdmin() {
         return jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status)
-                        VALUES (:email, 'Test admin', 'x', 'ADMIN', 'ACTIVE') RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at)
+                        VALUES (:email, 'Test admin', 'x', 'ADMIN', :now) RETURNING id
                         """)
-                .param("email", UUID.randomUUID() + "@admin.vingo.test").query(UUID.class).single();
+                .param("email", UUID.randomUUID() + "@admin.vingo.test").param("now", catalog.now())
+                .query(UUID.class).single();
     }
 
     protected String seats(UUID... ids) {
@@ -97,7 +98,10 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
                 })
                 .contentType(MediaType.APPLICATION_JSON).body(request).exchange(), 201);
         UUID orderId = UUID.fromString(text(json, "$.id"));
-        jdbc.sql("UPDATE orders SET buyer_email = :email WHERE id = :id")
+        jdbc.sql("""
+                        UPDATE ticket_order SET buyer_name = 'Buyer Test', buyer_email = :email, buyer_phone = '+84901234567'
+                        WHERE id = :id
+                        """)
                 .param("email", buyerEmail).param("id", orderId).update();
         return orderId;
     }
@@ -116,7 +120,7 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
             bookingService.markNeedsReview(orderId, ReviewReason.AMOUNT_MISMATCH);
         });
         assertThat(orderStatus(orderId)).isEqualTo("NEEDS_REVIEW");
-        assertThat(jdbc.sql("SELECT count(*) FROM showtime_seat WHERE order_id = :id AND status = 'HELD'")
+        assertThat(jdbc.sql("SELECT count(*) FROM seat_inventory WHERE order_id = :id AND status = 'HELD'")
                 .param("id", orderId).query(Integer.class).single()).isZero();
         return orderId;
     }
@@ -140,7 +144,7 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
     }
 
     protected void removeEmail(UUID orderId) {
-        jdbc.sql("UPDATE orders SET buyer_email = NULL WHERE id = :id").param("id", orderId).update();
+        jdbc.sql("UPDATE ticket_order SET buyer_name = NULL, buyer_email = NULL, buyer_phone = NULL WHERE id = :id").param("id", orderId).update();
     }
 
     protected String resolution(String action) {
@@ -208,43 +212,57 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
     }
 
     protected String orderStatus(UUID orderId) {
-        return jdbc.sql("SELECT status FROM orders WHERE id = :id").param("id", orderId).query(String.class).single();
+        return jdbc.sql("SELECT status::text FROM ticket_order WHERE id = :id").param("id", orderId).query(String.class).single();
     }
 
     protected List<UUID> ticketIds(UUID orderId) {
-        return jdbc.sql("""
-                        SELECT t.id FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
-                        WHERE oi.order_id = :id ORDER BY t.id
-                        """)
+        return jdbc.sql("SELECT id FROM ticket WHERE order_id = :id ORDER BY id")
                 .param("id", orderId).query(UUID.class).list();
     }
 
     protected Map<String, Object> ticketRow(UUID ticketId) {
-        return jdbc.sql("SELECT * FROM ticket WHERE id = :id").param("id", ticketId).query().singleRow();
+        return jdbc.sql("""
+                        SELECT id, order_id, showtime_id, seat_id, zone_id, seq, code, qr_version::integer AS qr_version,
+                               status::text AS status, used_at
+                        FROM ticket WHERE id = :id
+                        """).param("id", ticketId).query().singleRow();
     }
 
+    @org.springframework.beans.factory.annotation.Value("${vingo.qr.secret:${QR_SECRET:vingo-dev-qr-secret-change-in-prod}}")
+    private String qrSecret;
+
     protected String qr(UUID ticketId) {
-        return (String) ticketRow(ticketId).get("qr_token");
+        int version = ((Number) ticketRow(ticketId).get("qr_version")).intValue();
+        String payload = "VG1." + ticketId + "." + version;
+        try {
+            var mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(qrSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+            String sig = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(mac.doFinal(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return payload + "." + sig;
+        } catch (java.security.GeneralSecurityException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     protected void setTicketState(UUID ticketId, String state) {
         if (state.equals("USED")) {
             assertThat(text(body(scan(qr(ticketId)), 200), "$.result")).isEqualTo("OK");
         } else if (state.equals("VOID")) {
-            jdbc.sql("UPDATE ticket SET status = 'VOID', voided_at = :now WHERE id = :id")
-                    .param("now", catalog.now()).param("id", ticketId).update();
+            jdbc.sql("UPDATE ticket SET status = 'VOID' WHERE id = :id")
+                    .param("id", ticketId).update();
         } else {
             throw new IllegalArgumentException(state);
         }
     }
 
     protected Map<String, Object> seatRow(UUID seatId) {
-        return jdbc.sql("SELECT * FROM showtime_seat WHERE showtime_id = :showtime AND seat_id = :seat")
+        return jdbc.sql("SELECT * FROM seat_inventory WHERE showtime_id = :showtime AND seat_id = :seat")
                 .param("showtime", showtime.id()).param("seat", seatId).query().singleRow();
     }
 
     protected Map<String, Object> standingStock() {
-        return jdbc.sql("SELECT * FROM showtime_zone_stock WHERE showtime_id = :showtime AND zone_id = :zone")
+        return jdbc.sql("SELECT * FROM standing_inventory WHERE showtime_id = :showtime AND zone_id = :zone")
                 .param("showtime", showtime.id()).param("zone", showtime.event().standingZoneId()).query().singleRow();
     }
 
@@ -283,7 +301,7 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
     protected void assertHistory(UUID orderId, String to, UUID actor) {
         var rows = jdbc.sql("""
                         SELECT actor_id, reason, at FROM order_status_history
-                        WHERE order_id = :id AND from_status = 'NEEDS_REVIEW' AND to_status = :to
+                        WHERE order_id = :id AND from_status = 'NEEDS_REVIEW' AND to_status = CAST(:to AS order_status)
                         """)
                 .param("id", orderId).param("to", to)
                 .query((rs, row) -> new HistoryRow(rs.getObject("actor_id", UUID.class),
@@ -292,14 +310,14 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
     }
 
     protected List<OutboxRow> outbox() {
-        return jdbc.sql("SELECT id, template, recipient, payload::text FROM outbox_message WHERE recipient = :email")
+        return jdbc.sql("SELECT id, template, recipient, payload::text FROM notification_outbox WHERE recipient = :email")
                 .param("email", buyerEmail).query((rs, row) -> new OutboxRow(rs.getObject("id", UUID.class),
                         rs.getString("template"), rs.getString("recipient"), rs.getString("payload"))).list();
     }
 
     protected void clearSetupTicketEmails() {
         // Test thao tác vé chỉ đo email phát sinh từ thao tác, không tính email phát vé của setup.
-        jdbc.sql("DELETE FROM outbox_message WHERE template = 'TICKETS' AND recipient = :email")
+        jdbc.sql("DELETE FROM notification_outbox WHERE template = 'TICKETS' AND recipient = :email")
                 .param("email", buyerEmail).update();
     }
 
@@ -338,7 +356,7 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
                                     OffsetDateTime createdAt) {
         UUID id = catalog.order(owner, target.id(), status, catalog.now().plusMinutes(10));
         jdbc.sql("""
-                        UPDATE orders SET buyer_name = 'Read test buyer', buyer_email = :email,
+                        UPDATE ticket_order SET buyer_name = 'Read test buyer', buyer_email = :email,
                                           buyer_phone = :phone, created_at = :created WHERE id = :id
                         """)
                 .param("email", email).param("phone", phone).param("created", createdAt).param("id", id).update();
@@ -353,7 +371,7 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
                 })
                 .contentType(MediaType.APPLICATION_JSON).body(seats(seatIds)).exchange(), 201);
         UUID orderId = UUID.fromString(text(json, "$.id"));
-        jdbc.sql("UPDATE orders SET buyer_email = :email WHERE id = :id")
+        jdbc.sql("UPDATE ticket_order SET buyer_name = 'Buyer Test', buyer_email = :email, buyer_phone = '+84901234567' WHERE id = :id")
                 .param("email", email).param("id", orderId).update();
         return orderId;
     }

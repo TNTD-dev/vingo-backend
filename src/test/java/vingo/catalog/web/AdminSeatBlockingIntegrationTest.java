@@ -33,9 +33,9 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
     }
     private Object body(UUID... ids) {return Map.of("seat_ids",List.of(ids),"reason","Bảo trì");}
     private String state(UUID id,UUID seat) {
-        return jdbc.sql("SELECT status FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat").param("id",id).param("seat",seat).query(String.class).single();
+        return jdbc.sql("SELECT status FROM seat_inventory WHERE showtime_id=:id AND seat_id=:seat").param("id",id).param("seat",seat).query(String.class).single();
     }
-    private long logs(UUID id) {return jdbc.sql("SELECT count(*) FROM catalog_seat_block_log WHERE showtime_id=:id").param("id",id).query(Long.class).single();}
+    private long logs(UUID id) {return jdbc.sql("SELECT count(*) FROM audit_log WHERE entity='showtime' AND entity_id=:id AND action IN ('BLOCK_SEATS','UNBLOCK_SEATS')").param("id",id).query(Long.class).single();}
     @Test void draftSeats_areIsolatedAndRepeatedRequestsAreNoops() {
         var event=catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
         var first=catalog.showtime(event,Window.draft());var other=catalog.showtime(event,Window.draft());
@@ -48,7 +48,7 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
     @Test void heldAndSoldSeats_rejectWholeBatchForBothOperations() {
         for(String action:List.of("block","unblock")) for(String status:List.of("HELD","SOLD")) {
             var s=catalog.onSaleShowtime();var e=s.event();
-            if(action.equals("unblock")) service.block(s.id(),List.of(e.seat(1)),"Bảo trì", UUID.randomUUID());
+            if(action.equals("unblock")) service.block(s.id(),List.of(e.seat(1)),"Bảo trì", catalog.buyer());
             UUID order=catalog.order(catalog.buyer(),s.id(),"PENDING",catalog.now().plusMinutes(10));
             catalog.setSeat(s.id(),e.seat(2),status,order,status.equals("HELD")?catalog.now().plusMinutes(10):null);
             long before=logs(s.id());
@@ -63,7 +63,7 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
         post(s.id(),"block",body(seat)).expectStatus().isEqualTo(409);
         clock.set(clock.instant().plusSeconds(1));post(s.id(),"block",body(seat)).expectStatus().isOk();
         assertThat(state(s.id(),seat)).isEqualTo("BLOCKED");
-        assertThat(jdbc.sql("SELECT order_id FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat").param("id",s.id()).param("seat",seat).query().singleRow().get("order_id")).isNull();
+        assertThat(jdbc.sql("SELECT order_id FROM seat_inventory WHERE showtime_id=:id AND seat_id=:seat").param("id",s.id()).param("seat",seat).query().singleRow().get("order_id")).isNull();
     }
     @Test void validationAndMissingShowtime_doNotChangeInventory() {
         var s=catalog.onSaleShowtime();var other=catalog.onSaleShowtime();UUID seat=s.event().seat(1);
@@ -78,14 +78,14 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
             var e=catalog.event(EventSpec.defaults().withCity("HN"));var s=catalog.showtime(e,window);
             for(String action:List.of("block","unblock")) post(s.id(),action,body(e.seat(1))).expectStatus().isEqualTo(409).expectBody().jsonPath("$.code").isEqualTo("SHOWTIME_LOCKED");
         }
-        for(String status:List.of("ENDED","CANCELLED")) {
+        for(String status:List.of("CANCELLED")) {
             var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus(status));var s=catalog.showtime(e,Window.notOpenYet());
             for(String action:List.of("block","unblock")) post(s.id(),action,body(e.seat(1))).expectStatus().isEqualTo(409).expectBody().jsonPath("$.code").isEqualTo("EVENT_LOCKED");
         }
     }
     @Test void rollback_restoresInventoryAndAudit() {
         var s=catalog.onSaleShowtime();UUID seat=s.event().seat(1);
-        new TransactionTemplate(transactions).executeWithoutResult(tx->{service.block(s.id(),List.of(seat),"Bảo trì", UUID.randomUUID());tx.setRollbackOnly();});
+        new TransactionTemplate(transactions).executeWithoutResult(tx->{service.block(s.id(),List.of(seat),"Bảo trì", catalog.buyer());tx.setRollbackOnly();});
         assertThat(state(s.id(),seat)).isEqualTo("AVAILABLE");assertThat(logs(s.id())).isZero();
     }
     @Test void endpoints_requireAdmin() {
@@ -145,10 +145,10 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
                 assertThat(List.of(blockStatus, holdStatus))
                         .isIn(List.of(200, 409), List.of(409, 201));
                 var inventory = jdbc.sql("""
-                        SELECT status, order_id FROM showtime_seat
+                        SELECT status, order_id FROM seat_inventory
                         WHERE showtime_id=:id AND seat_id=:seat
                         """).param("id", session.id()).param("seat", seat).query().singleRow();
-                long orders = jdbc.sql("SELECT count(*) FROM orders WHERE showtime_id=:id")
+                long orders = jdbc.sql("SELECT count(*) FROM ticket_order WHERE showtime_id=:id")
                         .param("id", session.id()).query(Long.class).single();
                 if (blockStatus == 200) {
                     assertThat(inventory.get("status")).isEqualTo("BLOCKED");
@@ -191,11 +191,13 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
                 .expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
         UUID order = UUID.fromString(tools.jackson.databind.json.JsonMapper.builder().build()
                 .readTree(held).path("id").asString());
+        jdbc.sql("UPDATE ticket_order SET buyer_name='Buyer', buyer_email='b@v.test', buyer_phone='+84901234567' WHERE id=:id")
+                .param("id", order).update();
         var locked = new java.util.concurrent.CountDownLatch(1);
         var proceed = new java.util.concurrent.CountDownLatch(1);
         try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var ipn = pool.submit(() -> new TransactionTemplate(transactions).execute(tx -> {
-                jdbc.sql("SELECT seat_id FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat FOR UPDATE")
+                jdbc.sql("SELECT seat_id FROM seat_inventory WHERE showtime_id=:id AND seat_id=:seat FOR UPDATE")
                         .param("id", session.id()).param("seat", seat).query(UUID.class).single();
                 locked.countDown();
                 try { if (!proceed.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Block did not reach inventory lock"); }
@@ -205,12 +207,12 @@ class AdminSeatBlockingIntegrationTest extends IntegrationTest {
             }));
             assertThat(locked.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             var block = pool.submit(() -> {
-                try { service.block(session.id(), List.of(seat), "Maintenance", UUID.randomUUID()); return "unexpected"; }
+                try { service.block(session.id(), List.of(seat), "Maintenance", catalog.buyer()); return "unexpected"; }
                 catch (vingo.shared.error.DomainException ex) { return ex.code().name(); }
             });
             try {
                 org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5)).until(() ->
-                    jdbc.sql("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%SELECT ss.seat_id%')")
+                    jdbc.sql("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%seat_inventory%' AND query LIKE '%FOR UPDATE%')")
                             .query(Boolean.class).single());
             } finally { proceed.countDown(); }
             assertThat(ipn.get(10, java.util.concurrent.TimeUnit.SECONDS)).hasSize(1);

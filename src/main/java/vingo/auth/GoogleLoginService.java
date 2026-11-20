@@ -43,7 +43,8 @@ public class GoogleLoginService {
         if (account == null) {
             String email = identity.email().strip().toLowerCase(Locale.ROOT);
             String name = StringUtils.hasText(identity.fullName()) ? identity.fullName().strip() : email;
-            var inserted = accounts.createGoogleAccount(identity.subject(), email, name, identity.avatar());
+            var inserted = accounts.createGoogleAccount(identity.subject(), email, name, identity.avatar(),
+                    OffsetDateTime.now(clock));
             created = inserted.isPresent();
             account = inserted.orElseGet(() -> accounts.findByGoogleSubject(identity.subject())
                     .orElseThrow(() -> new DomainException(ErrorCode.EMAIL_TAKEN, "Email đã có tài khoản Vingo")));

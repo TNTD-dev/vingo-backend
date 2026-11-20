@@ -19,9 +19,9 @@ public class GoogleAuthorizationRequestRepository {
     /** Dọn bản ghi hết hạn và lưu yêu cầu OAuth2 mới. */
     public void save(String stateHash, String browserHash, String requestJson,
                      OffsetDateTime now, OffsetDateTime expiresAt) {
-        jdbc.sql("DELETE FROM oauth_login_request WHERE expires_at <= :now").param("now", now).update();
+        jdbc.sql("DELETE FROM oauth_state WHERE expires_at <= :now").param("now", now).update();
         jdbc.sql("""
-                        INSERT INTO oauth_login_request (state_hash, browser_hash, request_json, expires_at)
+                        INSERT INTO oauth_state (state_hash, browser_hash, request, expires_at)
                         VALUES (:state, :browser, :json, :expires)
                         """)
                 .param("state", stateHash)
@@ -34,7 +34,7 @@ public class GoogleAuthorizationRequestRepository {
     /** Đọc yêu cầu còn hạn của trình duyệt mà chưa tiêu thụ state. */
     public Optional<String> find(String stateHash, String browserHash, OffsetDateTime now) {
         return query("""
-                SELECT request_json FROM oauth_login_request
+                SELECT request FROM oauth_state
                 WHERE state_hash = :state AND browser_hash = :browser AND expires_at > :now
                 """, stateHash, browserHash, now);
     }
@@ -42,9 +42,9 @@ public class GoogleAuthorizationRequestRepository {
     /** Lấy và xoá state còn hạn trong cùng một câu lệnh. */
     public Optional<String> consume(String stateHash, String browserHash, OffsetDateTime now) {
         return query("""
-                DELETE FROM oauth_login_request
+                DELETE FROM oauth_state
                 WHERE state_hash = :state AND browser_hash = :browser AND expires_at > :now
-                RETURNING request_json
+                RETURNING request
                 """, stateHash, browserHash, now);
     }
 

@@ -66,7 +66,7 @@ class ExpireHoldsWorkerTest {
             expired = jdbc.sql("""
                             SELECT o.status = 'EXPIRED' AND ss.status = 'AVAILABLE'
                                    AND ss.order_id IS NULL AND ss.held_until IS NULL
-                            FROM orders o JOIN showtime_seat ss ON ss.showtime_id = o.showtime_id
+                            FROM ticket_order o JOIN seat_inventory ss ON ss.showtime_id = o.showtime_id
                             WHERE o.id = :order AND ss.seat_id = :seat
                             """)
                     .param("order", held.order()).param("seat", held.seat()).query(Boolean.class).single();

@@ -15,8 +15,8 @@ import org.springframework.stereotype.Repository;
 public class VenueRepository {
 
     private static final String COLUMNS = """
-            id, name, type, address, city, district, lat, lng,
-            CAST(info AS text) AS info_json, created_at, updated_at
+            id, name, address, city, district, lat, lng,
+            rules, created_at, updated_at
             """;
 
     private final JdbcClient jdbc;
@@ -27,13 +27,12 @@ public class VenueRepository {
 
     public record VenueData(
             String name,
-            String type,
             String address,
             String city,
             String district,
             BigDecimal lat,
             BigDecimal lng,
-            String infoJson
+            String rules
             ) {}
 
     public record VenueRow(
@@ -48,13 +47,12 @@ public class VenueRepository {
     private static VenueRow mapRow(ResultSet rs, int rowNumber) throws SQLException {
         var data = new VenueData(
                 rs.getString("name"),
-                rs.getString("type"),
                 rs.getString("address"),
                 rs.getString("city"),
                 rs.getString("district"),
                 rs.getBigDecimal("lat"),
                 rs.getBigDecimal("lng"),
-                rs.getString("info_json")
+                rs.getString("rules")
         );
 
         return new VenueRow(
@@ -67,11 +65,8 @@ public class VenueRepository {
 
     public VenueRow insert(VenueData venue) {
         return bindVenue(jdbc.sql("""
-                INSERT INTO venue (name, type, address, city, district, lat, lng, info)
-                VALUES (
-                    :name, :type, :address, :city, :district, :lat, :lng,
-                    COALESCE(CAST(:info AS jsonb), '{}'::jsonb)
-                )
+                INSERT INTO venue (name, address, city, district, lat, lng, rules)
+                VALUES (:name, :address, :city, :district, :lat, :lng, :rules)
                 RETURNING
                 """ + COLUMNS), venue)
                 .query(VenueRepository::mapRow)
@@ -83,13 +78,12 @@ public class VenueRepository {
     ) {
         return statement
                 .param("name", venue.name())
-                .param("type", venue.type())
                 .param("address", venue.address())
                 .param("city", venue.city())
                 .param("district", venue.district())
                 .param("lat", venue.lat())
                 .param("lng", venue.lng())
-                .param("info", venue.infoJson());
+                .param("rules", venue.rules());
     }
 
     public List<VenueRow> findActive(
@@ -144,13 +138,12 @@ public class VenueRepository {
         return bindVenue(jdbc.sql("""
                 UPDATE venue
                 SET name = :name,
-                    type = :type,
                     address = :address,
                     city = :city,
                     district = :district,
                     lat = :lat,
                     lng = :lng,
-                    info = COALESCE(CAST(:info AS jsonb), '{}'::jsonb),
+                    rules = :rules,
                     updated_at = :now
                 WHERE id = :id AND deleted_at IS NULL
                 RETURNING
@@ -166,9 +159,11 @@ public class VenueRepository {
                 SELECT EXISTS (
                     SELECT 1
                     FROM showtime s
-                    JOIN seat_layout l ON l.id = s.seat_layout_id
-                    WHERE l.venue_id = :venueId
-                      AND s.status IN ('DRAFT', 'SCHEDULED')
+                    JOIN event e ON e.id = s.event_id
+                    JOIN seat_map m ON m.id = s.seat_map_id
+                    WHERE m.venue_id = :venueId
+                      AND s.cancelled_at IS NULL
+                      AND e.status IN ('DRAFT', 'PUBLISHED')
                       AND s.ends_at > :now
                 )
                 """)

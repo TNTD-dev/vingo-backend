@@ -89,24 +89,25 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(session.getChannel()).isEqualTo(OtpSession.ChannelEnum.EMAIL);
         assertThat(session.getExpiresAt()).isNotNull();
 
-        String status = jdbc.sql("SELECT status FROM users WHERE email = :email")
+        java.time.OffsetDateTime emailVerifiedAt = jdbc.sql("SELECT email_verified_at FROM user_account WHERE email = :email")
                 .param("email", normalizedEmail)
-                .query(String.class)
-                .single();
-        assertThat(status).isEqualTo("UNVERIFIED");
+                .query(java.time.OffsetDateTime.class)
+                .optional()
+                .orElse(null);
+        assertThat(emailVerifiedAt).isNull();
 
         assertThat(mailSender.sent).singleElement().satisfies(sent -> {
             assertThat(sent.payload().recipient()).isEqualTo(normalizedEmail);
             String otp = extractOtp(sent.payload().html());
-            String storedHash = jdbc.sql("SELECT otp_hash FROM otp_session WHERE id = :id")
+            String storedHash = jdbc.sql("SELECT code_hash FROM otp_verification WHERE id = :id")
                     .param("id", session.getOtpSessionId())
                     .query(String.class)
                     .single();
             assertThat(storedHash).startsWith("$argon2").doesNotContain(otp);
         });
 
-        // Không lưu OTP vào outbox_message
-        int outboxCount = jdbc.sql("SELECT count(*) FROM outbox_message WHERE recipient = :email")
+        // Không lưu OTP vào notification_outbox
+        int outboxCount = jdbc.sql("SELECT count(*) FROM notification_outbox WHERE recipient = :email")
                 .param("email", normalizedEmail)
                 .query(Integer.class)
                 .single();
@@ -144,7 +145,7 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(emailConflict).isNotNull();
         assertThat(emailConflict.getCode()).isEqualTo(Problem.CodeEnum.EMAIL_TAKEN);
 
-        jdbc.sql("UPDATE users SET phone_verified_at = :now WHERE email = :email")
+        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE email = :email")
                 .param("now", java.time.OffsetDateTime.now(clock)).param("email", email).update();
 
         Problem phoneConflict = client.post().uri(REGISTER)
@@ -222,7 +223,7 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(tokens.getAccessToken()).isNotBlank();
         assertThat(tokens.getRefreshToken()).isNotBlank();
         assertThat(tokens.getUser().getEmail()).isEqualTo(email);
-        assertThat(tokens.getUser().getStatus()).isEqualTo(User.StatusEnum.ACTIVE);
+        assertThat(tokens.getUser().getEmailVerified()).isTrue();
         assertThat(tokens.getUser().getRole()).isEqualTo(User.RoleEnum.BUYER);
         assertThat(tokens.getUser().getPhoneVerified()).isFalse();
 
@@ -314,30 +315,32 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
 
         // Qua cooldown 30s -> gửi lại thành công (202)
         clock.advance(Duration.ofSeconds(31));
-        client.post().uri(RESEND_OTP)
+        OtpSession resent = client.post().uri(RESEND_OTP)
                 .body(new ResendOtpRequest(session.getOtpSessionId()))
                 .exchange()
-                .expectStatus().isAccepted();
+                .expectStatus().isAccepted()
+                .expectBody(OtpSession.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(resent).isNotNull();
 
         assertThat(mailSender.sent).hasSize(2);
         String secondOtp = extractOtp(mailSender.sent.getLast().payload().html());
 
-        // Mã cũ bị vô hiệu hóa (trừ trường hợp ngẫu nhiên trùng 1/10^6)
-        if (!firstOtp.equals(secondOtp)) {
-            Problem oldRejected = client.post().uri(VERIFY_OTP)
-                    .body(new VerifyOtpRequest(session.getOtpSessionId(), firstOtp))
-                    .exchange()
-                    .expectStatus().isBadRequest()
-                    .expectBody(Problem.class)
-                    .returnResult()
-                    .getResponseBody();
-            assertThat(oldRejected).isNotNull();
-            assertThat(oldRejected.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
-        }
+        // Mã cũ bị vô hiệu hóa (phiên cũ không còn là phiên mới nhất)
+        Problem oldRejected = client.post().uri(VERIFY_OTP)
+                .body(new VerifyOtpRequest(session.getOtpSessionId(), firstOtp))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(Problem.class)
+                .returnResult()
+                .getResponseBody();
+        assertThat(oldRejected).isNotNull();
+        assertThat(oldRejected.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
 
         // Mã mới xác thực thành công
         client.post().uri(VERIFY_OTP)
-                .body(new VerifyOtpRequest(session.getOtpSessionId(), secondOtp))
+                .body(new VerifyOtpRequest(resent.getOtpSessionId(), secondOtp))
                 .exchange()
                 .expectStatus().isOk();
     }

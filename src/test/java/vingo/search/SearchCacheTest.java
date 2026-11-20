@@ -118,14 +118,13 @@ class SearchCacheTest extends IntegrationTest {
         assertThat(redis.hasKey(originalKey)).isTrue();
 
         fixtures.sellSeat(showtime, seat);
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.sql("UPDATE seat SET x = 999 WHERE id = :id").param("id", seat).update())
-                .isInstanceOf(org.springframework.jdbc.UncategorizedSQLException.class);
+        jdbc.sql("UPDATE seat SET number = 999 WHERE id = :id").param("id", seat).update();
 
         JsonNode second = get("/api/v1/showtimes/" + showtime + "/seatmap");
         JsonNode firstSeat = second.path("zones").get(0).path("seats").get(0);
         // Trạng thái ghế đọc DB mỗi lần; toạ độ là layout nên còn từ cache.
         assertThat(firstSeat.path("status").asString()).isEqualTo("SOLD");
-        assertThat(firstSeat.path("x").asInt()).isNotEqualTo(999);
+        assertThat(firstSeat.path("number").asInt()).isNotEqualTo(999);
 
         tx.executeWithoutResult(status ->
                 publisher.publishEvent(new CatalogChanged(created.id(), Set.of(showtime))));

@@ -99,25 +99,29 @@ class EventSearchRepository {
             }
             cand.append("""
                      UNION SELECT s.event_id FROM venue v
-                           JOIN seat_layout sl ON sl.venue_id = v.id
-                           JOIN showtime s ON s.seat_layout_id = sl.id
-                           WHERE v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now
+                           JOIN seat_map sl ON sl.venue_id = v.id
+                           JOIN showtime s ON s.seat_map_id = sl.id
+                           WHERE v.deleted_at IS NULL AND s.cancelled_at IS NULL AND s.starts_at >= :now
                              AND\s""").append(venueMatch("v")).append(showtimeFilter);
             where.append(" AND e.id IN (").append(cand).append(')');
             params.put("ts_query", q.tsQuery(mode));
             params.put("q_norm", q.text());
-            // Suất khớp sân nằm trong cùng bộ lọc; thẻ ưu tiên suất đó để hiện đúng sân người dùng vừa tìm.
             venueFlag = "(v0.deleted_at IS NULL AND " + venueMatch("v0") + ")";
             venueFirst = "CASE WHEN v.matched THEN 0 ELSE 1 END, ";
-            venueRank = "EXISTS (SELECT 1 FROM venue v JOIN seat_layout sl ON sl.venue_id = v.id"
-                    + " JOIN showtime s ON s.seat_layout_id = sl.id"
-                    + " WHERE s.event_id = e.id AND v.deleted_at IS NULL AND s.status = 'SCHEDULED' AND s.starts_at >= :now"
+            venueRank = "EXISTS (SELECT 1 FROM venue v JOIN seat_map sl ON sl.venue_id = v.id"
+                    + " JOIN showtime s ON s.seat_map_id = sl.id"
+                    + " WHERE s.event_id = e.id AND v.deleted_at IS NULL AND s.cancelled_at IS NULL AND s.starts_at >= :now"
                     + " AND " + venueMatch("v") + showtimeFilter + ")";
         }
         if (c.priceMin() != null || c.priceMax() != null) {
             where.append("""
-                     AND EXISTS (SELECT 1 FROM zone_price zp JOIN price_tier pt ON pt.id = zp.price_tier_id
-                                 WHERE zp.event_id = e.id""");
+                     AND EXISTS (SELECT 1 FROM event_zone ez
+                                 JOIN LATERAL (
+                                     SELECT price FROM sku_price
+                                     WHERE sku_id = ez.sku_id AND effective_from <= :now
+                                     ORDER BY effective_from DESC LIMIT 1
+                                 ) pt ON true
+                                 WHERE ez.event_id = e.id""");
             if (c.priceMin() != null) {
                 where.append(" AND pt.price >= :price_min");
                 params.put("price_min", c.priceMin());
@@ -150,10 +154,11 @@ class EventSearchRepository {
                 SELECT r.id, r.title, r.category, r.poster_url, r.venue_name, r.city, r.first_starts_at,
                        r.price_from, r.on_sale, r.sort_key
                 FROM (
-                    SELECT e.id, e.title, e.category, e.poster_url,
+                    SELECT e.id, e.title, e.category,
+                           COALESCE(e.poster_desktop_url, e.poster_mobile_url) AS poster_url,
                            nx.venue_name, nx.city, nx.first_starts_at, pf.price_from,
                            EXISTS (SELECT 1 FROM showtime s2
-                                   WHERE s2.event_id = e.id AND s2.status = 'SCHEDULED' AND s2.starts_at >= :now
+                                   WHERE s2.event_id = e.id AND s2.cancelled_at IS NULL AND s2.starts_at >= :now
                                      AND s2.sale_opens_at <= :now AND :now < s2.sale_closes_at) AS on_sale,
                            %s AS sort_key
                     FROM event e
@@ -162,18 +167,23 @@ class EventSearchRepository {
                         FROM showtime s
                         CROSS JOIN LATERAL (
                             SELECT v0.name, v0.city, %s AS matched
-                            FROM seat_layout sl JOIN venue v0 ON v0.id = sl.venue_id
-                            WHERE sl.id = s.seat_layout_id
+                            FROM seat_map sl JOIN venue v0 ON v0.id = sl.venue_id
+                            WHERE sl.id = s.seat_map_id
                             OFFSET 0
                         ) v
-                        WHERE s.event_id = e.id AND s.status = 'SCHEDULED' AND s.starts_at >= :now%s
+                        WHERE s.event_id = e.id AND s.cancelled_at IS NULL AND s.starts_at >= :now%s
                         ORDER BY %s s.starts_at, s.id
                         LIMIT 1
                     ) nx ON true
                     LEFT JOIN LATERAL (
                         SELECT min(pt.price) AS price_from
-                        FROM zone_price zp JOIN price_tier pt ON pt.id = zp.price_tier_id
-                        WHERE zp.event_id = e.id
+                        FROM event_zone ez
+                        JOIN LATERAL (
+                            SELECT price FROM sku_price
+                            WHERE sku_id = ez.sku_id AND effective_from <= :now
+                            ORDER BY effective_from DESC LIMIT 1
+                        ) pt ON true
+                        WHERE ez.event_id = e.id
                     ) pf ON true
                     %s
                     WHERE %s
@@ -196,14 +206,13 @@ class EventSearchRepository {
                 relevance ? Double.toString(rs.getDouble("sort_key")) : Long.toString(rs.getLong("sort_key")))).list();
     }
 
-    // Tổng vé SOLD của các suất sắp tới: ghế ngồi (showtime_seat) cộng khu đứng (showtime_zone_stock).
     private static final String POPULARITY_JOIN = """
             LEFT JOIN LATERAL (
-                SELECT (SELECT count(*) FROM showtime_seat ss JOIN showtime s3 ON s3.id = ss.showtime_id
-                        WHERE s3.event_id = e.id AND s3.status = 'SCHEDULED' AND s3.starts_at >= :now
+                SELECT (SELECT count(*) FROM seat_inventory ss JOIN showtime s3 ON s3.id = ss.showtime_id
+                        WHERE s3.event_id = e.id AND s3.cancelled_at IS NULL AND s3.starts_at >= :now
                           AND ss.status = 'SOLD')
-                     + (SELECT coalesce(sum(zs.sold), 0) FROM showtime_zone_stock zs JOIN showtime s4 ON s4.id = zs.showtime_id
-                        WHERE s4.event_id = e.id AND s4.status = 'SCHEDULED' AND s4.starts_at >= :now) AS sold
+                     + (SELECT coalesce(sum(zs.sold), 0) FROM standing_inventory zs JOIN showtime s4 ON s4.id = zs.showtime_id
+                        WHERE s4.event_id = e.id AND s4.cancelled_at IS NULL AND s4.starts_at >= :now) AS sold
             ) pop ON true""";
 
     /**

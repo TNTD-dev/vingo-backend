@@ -163,7 +163,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<UUID> tierIds(UUID eventId) {
         return jdbc.sql("""
-                SELECT id FROM price_tier
+                SELECT id FROM sku
                 WHERE event_id = :id
                 ORDER BY id
                 """)
@@ -174,9 +174,11 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<Map<String, Object>> tierRows(UUID eventId) {
         return jdbc.sql("""
-                SELECT * FROM price_tier
-                WHERE event_id = :id
-                ORDER BY id
+                SELECT s.id, s.event_id, s.name, s.color, sp.price
+                FROM sku s
+                JOIN LATERAL (SELECT price FROM sku_price WHERE sku_id = s.id ORDER BY effective_from DESC LIMIT 1) sp ON true
+                WHERE s.event_id = :id
+                ORDER BY s.id
                 """)
                 .param("id", eventId)
                 .query()
@@ -215,7 +217,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
         assertThat(before).hasSize(2);
         assertThat(before).allSatisfy(row
-                -> assertThat(row.get("price_tier_id"))
+                -> assertThat(row.get("sku_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
 
@@ -336,7 +338,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
         )).expectStatus().isOk();
 
         assertThat(zoneRows(event.id())).allSatisfy(row
-                -> assertThat(row.get("price_tier_id"))
+                -> assertThat(row.get("sku_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
     }
@@ -375,7 +377,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<Map<String, Object>> zoneRows(UUID eventId) {
         return jdbc.sql("""
-            SELECT * FROM zone_price
+            SELECT * FROM event_zone
             WHERE event_id = :id
             ORDER BY zone_id
             """)

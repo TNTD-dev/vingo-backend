@@ -115,7 +115,7 @@ class AdminAccountIntegrationTest extends IntegrationTest {
     @Test
     void update_rejectsSelfChangesInvalidBodiesAndMissingUsers() {
         UUID id = user("self");
-        jdbc.sql("UPDATE users SET role = 'ADMIN' WHERE id = :id").param("id", id).update();
+        jdbc.sql("UPDATE user_account SET role = 'ADMIN' WHERE id = :id").param("id", id).update();
         String admin = tokenFor(id, Role.ADMIN);
         for (var body : java.util.List.of(Map.of("role", "BUYER", "reason", "Test"), Map.of("locked", true, "reason", "Test"))) {
             client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin)).body(body)
@@ -140,12 +140,15 @@ class AdminAccountIntegrationTest extends IntegrationTest {
     void update_rejectsUnverifiedDeletedAndGoogleOnlyPromotion_andReplayDoesNotAudit() {
         String admin = tokenFor(Role.ADMIN);
         UUID id = user("state");
-        for (String state : java.util.List.of("UNVERIFIED", "DELETED")) {
-            jdbc.sql("UPDATE users SET status = :status WHERE id = :id").param("status", state).param("id", id).update();
-            client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
-                    .body(Map.of("locked", false, "reason", "Test")).exchange().expectStatus().isBadRequest();
-        }
-        jdbc.sql("UPDATE users SET status = 'ACTIVE', google_sub = :sub, password_hash = NULL WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET email_verified_at = NULL WHERE id = :id").param("id", id).update();
+        client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
+                .body(Map.of("locked", false, "reason", "Test")).exchange().expectStatus().isBadRequest();
+        jdbc.sql("UPDATE user_account SET email_verified_at = :now, deleted_at = :now WHERE id = :id")
+                .param("now", java.time.OffsetDateTime.now(clock)).param("id", id).update();
+        client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
+                .body(Map.of("locked", false, "reason", "Test")).exchange().expectStatus().isBadRequest();
+        jdbc.sql("UPDATE user_account SET email_verified_at = :now, deleted_at = NULL, google_sub = :sub, password_hash = NULL WHERE id = :id")
+                .param("now", java.time.OffsetDateTime.now(clock))
                 .param("sub", UUID.randomUUID().toString()).param("id", id).update();
         client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
                 .body(Map.of("role", "ADMIN", "reason", "Test")).exchange().expectStatus().isBadRequest();
@@ -157,15 +160,15 @@ class AdminAccountIntegrationTest extends IntegrationTest {
 
     private UUID user(String name) {
         return jdbc.sql("""
-                INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
-                VALUES (:email, :name, :hash, 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
+                INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone, phone_verified_at)
+                VALUES (:email, :name, :hash, 'BUYER', :now, :phone, :now) RETURNING id
                 """).param("email", name + UUID.randomUUID() + "@accounts.test").param("name", name)
                 .param("phone", vingo.support.CatalogFixture.uniquePhone())
                 .param("now", java.time.OffsetDateTime.now(clock))
                 .param("hash", passwords.encode("Password#2026")).query(UUID.class).single();
     }
 
-    private String email(UUID id) { return jdbc.sql("SELECT email FROM users WHERE id = :id").param("id", id).query(String.class).single(); }
+    private String email(UUID id) { return jdbc.sql("SELECT email FROM user_account WHERE id = :id").param("id", id).query(String.class).single(); }
 
     private TokenPair login(UUID id) {
         return client.post().uri("/api/v1/auth/login").body(new LoginRequest(email(id), "Password#2026"))

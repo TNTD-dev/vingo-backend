@@ -58,34 +58,45 @@ public class AdminAccountService {
         if (body == null || body.getReason() == null || body.getReason().isBlank() || body.getReason().length() > 500
                 || (body.getRole() == null && body.getLocked() == null)) throw invalid("Cần thao tác và lý do hợp lệ");
         accounts.lockAdministration();
+        var now = OffsetDateTime.now(clock);
         UUID actor = currentUser.require().id();
         var administrator = accounts.find(actor, false).orElseThrow(() -> new DomainException(ErrorCode.UNAUTHORIZED, "Phiên không hợp lệ"));
-        if (administrator.getRole() != AdminAccount.RoleEnum.ADMIN || administrator.getStatus() != AdminAccount.StatusEnum.ACTIVE
-                || administrator.getAdminLocked()) throw new DomainException(ErrorCode.FORBIDDEN, "Không còn quyền quản trị");
+        if (administrator.getRole() != AdminAccount.RoleEnum.ADMIN || !isActive(administrator, now)) {
+            throw new DomainException(ErrorCode.FORBIDDEN, "Không còn quyền quản trị");
+        }
         var before = accounts.find(id, true).orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy tài khoản"));
-        if (!List.of(AdminAccount.StatusEnum.ACTIVE, AdminAccount.StatusEnum.LOCKED).contains(before.getStatus())) {
+        if (before.getDeletedAt() != null || before.getEmailVerifiedAt() == null) {
             throw invalid("Chỉ quản lý quyền/khóa của tài khoản đã xác minh và chưa xóa");
         }
         String role = body.getRole() == null ? before.getRole().getValue() : body.getRole().getValue();
         boolean locked = body.getLocked() == null ? before.getAdminLocked() : body.getLocked();
-        String status = body.getLocked() == null ? before.getStatus().getValue() : (locked ? "LOCKED" : "ACTIVE");
+        boolean wasActive = isActive(before, now);
+        boolean willBeActive = !locked && (body.getLocked() != null || before.getLockedUntil() == null || !before.getLockedUntil().isAfter(now));
         if ("ADMIN".equals(role) && !before.getHasPassword()) throw invalid("Tài khoản cần thiết lập mật khẩu trước khi được cấp ADMIN");
         if (actor.equals(id) && (!"ADMIN".equals(role) || locked)) {
             throw new DomainException(ErrorCode.FORBIDDEN, "Không được tự hạ quyền hoặc tự khóa tài khoản");
         }
-        if (role.equals(before.getRole().getValue()) && status.equals(before.getStatus().getValue())
-                && locked == before.getAdminLocked()) return before;
-        if (before.getRole() == AdminAccount.RoleEnum.ADMIN && before.getStatus() == AdminAccount.StatusEnum.ACTIVE
-                && (!"ADMIN".equals(role) || !"ACTIVE".equals(status)) && accounts.activeAdmins() <= 1) {
+        if (role.equals(before.getRole().getValue()) && locked == before.getAdminLocked()
+                && (body.getLocked() == null || !Boolean.FALSE.equals(body.getLocked()) || before.getLockedUntil() == null)) {
+            return before;
+        }
+        if (before.getRole() == AdminAccount.RoleEnum.ADMIN && wasActive
+                && (!"ADMIN".equals(role) || !willBeActive) && accounts.activeAdmins() <= 1) {
             throw new DomainException(ErrorCode.ACTION_STATE_INVALID, "Cần giữ ít nhất một ADMIN hoạt động");
         }
-        var now = OffsetDateTime.now(clock);
-        accounts.update(id, role, status, locked, body.getLocked() != null, now);
+        accounts.update(id, role, locked, body.getLocked() != null, now);
         var after = get(id);
         accounts.audit(actor, before, after, body.getReason().strip(), now);
         log.atInfo().addKeyValue("actor_id", actor).addKeyValue("user_id", id)
-                .addKeyValue("role", role).addKeyValue("status", status).log("Updated account access");
+                .addKeyValue("role", role).addKeyValue("admin_locked", locked).log("Updated account access");
         return after;
+    }
+
+    private static boolean isActive(AdminAccount account, OffsetDateTime now) {
+        return account.getDeletedAt() == null
+                && account.getEmailVerifiedAt() != null
+                && !Boolean.TRUE.equals(account.getAdminLocked())
+                && (account.getLockedUntil() == null || !account.getLockedUntil().isAfter(now));
     }
 
     private static DomainException invalid(String message) { return new DomainException(ErrorCode.VALIDATION_ERROR, message); }

@@ -37,7 +37,7 @@ class TicketsApiTest extends TicketingTestSupport {
         assertThat(text(json, "$.code")).isEqualTo(stored.code()).isNotBlank();
         assertThat(text(json, "$.status")).isEqualTo("ISSUED");
         assertThat(text(json, "$.qr_token")).isEqualTo(stored.qrToken()).isNotBlank();
-        assertThat(text(json, "$.order_code")).isEqualTo(jdbc.sql("SELECT code FROM orders WHERE id = :id")
+        assertThat(text(json, "$.order_code")).isEqualTo(jdbc.sql("SELECT code FROM ticket_order WHERE id = :id")
                 .param("id", order).query(String.class).single());
         assertThat(text(json, "$.zone")).isEqualTo("A");
         assertThat(text(json, "$.row")).isEqualTo("A");

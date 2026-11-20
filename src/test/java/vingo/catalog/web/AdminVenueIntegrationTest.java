@@ -160,8 +160,8 @@ class AdminVenueIntegrationTest extends IntegrationTest {
         String name = uniqueName();
 
         jdbc.sql("""
-                INSERT INTO venue (name, type, address, city)
-                VALUES (:name, 'STADIUM', :address, 'LEGACY-CITY')
+                INSERT INTO venue (name, address, city)
+                VALUES (:name, :address, 'LEGACY-CITY')
                 """)
                 .param("name", name)
                 .param("address", ADDRESS)
@@ -193,7 +193,6 @@ class AdminVenueIntegrationTest extends IntegrationTest {
                 .jsonPath("$.id").isEqualTo(id.toString())
                 .jsonPath("$.name").isEqualTo(newName)
                 .jsonPath("$.address").isEqualTo(ADDRESS)
-                .jsonPath("$.type").isEqualTo("STADIUM")
                 .jsonPath("$.city").isEqualTo("HN");
     }
 

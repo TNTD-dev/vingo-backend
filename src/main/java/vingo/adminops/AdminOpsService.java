@@ -102,7 +102,7 @@ public class AdminOpsService {
                 ticketing.issueForOrder(orderId);
                 booking.publishOrderPaid(orderId);
             }
-            auditLogs.insert(adminId, "RESOLVE_REVIEW", "order", orderId, request.getReason(), now,
+            auditLogs.insert(adminId, "RESOLVE_REVIEW", "ticket_order", orderId, request.getReason(), now,
                     Map.of("status", "NEEDS_REVIEW"), Map.of("status", order.getStatus().getValue()));
             logAction("RESOLVE_REVIEW", LogKeys.ORDER_ID, orderId, adminId);
             return order;

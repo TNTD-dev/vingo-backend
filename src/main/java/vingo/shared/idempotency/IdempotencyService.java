@@ -62,32 +62,33 @@ public class IdempotencyService {
         OffsetDateTime now = OffsetDateTime.now(clock);
         // Giới hạn 3 lần thử để không lặp mãi khi key liên tục bị xoá hoặc tạo lại.
         for (int attempt = 0; attempt < 3; attempt++) {
-            var inserted = jdbc.sql("""
-                            INSERT INTO idempotency_key (user_id, endpoint, key, request_hash, created_at)
+            int inserted = jdbc.sql("""
+                            INSERT INTO idempotency_record (user_id, endpoint, key, request_hash, created_at)
                             VALUES (:user, :endpoint, :key, :hash, :now)
-                            ON CONFLICT (user_id, endpoint, key) DO NOTHING RETURNING id
+                            ON CONFLICT (user_id, endpoint, key) DO NOTHING
                             """)
                     .param("user", userId).param("endpoint", endpoint).param("key", key.toString())
-                    .param("hash", requestHash).param("now", now).query(UUID.class).optional();
+                    .param("hash", requestHash).param("now", now).update();
 
-            if (inserted.isPresent()) {
+            if (inserted > 0) {
                 T result = action.get();
                 jdbc.sql("""
-                                UPDATE idempotency_key SET response_status = :status, response = CAST(:response AS jsonb)
-                                WHERE id = :id
+                                UPDATE idempotency_record SET response_status = :status, response = CAST(:response AS jsonb)
+                                WHERE user_id = :user AND endpoint = :endpoint AND key = :key
                                 """)
                         .param("status", responseStatus).param("response", jsonMapper.writeValueAsString(result))
-                        .param("id", inserted.get()).update();
+                        .param("user", userId).param("endpoint", endpoint).param("key", key.toString())
+                        .update();
                 return result;
             }
 
             var previous = jdbc.sql("""
-                            SELECT id, created_at, request_hash, response FROM idempotency_key
+                            SELECT created_at, request_hash, response FROM idempotency_record
                             WHERE user_id = :user AND endpoint = :endpoint AND key = :key
                             FOR UPDATE
                             """)
                     .param("user", userId).param("endpoint", endpoint).param("key", key.toString())
-                    .query((rs, row) -> new StoredResponse(rs.getObject("id", UUID.class),
+                    .query((rs, row) -> new StoredResponse(
                             rs.getObject("created_at", OffsetDateTime.class),
                             rs.getString("request_hash"), rs.getString("response")))
                     .optional();
@@ -97,7 +98,8 @@ public class IdempotencyService {
             }
             var stored = previous.get();
             if (!stored.createdAt().isAfter(now.minusHours(24))) {
-                jdbc.sql("DELETE FROM idempotency_key WHERE id = :id").param("id", stored.id()).update();
+                jdbc.sql("DELETE FROM idempotency_record WHERE user_id = :user AND endpoint = :endpoint AND key = :key")
+                        .param("user", userId).param("endpoint", endpoint).param("key", key.toString()).update();
                 continue;
             }
             if (!requestHash.equals(stored.requestHash())) {
@@ -121,5 +123,5 @@ public class IdempotencyService {
         }
     }
 
-    private record StoredResponse(UUID id, OffsetDateTime createdAt, String requestHash, String response) {}
+    private record StoredResponse(OffsetDateTime createdAt, String requestHash, String response) {}
 }

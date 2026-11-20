@@ -27,13 +27,10 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
                           "title": "  Trận đấu thử nghiệm  ",
                           "category": "FOOTBALL",
                           "description": "Giới thiệu trận đấu",
-                          "attributes": {
-                            "home_team": "Đội A",
-                            "away_team": "Đội B"
-                          },
+                          "home_team": "Đội A",
+                          "away_team": "Đội B",
                           "poster_mobile_url": "https://example.com/mobile.jpg",
                           "poster_desktop_url": "https://example.com/desktop.jpg",
-                          "age_limit": 16,
                           "max_tickets_per_order": 4
                         }
                         """)
@@ -55,10 +52,9 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
         UUID id = UUID.fromString(JsonPath.read(response, "$.id"));
 
         var saved = jdbc.sql("""
-                SELECT title, status, description, category,
+                SELECT title, status::text AS status, description, category,
                        poster_mobile_url, poster_desktop_url,
-                       age_limit, max_tickets_per_order, published_at,
-                       attributes ->> 'home_team' AS home_team
+                       max_tickets_per_order, home_team
                 FROM event
                 WHERE id = :id
                 """)
@@ -76,10 +72,8 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
                 .isEqualTo("https://example.com/mobile.jpg");
         assertThat(saved.get("poster_desktop_url"))
                 .isEqualTo("https://example.com/desktop.jpg");
-        assertThat(saved.get("age_limit")).isEqualTo(16);
         assertThat(saved.get("max_tickets_per_order")).isEqualTo(4);
         assertThat(saved.get("home_team")).isEqualTo("Đội A");
-        assertThat(saved.get("published_at")).isNull();
 
         assertThat(jdbc.sql("""
                 SELECT count(*) FROM showtime WHERE event_id = :id
@@ -90,7 +84,7 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void createEvent_defaultsToTenTicketsAndEmptyAttributes() {
+    void createEvent_defaultsToTenTicketsAndNullFootballFields() {
         String response = client.post().uri(PATH)
                 .headers(h -> h.setBearerAuth(tokenFor(Role.ADMIN)))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -114,9 +108,8 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
 
         boolean defaultsSaved = jdbc.sql("""
                 SELECT max_tickets_per_order = 10
-                   AND attributes = '{}'::jsonb
+                   AND home_team IS NULL
                    AND status = 'DRAFT'
-                   AND published_at IS NULL
                 FROM event WHERE id = :id
                 """)
                 .param("id", id)
@@ -133,10 +126,8 @@ class AdminEventCreateIntegrationTest extends IntegrationTest {
             "{\"category\":\"FOOTBALL\"}",
             "{\"title\":\"   \",\"category\":\"FOOTBALL\"}",
             "{\"title\":\"A\",\"category\":\"INVALID\"}",
-            "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"age_limit\":-1}",
             "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"max_tickets_per_order\":0}",
             "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"max_tickets_per_order\":21}",
-            "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"attributes\":[]}",
             "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"poster_mobile_url\":\"/mobile.jpg\"}",
             "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"poster_desktop_url\":\"ftp://example.com/a.jpg\"}",
             "{\"title\":\"A\",\"category\":\"FOOTBALL\",\"poster_mobile_url\":\"https:/mobile.jpg\"}"

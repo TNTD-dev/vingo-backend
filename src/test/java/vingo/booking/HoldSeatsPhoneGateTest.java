@@ -42,7 +42,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
 
     @AfterEach
     void restoreClock() {
-        jdbc.sql("DELETE FROM phone_otp_send WHERE user_id = :id").param("id", buyer).update();
+        jdbc.sql("DELETE FROM otp_verification WHERE purpose = 'PHONE' AND user_id = :id").param("id", buyer).update();
         sms.reset();
         clock.reset();
     }
@@ -55,7 +55,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
 
     @Test
     void holdSeats_returns422ForGoogleStyleBuyerWithoutPhone_withoutWrites() {
-        jdbc.sql("UPDATE users SET phone = NULL, phone_verified_at = NULL WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET phone = NULL, phone_verified_at = NULL WHERE id = :id")
                 .param("id", buyer).update();
         assertBlockedWithoutWrites();
     }
@@ -69,7 +69,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
 
     @Test
     void holdSeats_returns201ForAdminWithoutVerifiedPhone() {
-        jdbc.sql("UPDATE users SET role = 'ADMIN', phone = NULL, phone_verified_at = NULL WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET role = 'ADMIN', phone = NULL, phone_verified_at = NULL WHERE id = :id")
                 .param("id", buyer).update();
         holdOk(tokenFor(buyer, Role.ADMIN), showtime.id(), key, request);
         assertThat(orderCount(buyer)).isEqualTo(1);
@@ -79,7 +79,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
     void holdSeats_returns201WithSameIdempotencyKey_afterBuyerVerifiesPhoneThroughApi() {
         unverify();
         assertBlockedWithoutWrites();
-        String phone = jdbc.sql("SELECT phone FROM users WHERE id = :id")
+        String phone = jdbc.sql("SELECT phone FROM user_account WHERE id = :id")
                 .param("id", buyer).query(String.class).single();
         OtpSession session = client.post().uri("/api/v1/me/phone/otp")
                 .headers(h -> h.setBearerAuth(token)).body(new PhoneOtpRequest(phone))
@@ -103,7 +103,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
     }
 
     private void unverify() {
-        jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
+        jdbc.sql("UPDATE user_account SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
     }
 
     private void assertBlockedWithoutWrites() {
@@ -114,7 +114,7 @@ class HoldSeatsPhoneGateTest extends BookingTestSupport {
     }
 
     private int idempotencyCount() {
-        return jdbc.sql("SELECT count(*) FROM idempotency_key WHERE user_id = :user")
+        return jdbc.sql("SELECT count(*) FROM idempotency_record WHERE user_id = :user")
                 .param("user", buyer).query(Integer.class).single();
     }
 }

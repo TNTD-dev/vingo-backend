@@ -59,10 +59,10 @@ class AuditLogApiTest extends AdminOpsTestSupport {
         assertLastPage(json);
 
         String wrongEntity = body(get(adminToken,
-                "/api/v1/admin/audit-logs?entity=order&entity_id={id}", target), 200);
+                "/api/v1/admin/audit-logs?entity=ticket_order&entity_id={id}", target), 200);
         assertThat(rows(wrongEntity)).isEmpty();
         String orderPage = body(get(adminToken,
-                "/api/v1/admin/audit-logs?entity=order&entity_id={id}", order), 200);
+                "/api/v1/admin/audit-logs?entity=ticket_order&entity_id={id}", order), 200);
         assertThat(rows(orderPage)).hasSize(1);
         assertThat(rows(orderPage).getFirst()).containsEntry("action", "RESOLVE_REVIEW")
                 .containsEntry("before", Map.of("status", "NEEDS_REVIEW"))

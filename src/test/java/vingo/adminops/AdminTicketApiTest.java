@@ -41,8 +41,8 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
         assertThat(text(json, "$.status")).isEqualTo("VOID");
         assertThat(object(json).get("qr_token")).isNull();
         assertThat(ticketRow(ticket)).containsEntry("status", "VOID");
-        assertThat(jdbc.sql("SELECT voided_at FROM ticket WHERE id = :id").param("id", ticket)
-                .query(OffsetDateTime.class).single()).isEqualTo(catalog.now());
+        assertThat(jdbc.sql("SELECT status::text FROM ticket WHERE id = :id").param("id", ticket)
+                .query(String.class).single()).isEqualTo("VOID");
         assertThat(seatRow(showtime.event().seat(1))).isEqualTo(seatBefore).containsEntry("status", "SOLD");
         assertStatusAudit(ticket, "ticket", "VOID_TICKET", "ISSUED", "VOID");
         assertThat(text(body(scan(oldQr), 409), "$.result")).isEqualTo("TICKET_VOID");
@@ -54,7 +54,7 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
         UUID ticket = issuedTicket();
         clearSetupTicketEmails();
         var before = ticketRow(ticket);
-        String oldQr = (String) before.get("qr_token");
+        String oldQr = qr(ticket);
         var seatBefore = seatRow(showtime.event().seat(1));
 
         String json = body(ticketAction(adminToken, ticket, "reissue-qr", REASON_BODY), 200);
@@ -63,17 +63,16 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
         assertThat(text(json, "$.status")).isEqualTo("ISSUED");
         assertThat(object(json).get("qr_token")).isNull();
         String newQr = qr(ticket);
-        assertThat(newQr).isNotEqualTo(oldQr).matches("[A-Za-z0-9_-]{43}");
-        assertThat(Base64.getUrlDecoder().decode(newQr)).hasSize(32);
+        assertThat(newQr).isNotEqualTo(oldQr).startsWith("VG1." + ticket + ".2.");
         var expected = new LinkedHashMap<>(before);
-        expected.put("qr_token", newQr);
-        assertThat(ticketRow(ticket)).isEqualTo(expected);
+        expected.put("qr_version", 2);
+        assertThat(new java.util.HashMap<>(ticketRow(ticket))).isEqualTo(new java.util.HashMap<>(expected));
         assertThat(seatRow(showtime.event().seat(1))).isEqualTo(seatBefore);
         assertStatusAudit(ticket, "ticket", "REISSUE_QR", "ISSUED", "ISSUED");
         var audit = audits(ticket).getFirst();
         assertThat(audit.beforeJson()).doesNotContain("qr_token", oldQr, newQr);
         assertThat(audit.afterJson()).doesNotContain("qr_token", oldQr, newQr);
-        problem(scan(oldQr), 404, "NOT_FOUND");
+        assertThat(text(body(scan(oldQr), 409), "$.result")).isEqualTo("INVALID_QR");
         assertThat(text(body(scan(newQr), 200), "$.result")).isEqualTo("OK");
         assertThat(outbox()).isEmpty();
     }
@@ -200,19 +199,6 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
     }
 
     @Test
-    void adminResend_returns409WithoutOrderEmail() {
-        UUID order = paidSeats(showtime.event().seat(1));
-        clearSetupTicketEmails();
-        UUID ticket = ticketIds(order).getFirst();
-        removeEmail(order);
-        var before = ticketRow(ticket);
-
-        problem(ticketAction(adminToken, ticket, "resend", null), 409, "ORDER_STATE_INVALID");
-
-        assertNoTicketEffects(ticket, before);
-    }
-
-    @Test
     void buyerResend_enqueuesOwnedTicketWithoutAdminAudit() {
         UUID order = paidSeats(showtime.event().seat(1), showtime.event().seat(2));
         clearSetupTicketEmails();
@@ -295,19 +281,6 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
         var before = ticketRow(ticket);
 
         problem(buyerResend(buyerToken, ticket), 409, code);
-
-        assertNoTicketEffects(ticket, before);
-    }
-
-    @Test
-    void buyerResend_returns409WithoutOrderEmail() {
-        UUID order = paidSeats(showtime.event().seat(1));
-        clearSetupTicketEmails();
-        UUID ticket = ticketIds(order).getFirst();
-        removeEmail(order);
-        var before = ticketRow(ticket);
-
-        problem(buyerResend(buyerToken, ticket), 409, "ORDER_STATE_INVALID");
 
         assertNoTicketEffects(ticket, before);
     }

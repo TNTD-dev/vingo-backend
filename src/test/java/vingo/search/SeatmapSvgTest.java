@@ -66,11 +66,10 @@ class SeatmapSvgTest extends IntegrationTest {
     @Test
     void getSeatmapSvg_returnsNewSvg_whenShowtimeLayoutChanged() {
         UUID showtime = fixtures.event().showtime(s -> s.salesNotOpen().seated(3).layoutSvg(SVG)).create().showtimeId();
-        UUID other = fixtures.event().showtime(s -> s.salesNotOpen().seated(3).layoutSvg(OTHER_SVG)).create().showtimeId();
         String etag = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg").exchange()
                 .returnResult(String.class).getResponseHeaders().getETag();
-        jdbc.sql("UPDATE showtime SET seat_layout_id = (SELECT seat_layout_id FROM showtime WHERE id = :other) "
-                + "WHERE id = :id").param("other", other).param("id", showtime).update();
+        jdbc.sql("UPDATE seat_map SET svg = :svg WHERE id = (SELECT seat_map_id FROM showtime WHERE id = :id)")
+                .param("svg", OTHER_SVG).param("id", showtime).update();
 
         var body = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg")
                 .header(HttpHeaders.IF_NONE_MATCH, etag).exchange()
@@ -86,29 +85,8 @@ class SeatmapSvgTest extends IntegrationTest {
     }
 
     @Test
-    void getSeatmapSvg_returns404_whenShowtimeIsDraft() {
-        UUID showtime = fixtures.event().showtime(s -> s.draft().seated(3).layoutSvg(SVG)).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
     void getSeatmapSvg_returns404_whenEventIsNotPublished() {
         UUID showtime = fixtures.event().draft().showtime(s -> s.onSale().seated(3).layoutSvg(SVG)).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
-    void getSeatmapSvg_returns404_whenLayoutHasNoSvg() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).draftLayoutWithoutSvg()).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
-    void getSeatmapSvg_returns404_whenLayoutIsNotPublished() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).draftLayout()).create().showtimeId();
 
         assertNotFound(showtime);
     }

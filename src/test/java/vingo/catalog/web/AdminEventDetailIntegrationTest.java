@@ -42,12 +42,9 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
                           "title": "Sự kiện nháp",
                           "category": "FOOTBALL",
                           "description": "Thông tin thử nghiệm",
-                          "attributes": {
-                            "home_team": "Đội A"
-                          },
+                          "home_team": "Đội A",
                           "poster_mobile_url": "https://example.com/mobile.jpg",
                           "poster_desktop_url": "https://example.com/desktop.jpg",
-                          "age_limit": 16,
                           "max_tickets_per_order": 4
                         }
                         """)
@@ -70,12 +67,11 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
                 .jsonPath("$.category").isEqualTo("FOOTBALL")
                 .jsonPath("$.description")
                     .isEqualTo("Thông tin thử nghiệm")
-                .jsonPath("$.attributes.home_team").isEqualTo("Đội A")
+                .jsonPath("$.home_team").isEqualTo("Đội A")
                 .jsonPath("$.poster_mobile_url")
                     .isEqualTo("https://example.com/mobile.jpg")
                 .jsonPath("$.poster_desktop_url")
                     .isEqualTo("https://example.com/desktop.jpg")
-                .jsonPath("$.age_limit").isEqualTo(16)
                 .jsonPath("$.max_tickets_per_order").isEqualTo(4)
                 .jsonPath("$.price_tiers").isEmpty()
                 .jsonPath("$.showtimes").isEmpty();
@@ -83,7 +79,7 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "DRAFT", "PUBLISHED", "ENDED", "CANCELLED"
+            "DRAFT", "PUBLISHED", "CANCELLED"
     })
     void getAdminEvent_returnsEventRegardlessOfStatus(String status) {
         var event = catalog.event(
@@ -108,25 +104,12 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
         var firstEvent = catalog.event(
                 EventSpec.defaults().withCity("HN").withStatus("DRAFT")
         );
-        var secondEvent = catalog.event(
-                EventSpec.defaults().withCity("DN")
-        );
 
-        var draft = catalog.showtime(firstEvent, Window.draft());
+        var draft = catalog.showtime(firstEvent, Window.notOpenYet());
         var cancelled = catalog.showtime(firstEvent, Window.cancelled());
         var otherVenue = catalog.showtime(
-                secondEvent, Window.notOpenYet()
+                firstEvent, Window.onSale()
         );
-
-        // Chuyển suất thứ hai về cùng sự kiện để dựng case nhiều sân.
-        jdbc.sql("""
-                UPDATE showtime
-                SET event_id = :eventId
-                WHERE id = :showtimeId
-                """)
-                .param("eventId", firstEvent.id())
-                .param("showtimeId", otherVenue.id())
-                .update();
 
         String response = readDetails(firstEvent.id());
 
@@ -168,17 +151,17 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
 
         assertThat(JsonPath.<List<String>>read(
                 response, otherPath + ".venue.id"))
-                .containsExactly(secondEvent.venueId().toString());
+                .containsExactly(firstEvent.venueId().toString());
         assertThat(JsonPath.<List<String>>read(
                 response, otherPath + ".venue.city"))
-                .containsExactly("DN");
+                .containsExactly("HN");
 
         assertThat(JsonPath.<List<String>>read(
                 response, otherPath + ".venue.id"))
-                .containsExactly(secondEvent.venueId().toString());
+                .containsExactly(firstEvent.venueId().toString());
         assertThat(JsonPath.<List<String>>read(
                 response, otherPath + ".seat_layout_id"))
-                .containsExactly(secondEvent.layoutId().toString());
+                .containsExactly(firstEvent.layoutId().toString());
     }
 
     @Test
@@ -209,14 +192,14 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
         clock.set(start.plus(Duration.ofHours(4)));
         assertShowtimeStatus(event.id(), "FINISHED");
 
-        String storedStatus = jdbc.sql("""
-                SELECT status FROM showtime WHERE id = :id
+        java.time.OffsetDateTime cancelledAt = jdbc.sql("""
+                SELECT cancelled_at FROM showtime WHERE id = :id
                 """)
                 .param("id", showtime.id())
-                .query(String.class)
-                .single();
+                .query(java.time.OffsetDateTime.class)
+                .optional().orElse(null);
 
-        assertThat(storedStatus).isEqualTo("SCHEDULED");
+        assertThat(cancelledAt).isNull();
     }
 
     @Test

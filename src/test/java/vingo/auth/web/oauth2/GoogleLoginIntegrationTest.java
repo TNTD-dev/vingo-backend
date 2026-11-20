@@ -87,10 +87,10 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         }
         String sentinel = UUID.randomUUID().toString();
         jdbc.sql("""
-                        INSERT INTO oauth_login_request (state_hash, browser_hash, request_json, expires_at)
+                        INSERT INTO oauth_state (state_hash, browser_hash, request, expires_at)
                         VALUES (:hash, 'expired', '{}', now() - interval '1 minute')
                         """).param("hash", TokenSecrets.hash(sentinel)).update();
-        int before = jdbc.sql("SELECT count(*) FROM oauth_login_request").query(Integer.class).single();
+        int before = jdbc.sql("SELECT count(*) FROM oauth_state").query(Integer.class).single();
 
         client.get().uri(START).header("X-Forwarded-For", "192.0.2.42")
                 .exchange().expectStatus().isEqualTo(429)
@@ -98,7 +98,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .expectBody().jsonPath("$.code").isEqualTo("RATE_LIMITED");
 
         assertThat(pending(sentinel)).isEqualTo(1);
-        assertThat(jdbc.sql("SELECT count(*) FROM oauth_login_request").query(Integer.class).single()).isEqualTo(before);
+        assertThat(jdbc.sql("SELECT count(*) FROM oauth_state").query(Integer.class).single()).isEqualTo(before);
     }
 
     /** Hai callback HTTP đi qua filter chain, đổi code và tạo hai phiên cho một user. */
@@ -116,9 +116,9 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .noneMatch(value -> value.contains("JSESSIONID") || value.contains("google-test-access"));
         String token = cookieValue(cookie);
 
-        UUID userId = jdbc.sql("SELECT id FROM users WHERE google_sub = :sub AND password_hash IS NULL")
+        UUID userId = jdbc.sql("SELECT id FROM user_account WHERE google_sub = :sub AND password_hash IS NULL")
                 .param("sub", subject).query(UUID.class).single();
-        var stored = jdbc.sql("SELECT refresh_token_hash FROM sessions WHERE user_id = :id")
+        var stored = jdbc.sql("SELECT token_hash FROM login_session WHERE user_id = :id")
                 .param("id", userId).query(String.class).list();
         assertThat(stored).hasSize(2).contains(TokenSecrets.hash(token)).doesNotContain(token);
 
@@ -143,17 +143,17 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
     void matchingEmail_doesNotLinkOrCreateSession() throws Exception {
         String email = UUID.randomUUID() + "@gmail.com";
         UUID userId = jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status)
-                        VALUES (:email, 'Local', 'hash', 'ADMIN', 'ACTIVE') RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at)
+                        VALUES (:email, 'Local', 'hash', 'ADMIN', now()) RETURNING id
                         """)
                 .param("email", email).query(UUID.class).single();
 
         var response = callback(UUID.randomUUID().toString(), email.toUpperCase(Locale.ROOT), true);
         assertThat(response.getLocation()).hasToString(RETURN + "email_taken");
         assertThat(refreshCookie(response)).isNull();
-        assertThat(jdbc.sql("SELECT count(*) FROM sessions WHERE user_id = :id")
+        assertThat(jdbc.sql("SELECT count(*) FROM login_session WHERE user_id = :id")
                 .param("id", userId).query(Integer.class).single()).isZero();
-        assertThat(jdbc.sql("SELECT count(*) FROM users WHERE id = :id AND google_sub IS NULL")
+        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE id = :id AND google_sub IS NULL")
                 .param("id", userId).query(Integer.class).single()).isEqualTo(1);
     }
 
@@ -167,7 +167,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
             var second = executor.submit(() -> callback(subject, email, true).getLocation().toString());
             assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(RETURN + "created", RETURN + "success");
         }
-        assertThat(jdbc.sql("SELECT count(*) FROM users WHERE google_sub = :subject")
+        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE google_sub = :subject")
                 .param("subject", subject).query(Integer.class).single()).isEqualTo(1);
     }
 
@@ -177,7 +177,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         String subject = UUID.randomUUID().toString();
         var response = callback(subject, UUID.randomUUID() + "@gmail.com", false);
         assertThat(response.getLocation()).hasToString(RETURN + "failed");
-        assertThat(jdbc.sql("SELECT count(*) FROM users WHERE google_sub = :subject")
+        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE google_sub = :subject")
                 .param("subject", subject).query(Integer.class).single()).isZero();
     }
 
@@ -219,7 +219,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
 
     /** Đếm yêu cầu OAuth2 còn trong PostgreSQL theo state ban đầu. */
     private int pending(String state) {
-        return jdbc.sql("SELECT count(*) FROM oauth_login_request WHERE state_hash = :state")
+        return jdbc.sql("SELECT count(*) FROM oauth_state WHERE state_hash = :state")
                 .param("state", TokenSecrets.hash(state)).query(Integer.class).single();
     }
 

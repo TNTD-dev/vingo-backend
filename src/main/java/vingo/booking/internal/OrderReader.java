@@ -15,7 +15,7 @@ import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
 import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.AdminGetOrder200ResponseAllOfHistoryInner;
-import vingo.api.model.BuyerProfile;
+import vingo.api.model.Buyer;
 import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventSummary;
@@ -39,13 +39,12 @@ public class OrderReader {
         this.json = json;
     }
 
-    /** Đơn kèm history cho admin; chuyển qua JSON để field mới của Order tự có ở đây, không phải chép tay. */
+    /** Đơn kèm history cho admin. */
     public AdminGetOrder200Response readAdminOrder(UUID orderId, OffsetDateTime now) {
         return json.convertValue(readOrder(orderId, now), AdminGetOrder200Response.class)
                 .history(readHistory(orderId));
     }
 
-    // shortcut: đọc thẳng bảng catalog (D4 chờ Luân), đổi sang CatalogService khi có.
     public Order readOrder(UUID orderId, OffsetDateTime now) {
         return readOrders(List.of(orderId), now).stream().findFirst()
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn"));
@@ -53,15 +52,19 @@ public class OrderReader {
 
     /** Đọc history theo at/id tăng dần, trả email actor hoặc SYSTEM bằng một query. */
     public List<AdminGetOrder200ResponseAllOfHistoryInner> readHistory(UUID orderId) {
-        // shortcut: đọc thẳng bảng users của auth, đổi sang AuthService khi có
         return jdbc.sql("""
-                        SELECT h.to_status, h.at, COALESCE(u.email, 'SYSTEM') AS actor
-                        FROM order_status_history h LEFT JOIN users u ON u.id = h.actor_id
-                        WHERE h.order_id = :order ORDER BY h.at, h.id
+                        SELECT h.to_status::text AS to_status, h.at, COALESCE(u.email, 'SYSTEM') AS actor
+                        FROM order_status_history h
+                        LEFT JOIN user_account u ON u.id = h.actor_id
+                        WHERE h.order_id = :order
+                        ORDER BY h.at, h.id
                         """)
-                .param("order", orderId).query((rs, row) -> new AdminGetOrder200ResponseAllOfHistoryInner()
+                .param("order", orderId)
+                .query((rs, row) -> new AdminGetOrder200ResponseAllOfHistoryInner()
                         .status(OrderStatus.fromValue(rs.getString("to_status")))
-                        .at(rs.getObject("at", OffsetDateTime.class)).actor(rs.getString("actor"))).list();
+                        .at(rs.getObject("at", OffsetDateTime.class))
+                        .actor(rs.getString("actor")))
+                .list();
     }
 
     public List<Order> readOrders(List<UUID> orderIds, OffsetDateTime now) {
@@ -70,35 +73,52 @@ public class OrderReader {
         }
         UUID[] ids = orderIds.toArray(UUID[]::new);
         var orders = jdbc.sql("""
-                        SELECT o.*, s.event_id, s.seat_layout_id, s.starts_at, s.ends_at,
-                               s.sale_opens_at, s.sale_closes_at,
-                               s.status AS stored_showtime_status,
-                               e.title, e.category, e.poster_url, v.name AS venue_name, v.city,
-                               (SELECT min(pt.price) FROM zone_price zp
-                                JOIN price_tier pt ON pt.id = zp.price_tier_id
-                                WHERE zp.event_id = e.id) AS price_from,
+                        SELECT o.id, o.showtime_id, o.code, o.status::text AS status, o.total_amount,
+                               o.expires_at, o.paid_at, o.buyer_name, o.buyer_email, o.buyer_phone, o.created_at,
+                               s.event_id, s.seat_map_id, s.starts_at, s.ends_at,
+                               s.sale_opens_at, s.sale_closes_at, s.cancelled_at,
+                               e.status::text AS event_status,
+                               e.title, e.category, COALESCE(e.poster_desktop_url, e.poster_mobile_url) AS poster_url,
+                               v.name AS venue_name, v.city,
+                               (SELECT min(sp.price)
+                                FROM event_zone ez
+                                JOIN LATERAL (
+                                    SELECT price FROM sku_price
+                                    WHERE sku_id = ez.sku_id AND effective_from <= :now
+                                    ORDER BY effective_from DESC LIMIT 1
+                                ) sp ON true
+                                WHERE ez.event_id = e.id) AS price_from,
                                (SELECT s2.starts_at FROM showtime s2
-                                WHERE s2.event_id = e.id AND s2.status = 'SCHEDULED' AND s2.starts_at >= :now
+                                WHERE s2.event_id = e.id AND e.status = 'PUBLISHED'
+                                  AND s2.cancelled_at IS NULL AND s2.starts_at >= :now
                                 ORDER BY s2.starts_at, s2.id LIMIT 1) AS first_starts_at,
                                EXISTS (SELECT 1 FROM showtime s2
-                                       WHERE s2.event_id = e.id AND s2.status = 'SCHEDULED'
-                                         AND s2.starts_at >= :now AND s2.sale_opens_at <= :now
-                                         AND :now < s2.sale_closes_at) AS on_sale
-                        FROM orders o JOIN showtime s ON s.id = o.showtime_id
+                                       WHERE s2.event_id = e.id AND e.status = 'PUBLISHED'
+                                         AND s2.cancelled_at IS NULL AND s2.starts_at >= :now
+                                         AND s2.sale_opens_at <= :now AND :now < s2.sale_closes_at) AS on_sale,
+                               (SELECT h.reason FROM order_status_history h
+                                WHERE h.order_id = o.id AND h.to_status = 'NEEDS_REVIEW'
+                                ORDER BY h.at DESC, h.id DESC LIMIT 1) AS review_reason
+                        FROM ticket_order o
+                        JOIN showtime s ON s.id = o.showtime_id
                         JOIN event e ON e.id = s.event_id
-                        JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
+                        JOIN seat_map m ON m.id = s.seat_map_id
+                        JOIN venue v ON v.id = m.venue_id
                         WHERE o.id = ANY(:ids)
                         """)
-                .param("ids", new SqlArrayValue("uuid", ids)).param("now", now)
+                .param("ids", new SqlArrayValue("uuid", ids))
+                .param("now", now)
                 .query((rs, row) -> {
                     String city = rs.getString("city");
-                    var event = new EventSummary().id(rs.getObject("event_id", UUID.class))
-                            .title(rs.getString("title")).category(EventCategory.fromValue(rs.getString("category")))
-                            .venueName(rs.getString("venue_name")).cityName(city)
+                    var event = new EventSummary()
+                            .id(rs.getObject("event_id", UUID.class))
+                            .title(rs.getString("title"))
+                            .category(EventCategory.fromValue(rs.getString("category")))
+                            .venueName(rs.getString("venue_name"))
+                            .cityName(city)
                             .priceFrom(rs.getObject("price_from", Long.class))
                             .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
                             .onSale(rs.getBoolean("on_sale"));
-                    // shortcut: venue.city là text tự do, catalog chốt mã thành phố thì đổi.
                     for (CityCode code : CityCode.values()) {
                         if (code.getValue().equals(city)) {
                             event.city(code);
@@ -109,51 +129,87 @@ public class OrderReader {
                     if (poster != null) {
                         event.posterUrl(URI.create(poster));
                     }
-                    var showtime = new Showtime().id(rs.getObject("showtime_id", UUID.class))
+                    OffsetDateTime cancelledAt = rs.getObject("cancelled_at", OffsetDateTime.class);
+                    var showtime = new Showtime()
+                            .id(rs.getObject("showtime_id", UUID.class))
                             .eventId(rs.getObject("event_id", UUID.class))
-                            .seatLayoutId(rs.getObject("seat_layout_id", UUID.class))
+                            .seatLayoutId(rs.getObject("seat_map_id", UUID.class))
                             .startsAt(rs.getObject("starts_at", OffsetDateTime.class))
                             .endsAt(rs.getObject("ends_at", OffsetDateTime.class))
                             .saleOpensAt(rs.getObject("sale_opens_at", OffsetDateTime.class))
                             .saleClosesAt(rs.getObject("sale_closes_at", OffsetDateTime.class))
+                            .cancelledAt(cancelledAt)
                             .status(ShowtimeStatus.valueOf(vingo.catalog.ShowtimeStatus.of(
-                                    rs.getString("stored_showtime_status"),
+                                    rs.getString("event_status"),
+                                    cancelledAt,
                                     rs.getObject("sale_opens_at", OffsetDateTime.class),
                                     rs.getObject("sale_closes_at", OffsetDateTime.class),
                                     rs.getObject("ends_at", OffsetDateTime.class), now).name()));
-                    var result = new Order().id(rs.getObject("id", UUID.class)).code(rs.getString("code"))
-                            .status(OrderStatus.fromValue(rs.getString("status"))).event(event).showtime(showtime)
-                            .currency(Order.CurrencyEnum.VND).totalAmount(rs.getLong("total_amount"))
+                    var result = new Order()
+                            .id(rs.getObject("id", UUID.class))
+                            .code(rs.getString("code").strip())
+                            .status(OrderStatus.fromValue(rs.getString("status")))
+                            .event(event)
+                            .showtime(showtime)
+                            .currency(Order.CurrencyEnum.VND)
+                            .totalAmount(rs.getLong("total_amount"))
                             .expiresAt(rs.getObject("expires_at", OffsetDateTime.class))
                             .paidAt(rs.getObject("paid_at", OffsetDateTime.class))
                             .createdAt(rs.getObject("created_at", OffsetDateTime.class));
                     String reason = rs.getString("review_reason");
                     if (reason != null) {
-                        result.reviewReason(Order.ReviewReasonEnum.fromValue(reason));
+                        try {
+                            result.reviewReason(Order.ReviewReasonEnum.fromValue(reason));
+                        } catch (IllegalArgumentException ignored) {
+                            // Bỏ qua nếu reason không nằm trong enum cố định.
+                        }
                     }
                     String name = rs.getString("buyer_name");
                     String email = rs.getString("buyer_email");
                     String phone = rs.getString("buyer_phone");
                     if (name != null || email != null || phone != null) {
-                        result.buyer(new BuyerProfile().fullName(name).email(email).phone(phone));
+                        result.buyer(new Buyer().fullName(name).email(email).phone(phone));
                     }
                     return result;
-                }).list();
+                })
+                .list();
 
         Map<UUID, List<OrderItem>> itemsByOrder = new HashMap<>();
         jdbc.sql("""
-                        SELECT i.order_id, i.id, i.seat_id, i.unit_price, i.quantity, COALESCE(i.zone_name_snapshot, z.name) AS zone_name,
-                               s.row_label, s.number, COALESCE(i.tier_name_snapshot, pt.name) AS tier_name
-                        FROM order_item i JOIN zone z ON z.id = i.zone_id
-                        JOIN price_tier pt ON pt.id = i.price_tier_id LEFT JOIN seat s ON s.id = i.seat_id
-                        WHERE i.order_id = ANY(:ids) ORDER BY i.order_id, z.name, s.row_label, s.number, i.id
+                        SELECT os.order_id, os.seat_id AS item_id, os.seat_id, os.unit_price, 1 AS quantity,
+                               COALESCE(ez.display_name, z.name) AS zone_name,
+                               s.row_label, s.number::integer AS number, sk.name AS tier_name
+                        FROM order_seat os
+                        JOIN showtime st ON st.id = os.showtime_id
+                        JOIN seat s ON s.id = os.seat_id
+                        JOIN zone z ON z.id = s.zone_id
+                        JOIN sku_price sp ON sp.id = os.sku_price_id
+                        JOIN sku sk ON sk.id = sp.sku_id
+                        LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
+                        WHERE os.order_id = ANY(:ids)
+                        UNION ALL
+                        SELECT ost.order_id, ost.zone_id AS item_id, NULL::uuid AS seat_id, ost.unit_price, ost.quantity::integer,
+                               COALESCE(ez.display_name, z.name) AS zone_name,
+                               NULL::text AS row_label, NULL::integer AS number, sk.name AS tier_name
+                        FROM order_standing ost
+                        JOIN showtime st ON st.id = ost.showtime_id
+                        JOIN zone z ON z.id = ost.zone_id
+                        JOIN sku_price sp ON sp.id = ost.sku_price_id
+                        JOIN sku sk ON sk.id = sp.sku_id
+                        LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
+                        WHERE ost.order_id = ANY(:ids)
+                        ORDER BY order_id, zone_name, row_label, number, item_id
                         """)
                 .param("ids", new SqlArrayValue("uuid", ids))
                 .query((rs, row) -> {
-                    var item = new OrderItem().id(rs.getObject("id", UUID.class))
-                            .zone(rs.getString("zone_name")).row(rs.getString("row_label"))
-                            .number(rs.getObject("number", Integer.class)).seatId(rs.getObject("seat_id", UUID.class))
-                            .tier(rs.getString("tier_name")).unitPrice(rs.getLong("unit_price"))
+                    var item = new OrderItem()
+                            .id(rs.getObject("item_id", UUID.class))
+                            .zone(rs.getString("zone_name"))
+                            .row(rs.getString("row_label"))
+                            .number(rs.getObject("number", Integer.class))
+                            .seatId(rs.getObject("seat_id", UUID.class))
+                            .tier(rs.getString("tier_name"))
+                            .unitPrice(rs.getLong("unit_price"))
                             .quantity(rs.getInt("quantity"));
                     itemsByOrder.computeIfAbsent(rs.getObject("order_id", UUID.class), id -> new ArrayList<>())
                             .add(item);

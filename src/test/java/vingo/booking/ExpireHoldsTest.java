@@ -98,7 +98,8 @@ class ExpireHoldsTest extends BookingTestSupport {
         UUID buyer = catalog.buyer();
         UUID id = orderId(holdOk(buyerToken(buyer), showtime.id(), seats(showtime.event().seat(1))));
         makeOverdue(id);
-        jdbc.sql("UPDATE orders SET status = 'PAID', paid_at = :now WHERE id = :id")
+        setBuyer(id);
+        jdbc.sql("UPDATE ticket_order SET status = 'PAID', paid_at = :now WHERE id = :id")
                 .param("now", catalog.now()).param("id", id).update();
         catalog.setSeat(showtime.id(), showtime.event().seat(1), "SOLD", id, null);
         var before = seatState(showtime.id(), showtime.event().seat(1));

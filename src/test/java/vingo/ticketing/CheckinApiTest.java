@@ -112,13 +112,18 @@ class CheckinApiTest extends TicketingTestSupport {
     }
 
     @Test
-    void checkIn_returns404AndDoesNotRecordScanForUnknownQrToken() {
+    void checkIn_recordsInvalidQr409_whenTokenSignatureInvalidOrTicketUnknown() {
         int before = showtimeCheckinCount();
 
-        problem(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\"}"
-                .formatted(UUID.randomUUID(), showtime.id())), 404, "NOT_FOUND");
+        String invalidJson = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\"}"
+                .formatted(UUID.randomUUID(), showtime.id())), 409);
+        assertThat(text(invalidJson, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(showtimeCheckinCount()).isEqualTo(before + 1);
 
-        assertThat(showtimeCheckinCount()).isEqualTo(before);
+        String unknownJson = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\"}"
+                .formatted(qrCodec.sign(UUID.randomUUID(), 1), showtime.id())), 409);
+        assertThat(text(unknownJson, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(showtimeCheckinCount()).isEqualTo(before + 2);
     }
 
     @Test
@@ -267,7 +272,7 @@ class CheckinApiTest extends TicketingTestSupport {
     }
 
     private int showtimeCheckinCount() {
-        return jdbc.sql("SELECT count(*) FROM checkin WHERE showtime_id = :id")
+        return jdbc.sql("SELECT count(*) FROM ticket_scan WHERE showtime_id = :id")
                 .param("id", showtime.id()).query(Integer.class).single();
     }
 

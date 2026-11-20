@@ -35,15 +35,15 @@ class CatalogFixturesTest extends IntegrationTest {
                 .create();
 
         assertThat(created.showtimeIds()).hasSize(2);
-        assertThat(count("venue")).isEqualTo(2);
-        assertThat(count("seat")).isEqualTo(15);
-        assertThat(count("showtime_seat")).isEqualTo(15);
-        assertThat(count("zone_price")).isEqualTo(3);
-        assertThat(count("price_tier")).isEqualTo(3); // VIP, Chưa gán, Mặc định (khu đứng)
-        assertThat(jdbc.sql("SELECT count(*) FROM showtime_seat WHERE status = 'SOLD'").query(Integer.class).single())
+        assertThat(count("venue")).isEqualTo(1);
+        assertThat(count("seat")).isEqualTo(10);
+        assertThat(count("seat_inventory")).isEqualTo(20);
+        assertThat(count("event_zone")).isEqualTo(2);
+        assertThat(count("sku")).isEqualTo(3); // VIP, Chưa gán, Mặc định (khu đứng)
+        assertThat(jdbc.sql("SELECT count(*) FROM seat_inventory WHERE status = 'SOLD'").query(Integer.class).single())
                 .isEqualTo(10);
-        assertThat(jdbc.sql("SELECT sold FROM showtime_zone_stock").query(Integer.class).single()).isEqualTo(2);
-        assertThat(jdbc.sql("SELECT count(*) FROM zone_price WHERE price_tier_id = :t")
+        assertThat(jdbc.sql("SELECT sum(sold) FROM standing_inventory").query(Integer.class).single()).isEqualTo(2);
+        assertThat(jdbc.sql("SELECT count(*) FROM event_zone WHERE sku_id = :t")
                 .param("t", created.tierIds().get("Chưa gán")).query(Integer.class).single()).isZero();
     }
 

@@ -77,24 +77,24 @@ Quy tắc:
 **Giữ ghế (booking)**
 - Ghế trống = `status = 'AVAILABLE'` **hoặc** `status = 'HELD' AND held_until < now()` (Implicit Status). Không dùng Redis để giữ ghế.
 - Giữ ghế bằng một câu `UPDATE ... WHERE (điều kiện trống) RETURNING seat_id`. Số dòng trả về < số ghế yêu cầu → ném `SeatTakenException` để rollback cả đơn (giữ tất cả hoặc không giữ gì).
-- Khu đứng: `UPDATE showtime_zone_stock SET held = held + :n WHERE capacity - sold - held >= :n`.
+- Khu đứng: `UPDATE standing_inventory SET held = held + :n WHERE capacity - sold - held >= :n`.
 - Tạo đơn PENDING và giữ ghế trong **cùng một transaction**. Hạn giữ 10 phút.
 - Mỗi user tối đa 1 đơn PENDING cho mỗi suất.
 
 **Thanh toán (payment)**
 - **Chỉ IPN hoặc querydr được chốt bán.** Trang return chỉ để hiển thị, không đổi trạng thái gì.
-- IPN: kiểm chữ ký HMAC-SHA512 trước (sai → `97`). Sau đó `SELECT ... FOR UPDATE` đơn, ghi `payment_transaction` (raw).
-- IPN trùng (intent đã `SUCCEEDED`) → trả `02`, không làm gì thêm.
+- IPN: kiểm chữ ký HMAC-SHA512 trước (sai → `97`). Sau đó `SELECT ... FOR UPDATE` đơn, ghi `payment_gateway_log` (raw).
+- IPN trùng (payment đã `SUCCEEDED`) → trả `02`, không làm gì thêm.
 - Tiền về nhưng đơn hết hạn/huỷ/sai số tiền → đơn `NEEDS_REVIEW`, trả `00`.
-- Không bao giờ tin số tiền từ client; so `vnp_Amount/100` với `orders.total_amount`.
-- Chốt ghế: `UPDATE showtime_seat SET status='SOLD' WHERE order_id = :id AND status='HELD'`; thiếu ghế → `NEEDS_REVIEW`.
+- Không bao giờ tin số tiền từ client; so `vnp_Amount/100` với `ticket_order.total_amount`.
+- Chốt ghế: `UPDATE seat_inventory SET status='SOLD' WHERE order_id = :id AND status='HELD'`; thiếu ghế → `NEEDS_REVIEW`.
 
 **Job nền (profile worker)**
 - `expire_holds` (5s), `reconcile_payments` (1 phút), `outbox_sender` (2s), `realtime_gc`.
 - Chọn dòng bằng `FOR UPDATE SKIP LOCKED`. Mỗi job có ShedLock để không chạy trùng.
 - Job phải idempotent: chạy lại không gây sai.
 
-**Trạng thái suất diễn**: `ON_SALE`, `SALES_CLOSED`, `FINISHED` tính khi đọc từ `sale_opens_at`, `sale_closes_at`, `ends_at`. Chỉ lưu `DRAFT`, `SCHEDULED`, `CANCELLED`.
+**Trạng thái suất diễn**: `SCHEDULED`, `ON_SALE`, `SALES_CLOSED`, `FINISHED`, `CANCELLED` tính khi đọc từ `cancelled_at`, `sale_opens_at`, `sale_closes_at`, `ends_at`. Bảng `showtime` không lưu cột `status`.
 
 **Không có hoàn tiền, không đổi ghế** trong hệ thống. Không thêm tính năng này.
 
