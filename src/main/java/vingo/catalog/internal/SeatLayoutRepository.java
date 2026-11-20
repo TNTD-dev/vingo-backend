@@ -240,8 +240,8 @@ public class SeatLayoutRepository {
 
     boolean activeVenueExists(UUID venueId, boolean lock) {
         return jdbc.sql("""
-                SELECT id FROM venue WHERE id = :venueId AND deleted_at IS NULL
-                """ + (lock ? " FOR UPDATE" : ""))
+                SELECT v.id FROM venue v WHERE v.id = :venueId AND v.deleted_at IS NULL
+                """ + (lock ? " FOR UPDATE OF v" : ""))
                 .param("venueId", venueId)
                 .query(UUID.class)
                 .optional()
