@@ -13,7 +13,12 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Ký và xác minh mã QR vé dạng {@code VG1.<ticket_id>.<qr_version>.<HMAC>} (không lưu DB). */
+/**
+ * Ký và xác minh mã QR vé dạng {@code VG1.<ticket_id>.<qr_version>.<HMAC>} (không lưu DB).
+ *
+ * <p>Quy trình khi lộ khoá: tạo khoá mới, đổi tiền tố {@code VG1} → {@code VG2}, cấp lại QR
+ * ({@code qr_version + 1}) cho các vé còn trạng thái {@code ISSUED}.
+ */
 @Component
 public class QrCodec {
 
@@ -22,9 +27,10 @@ public class QrCodec {
 
     private final byte[] secretBytes;
 
-    public QrCodec(@Value("${vingo.qr.secret:${QR_SECRET:vingo-dev-qr-secret-change-in-prod}}") String secret) {
+    public QrCodec(@Value("${vingo.qr.secret:}") String secret) {
         if (secret == null || secret.isBlank()) {
-            throw new IllegalStateException("QR_SECRET không được để trống");
+            throw new IllegalStateException(
+                    "QR_SECRET không được để trống — đặt biến môi trường QR_SECRET trước khi khởi động");
         }
         this.secretBytes = secret.getBytes(StandardCharsets.UTF_8);
     }

@@ -40,6 +40,8 @@ vingo:
     secret: ${JWT_SECRET:}
     issuer: vingo
     access-token-ttl: PT15M
+  qr:
+    secret: ${QR_SECRET:}
   hold:
     ttl: PT10M
     # Chống giữ lại cùng ghế liên tục mà không thanh toán: giữ rồi nhả (hết hạn hoặc huỷ) đủ rehold-max lần
