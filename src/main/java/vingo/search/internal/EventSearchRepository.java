@@ -3,6 +3,7 @@ package vingo.search.internal;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -38,6 +39,20 @@ class EventSearchRepository {
     private static final int TIER_TITLE = 4;
     private static final int TIER_VENUE = 2;
 
+    /** Bộ lọc trên web dùng các mã cũ, trong khi sân chọn trên bản đồ lưu tên tỉnh/thành. */
+    private static List<String> cityNames(String city) {
+        String name = city.strip().toLowerCase(Locale.ROOT);
+        return switch (name) {
+            case "hn", "hà nội", "thành phố hà nội", "hanoi" ->
+                    List.of("hn", "hà nội", "thành phố hà nội", "hanoi");
+            case "hcm", "tp. hồ chí minh", "thành phố hồ chí minh", "hồ chí minh", "sài gòn" ->
+                    List.of("hcm", "tp. hồ chí minh", "thành phố hồ chí minh", "hồ chí minh", "sài gòn");
+            case "dn", "đà nẵng", "thành phố đà nẵng", "da nang" ->
+                    List.of("dn", "đà nẵng", "thành phố đà nẵng", "da nang");
+            default -> List.of(name);
+        };
+    }
+
     /** Tài liệu tìm kiếm của sân (tên sân + tên thành phố), giống hệt biểu thức của venue_search_fts_idx. */
     private static String venueDoc(String v) {
         return "to_tsvector('simple', immutable_unaccent(coalesce(" + v + ".name, '') || ' ' || immutable_city_text("
@@ -69,8 +84,8 @@ class EventSearchRepository {
         // Điều kiện lọc suất: áp cho suất đại diện của thẻ (venue_name, city, first_starts_at).
         StringBuilder showtimeFilter = new StringBuilder();
         if (c.city() != null) {
-            showtimeFilter.append(" AND v.city = :city");
-            params.put("city", c.city());
+            showtimeFilter.append(" AND lower(v.city) IN (:cityNames)");
+            params.put("cityNames", cityNames(c.city()));
         }
         if (c.from() != null) {
             showtimeFilter.append(" AND s.starts_at >= :from");

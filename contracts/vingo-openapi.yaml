@@ -499,7 +499,7 @@ paths:
 
         Cursor gắn với bộ lọc và `sort` đã dùng khi sinh ra nó. Dùng cursor với bộ lọc hoặc sort khác trả 400 `VALIDATION_ERROR`.
 
-        `city` là mã thành phố (`CityCode`), không phải tên. Người dùng nói "Sài Gòn" thì agent tự đổi sang `HCM` theo mô tả của `CityCode`.
+        `city` nhận mã hoặc tên tỉnh/thành trong dữ liệu sân. `HN`, `HCM`, `DN` và tên tương ứng được lọc chung với dữ liệu cũ.
 
         Ví dụ lỗi 400:
         ```json

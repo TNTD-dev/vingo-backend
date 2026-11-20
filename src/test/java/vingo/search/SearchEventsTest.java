@@ -296,6 +296,16 @@ class SearchEventsTest extends IntegrationTest {
     }
 
     @Test
+    void searchEvents_matchesCityNamesAndLegacyCodesInSameFilter() {
+        UUID legacy = fixtures.event().title("Sân cũ").city("HN").create().id();
+        UUID mapped = fixtures.event().title("Sân mới").city("Thành phố Hà Nội").create().id();
+        fixtures.event().title("Sân khác").city("Hải Phòng").create();
+
+        assertThat(ids(search("city", "HN"))).containsExactlyInAnyOrder(legacy, mapped);
+        assertThat(ids(search("city", "Hà Nội"))).containsExactlyInAnyOrder(legacy, mapped);
+    }
+
+    @Test
     void searchEvents_returnsEventWithoutCity_whenVenueCityIsNull() {
         fixtures.event().title("Không có thành phố").create();
         jdbc.sql("UPDATE venue SET city=NULL").update();
