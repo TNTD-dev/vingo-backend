@@ -95,10 +95,11 @@ public class TicketingRepository {
     }
 
     /** Tăng qr_version của vé đã khoá; QR cũ mất hiệu lực ngay khi commit. */
-    public void reissueQr(UUID ticketId) {
-        jdbc.sql("UPDATE ticket SET qr_version = qr_version + 1 WHERE id = :id")
+    public int reissueQr(UUID ticketId) {
+        return jdbc.sql("UPDATE ticket SET qr_version = qr_version + 1 WHERE id = :id RETURNING qr_version")
                 .param("id", ticketId)
-                .update();
+                .query(Integer.class)
+                .single();
     }
 
     /** Chọn trang id vé của chủ sở hữu với keyset id giảm dần (uuidv7). */

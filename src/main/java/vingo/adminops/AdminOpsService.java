@@ -121,16 +121,17 @@ public class AdminOpsService {
         return ticket;
     }
 
-    /** Cấp lại QR cho vé ISSUED, audit chỉ lưu trạng thái để không lộ token. */
+    /** Cấp lại QR cho vé ISSUED, audit lưu phiên bản để không lộ token. */
     @Transactional
     public Ticket reissueTicketQr(UUID ticketId, CancelEventRequest request) {
         UUID adminId = requireAdmin();
         OffsetDateTime now = now();
-        Ticket ticket = ticketing.reissueTicketQr(ticketId);
+        var result = ticketing.reissueTicketQr(ticketId);
         auditLogs.insert(adminId, "REISSUE_QR", "ticket", ticketId, request.getReason(), now,
-                Map.of("status", "ISSUED"), Map.of("status", "ISSUED"));
+                Map.of("status", "ISSUED", "qr_version", result.version() - 1),
+                Map.of("status", "ISSUED", "qr_version", result.version()));
         logAction("REISSUE_QR", "ticket_id", ticketId, adminId);
-        return ticket;
+        return result.ticket();
     }
 
     /** Ghi outbox cho một vé ISSUED và audit bằng outbox_id, không áp rate limit của buyer. */

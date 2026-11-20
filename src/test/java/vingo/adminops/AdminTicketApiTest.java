@@ -70,6 +70,8 @@ class AdminTicketApiTest extends AdminOpsTestSupport {
         assertThat(seatRow(showtime.event().seat(1))).isEqualTo(seatBefore);
         assertStatusAudit(ticket, "ticket", "REISSUE_QR", "ISSUED", "ISSUED");
         var audit = audits(ticket).getFirst();
+        assertThat(object(audit.beforeJson())).containsEntry("qr_version", 1);
+        assertThat(object(audit.afterJson())).containsEntry("qr_version", 2);
         assertThat(audit.beforeJson()).doesNotContain("qr_token", oldQr, newQr);
         assertThat(audit.afterJson()).doesNotContain("qr_token", oldQr, newQr);
         assertThat(text(body(scan(oldQr), 409), "$.result")).isEqualTo("INVALID_QR");

@@ -145,12 +145,15 @@ public class TicketingService {
         return reader.readTickets(List.of(ticketId), now).getFirst();
     }
 
+    public record QrReissueResult(Ticket ticket, int version) {}
+
     /** Khoá vé ISSUED và tăng qr_version trong transaction audit của adminops. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Ticket reissueTicketQr(UUID ticketId) {
+    public QrReissueResult reissueTicketQr(UUID ticketId) {
         lockIssuedTicket(ticketId);
-        repository.reissueQr(ticketId);
-        return reader.readTickets(List.of(ticketId), now()).getFirst().qrToken(null);
+        int version = repository.reissueQr(ticketId);
+        var ticket = reader.readTickets(List.of(ticketId), now()).getFirst().qrToken(null);
+        return new QrReissueResult(ticket, version);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
