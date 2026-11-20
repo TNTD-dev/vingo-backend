@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.ShowtimeStatus;
+import vingo.catalog.VenueService;
 import vingo.search.AvailabilityResult;
 import vingo.search.EventDetailResult;
 import vingo.search.EventSearchCriteria;
@@ -156,6 +157,7 @@ class PgSearchService implements SearchService {
     public String getSeatmapSvg(UUID showtimeId) {
         ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
         return seatmaps.findPublishedSvg(showtime.seatLayoutId())
+                .map(layers -> VenueService.renderSeatmap(layers.overview(), layers.detail()))
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Sơ đồ của suất chưa có SVG"));
     }
 

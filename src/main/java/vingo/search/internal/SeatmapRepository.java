@@ -97,15 +97,17 @@ class SeatmapRepository {
                 .optional();
     }
 
-    /** SVG của sơ đồ sân; rỗng khi không có. */
-    Optional<String> findPublishedSvg(UUID layoutId) {
+    record SvgLayers(String overview, String detail) {}
+
+    Optional<SvgLayers> findPublishedSvg(UUID layoutId) {
         return jdbc.sql("""
-                        SELECT svg
-                        FROM seat_map
-                        WHERE id = :id
+                        SELECT vm.svg AS overview, sm.svg AS detail
+                        FROM seat_map sm
+                        JOIN venue_map vm ON vm.id = sm.venue_map_id
+                        WHERE sm.id = :id
                         """)
                 .param("id", layoutId)
-                .query(String.class)
+                .query((rs, n) -> new SvgLayers(rs.getString("overview"), rs.getString("detail")))
                 .optional();
     }
 

@@ -15,6 +15,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.internal.VenueRepository;
+import vingo.catalog.internal.VenueSvgProcessor;
 import vingo.catalog.internal.VenueRepository.VenueData;
 import vingo.catalog.internal.VenueRepository.VenuePosition;
 import vingo.catalog.internal.VenueRepository.VenueRow;
@@ -33,6 +34,10 @@ public class VenueService {
         this.repository = repository;
         this.clock = clock;
         this.events = events;
+    }
+
+    public static String renderSeatmap(String overview, String detail) {
+        return VenueSvgProcessor.renderSeatmap(overview, detail);
     }
 
     public record VenuePage(List<VenueRow> data, String nextCursor) {}

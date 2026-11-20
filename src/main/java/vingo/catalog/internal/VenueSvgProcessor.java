@@ -71,6 +71,38 @@ public class VenueSvgProcessor {
                 : List.of(Map.of("reason", ex.code().name(), "message", ex.getMessage()));
     }
 
+    /** Ghép hai lớp đã lưu để hiển thị, giữ nguyên hệ tọa độ và ID nghiệp vụ. */
+    public static String renderSeatmap(String overview, String detail) {
+        try {
+            Document base = SeatLayoutSvgParser.parseXml(bytes(overview));
+            Document seats = SeatLayoutSvgParser.parseXml(bytes(detail));
+            var baseRoot = base.getDocumentElement();
+            var seatRoot = seats.getDocumentElement();
+            if (!same(SeatLayoutSvgParser.readViewBox(baseRoot), SeatLayoutSvgParser.readViewBox(seatRoot))) {
+                return detail;
+            }
+            var baseIds = SeatLayoutSvgParser.validateElements(baseRoot).keySet();
+            var seatIds = SeatLayoutSvgParser.validateElements(seatRoot).keySet();
+            if (seatIds.stream().anyMatch(baseIds::contains)) {
+                return detail;
+            }
+            baseRoot.appendChild(detailGroup(base, seatRoot));
+            return SeatLayoutSvgParser.serialize(base);
+        } catch (DomainException invalidSvg) {
+            // Các bản ghi cũ có thể chưa qua bước kiểm tra hai lớp của wizard.
+            return detail;
+        }
+    }
+
+    private static Element detailGroup(Document target, Element source) {
+        var group = (Element) target.renameNode(target.importNode(source, true), source.getNamespaceURI(), "g");
+        for (String name : List.of("viewBox", "width", "height", "x", "y", "preserveAspectRatio",
+                "data-schema-version", "data-document-kind")) {
+            group.removeAttribute(name);
+        }
+        return group;
+    }
+
     public Bundle combine(String overviewSvg, List<String> detailFiles, Map<String, String> requested) {
         try {return combineChecked(overviewSvg,detailFiles,requested);}
         catch(IllegalArgumentException ex) {throw SeatLayoutSvgParser.invalid(null,"UNSUPPORTED_COLLISION_GEOMETRY","Không phân giải được hình học hữu hạn của bộ SVG.");}
@@ -102,11 +134,8 @@ public class VenueSvgProcessor {
                 if (business(id)) { if (baseElements.containsKey(id)||!businessIds.add(id)) fail(id, "DUPLICATE_ID", "ID nghiệp vụ trùng giữa các file."); }
                 else renamed.put(id,prefix+id);
             }
-            Element group = (Element) merged.importNode(detail.getDocumentElement(), true);
             // Giữ style/transform của root từng file bằng g, không tạo svg lồng nhau.
-            group = (Element) merged.renameNode(group, "http://www.w3.org/2000/svg", "g");
-            group.removeAttribute("viewBox"); group.removeAttribute("width"); group.removeAttribute("height");
-            group.removeAttribute("data-schema-version"); group.removeAttribute("data-document-kind");
+            Element group = detailGroup(merged, detail.getDocumentElement());
             rewrite(group, renamed);
             var children = group.getElementsByTagName("*");
             for (int n=0;n<children.getLength();n++) rewrite((Element) children.item(n), renamed);
