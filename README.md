@@ -264,6 +264,9 @@ docker compose -f deploy/compose.dev.yaml exec postgres psql -U vingo -d vingo
 ```
 
 - Test integration chạy trên **PostgreSQL 18 thật** qua Testcontainers (cần Docker đang chạy). Không dùng H2.
+- Trước khi chạy, kiểm tra `docker version` có cả phần **Client** và **Server**. Lỗi `Could not find a valid Docker environment` khiến Spring context không khởi tạo được và có thể kéo theo hàng trăm test lỗi.
+- Chỉ chạy một lượt Maven trong mỗi checkout; build đồng thời có thể ghi đè `target/classes`, `target/test-classes` và báo cáo test.
+- Test `HoldSeatsThousandConcurrencyTest` gửi đồng thời 1.000 request HTTP. Trên Windows với JDK 25, hàng đợi socket bị giới hạn 200 nên có thể lỗi kết nối trước khi request đến ứng dụng. Chạy bộ test trên Linux/CI với Java 25; Windows cần JDK đã có bản sửa [JDK-8330940 (JDK 26)](https://www.oracle.com/java/technologies/javase/26all-relnotes.html). Tăng `server.tomcat.accept-count` không vượt được giới hạn này trên JDK 25/Windows.
 - Kế thừa `support/IntegrationTest` để có sẵn database sạch và client gọi API.
 
 Test bắt buộc trước khi đóng Sprint 1:

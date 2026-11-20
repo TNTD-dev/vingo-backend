@@ -18,8 +18,7 @@ public class VenueImportRepository {
     public VenueImportRepository(JdbcClient jdbc, JsonMapper json, SeatLayoutRepository layouts) {this.jdbc=jdbc;this.json=json;this.layouts=layouts;}
     public Optional<VenueLocationInput> venueLocation(UUID id) {
         return jdbc.sql("""
-                SELECT COALESCE(location, jsonb_build_object('display_address', address,
-                    'latitude', lat, 'longitude', lng, 'source', 'LEGACY'))::text
+                SELECT location::text
                 FROM venue WHERE id = :id AND deleted_at IS NULL
                 """).param("id", id).query(String.class)
                 .optional().map(value -> json.readValue(value, VenueLocationInput.class));
@@ -162,10 +161,15 @@ public class VenueImportRepository {
                 """).param("now",now).param("batch",batch).update();
     }
 
-    public void persistSetup(UUID session,UUID venue,VenueImportDraft draft) {
+    public void persistSetup(UUID session,UUID venue,VenueImportDraft draft,OffsetDateTime now) {
         if(draft.getVenue()!=null && draft.getVenue().getLocation()!=null) {
-            jdbc.sql("UPDATE venue SET location=CAST(:location AS jsonb) WHERE id=:id")
-                .param("location",json.writeValueAsString(draft.getVenue().getLocation())).param("id",venue).update();
+            jdbc.sql("""
+                    UPDATE venue SET location=CAST(:location AS jsonb),
+                        updated_by=(SELECT owner_id FROM venue_import_session WHERE id=:session),
+                        updated_at=:now
+                    WHERE id=:id
+                    """)
+                .param("now",now).param("session",session).param("location",json.writeValueAsString(draft.getVenue().getLocation())).param("id",venue).update();
         }
         if(draft.getParkingLocations()!=null) {
             int ordinal=0;

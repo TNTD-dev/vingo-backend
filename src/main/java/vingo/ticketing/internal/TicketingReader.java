@@ -12,7 +12,6 @@ import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
 import vingo.api.model.CheckinResult;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventSummary;
 import vingo.api.model.Showtime;
@@ -44,7 +43,7 @@ public class TicketingReader {
                                o.code AS order_code, t.showtime_id, s.event_id, s.seat_layout_id,
                                s.starts_at, s.ends_at, s.sale_opens_at, s.sale_closes_at,
                                s.status AS stored_showtime_status, e.title, e.category, e.poster_url,
-                               v.id AS venue_id, v.name AS venue_name, v.type AS venue_type, v.address, v.city,
+                               v.id AS venue_id, v.name AS venue_name, v.type AS venue_type, v.location->>'display_address' AS address, venue_location_city(v.location) AS city,
                                COALESCE(oi.zone_name_snapshot, z.name) AS zone_name, seat.row_label, seat.number, COALESCE(oi.tier_name_snapshot, pt.name) AS tier_name,
                                (SELECT min(tier.price) FROM zone_price zp
                                 JOIN price_tier tier ON tier.id = zp.price_tier_id
@@ -74,13 +73,8 @@ public class TicketingReader {
                             .priceFrom(rs.getObject("price_from", Long.class))
                             .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
                             .onSale(rs.getBoolean("on_sale"));
-                    for (CityCode code : CityCode.values()) {
-                        if (code.getValue().equals(city)) {
-                            venue.city(code);
-                            event.city(code);
-                            break;
-                        }
-                    }
+                    venue.city(city);
+                    event.city(city);
                     String poster = rs.getString("poster_url");
                     if (poster != null) {
                         event.posterUrl(URI.create(poster));

@@ -52,6 +52,7 @@ public class GoogleLoginService {
             throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không thể đăng nhập bằng Google");
         }
 
+        accounts.recordLoginAttempt(account.id(), true, OffsetDateTime.now(clock));
         String refreshToken = TokenSecrets.generate();
         OffsetDateTime expiresAt = OffsetDateTime.now(clock).plus(properties.refreshTokenTtl());
         accounts.createSession(account.id(), TokenSecrets.hash(refreshToken), expiresAt);

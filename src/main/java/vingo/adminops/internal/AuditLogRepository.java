@@ -40,17 +40,45 @@ public class AuditLogRepository {
                 .query(UUID.class).single();
     }
 
+    /** Chỉ cập nhật kết quả nhật ký request; không sửa snapshot của audit nghiệp vụ. */
+    public void completeActivity(UUID id, Map<String, Object> details) {
+        int updated = jdbc.sql("""
+                UPDATE audit_log SET after = CAST(:details AS jsonb)
+                WHERE id = :id AND action = 'ADMIN_ACTIVITY'
+                """).param("id", id).param("details", json.writeValueAsString(details)).update();
+        if (updated != 1) {
+            throw new IllegalStateException("Không tìm thấy nhật ký hoạt động admin");
+        }
+    }
+
     /** Đọc keyset at/id giảm dần và giải mã snapshot JSONB thành object. */
     public List<AuditLog> find(String entity, UUID entityId, OffsetDateTime beforeAt, UUID beforeId, int limit) {
+        return find(entity,entityId,beforeAt,beforeId,limit,null,null,null,null,null,false);
+    }
+
+    public List<AuditLog> find(String entity, UUID entityId, OffsetDateTime beforeAt, UUID beforeId, int limit,
+            UUID actor, String action, OffsetDateTime from, OffsetDateTime to, String outcome, boolean activityOnly) {
         var query = jdbc.sql("""
                         SELECT id, actor_id, action, entity, entity_id, reason, via_agent, at,
+                               (SELECT u.full_name FROM users u WHERE u.id=audit_log.actor_id) AS actor_name,
                                before::text AS before_json, after::text AS after_json FROM audit_log WHERE true
                         """
                         + (entity == null ? "" : " AND entity = :entity")
                         + (entityId == null ? "" : " AND entity_id = :entityId")
                         + (beforeAt == null ? "" : " AND (at, id) < (:at, :id)")
+                        + (actor == null ? "" : " AND actor_id=:actor")
+                        + (action == null ? "" : " AND action=:action")
+                        + (from == null ? "" : " AND at>=:from")
+                        + (to == null ? "" : " AND at<:to")
+                        + (outcome == null ? "" : " AND after->>'outcome'=:outcome")
+                        + (activityOnly ? " AND action='ADMIN_ACTIVITY' AND after->>'outcome'='SUCCEEDED' AND after->>'method' NOT IN ('GET','HEAD','OPTIONS')" : "")
                         + " ORDER BY at DESC, id DESC LIMIT :limit")
                 .param("limit", limit);
+        if(actor!=null) query.param("actor",actor);
+        if(action!=null) query.param("action",action);
+        if(from!=null) query.param("from",from);
+        if(to!=null) query.param("to",to);
+        if(outcome!=null) query.param("outcome",outcome);
         if (entity != null) {
             query.param("entity", entity);
         }
@@ -61,7 +89,7 @@ public class AuditLogRepository {
             query.param("at", beforeAt).param("id", beforeId);
         }
         return query.query((rs, row) -> new AuditLog().id(rs.getObject("id", UUID.class))
-                .actorId(rs.getObject("actor_id", UUID.class)).action(AuditLog.ActionEnum.fromValue(rs.getString("action")))
+                .actorName(rs.getString("actor_name")).actorId(rs.getObject("actor_id", UUID.class)).action(AuditLog.ActionEnum.fromValue(rs.getString("action")))
                 .entity(rs.getString("entity")).entityId(rs.getObject("entity_id", UUID.class))
                 .reason(rs.getString("reason")).viaAgent(rs.getBoolean("via_agent"))
                 .at(rs.getObject("at", OffsetDateTime.class))

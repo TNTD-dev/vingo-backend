@@ -6,7 +6,7 @@ import java.util.UUID;
 /**
  * Một thẻ sự kiện trong kết quả tìm kiếm.
  *
- * <p>{@code city} là mã thành phố lưu trong {@code venue.city}. {@code priceFrom} null khi sự kiện chưa có hạng nào gán khu.
+ * <p>{@code city} là mã địa phương suy ra từ {@code venue.location}. {@code priceFrom} null khi sự kiện chưa có hạng nào gán khu.
  * {@code sortKey} là khoá sắp xếp của dòng này, dùng để sinh cursor.
  */
 public record EventSummaryResult(

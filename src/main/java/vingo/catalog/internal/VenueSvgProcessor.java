@@ -1,5 +1,6 @@
 package vingo.catalog.internal;
 
+import java.awt.BasicStroke;
 import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
 import java.nio.charset.StandardCharsets;
@@ -15,11 +16,15 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import vingo.shared.error.DomainException;
+import vingo.shared.error.ErrorCode;
 import vingo.catalog.internal.SeatLayoutSvgParser.*;
 
 /** Hai lớp SVG dùng cùng hệ tọa độ; không suy đoán phép ghép từ tên file. */
 @Component
 public class VenueSvgProcessor {
+    private static final double SEAT_ZONE_OUTSIDE_AREA_LIMIT = 0.025;
+    private static final double SEAT_ZONE_OUTSIDE_RATIO_LIMIT = 0.01;
+    private static final double ZONE_PATH_JOIN_RADIUS = 0.005;
     private final SeatLayoutSvgParser parser;
     public VenueSvgProcessor(SeatLayoutSvgParser parser) { this.parser = parser; }
     public record Marker(String code, String svgId, String direction, String labelId) {}
@@ -134,11 +139,16 @@ public class VenueSvgProcessor {
         }
         if (requested != null && !zones.keySet().containsAll(requested.keySet())) fail(null,"UNKNOWN_ZONE_MAPPING","Mapping chứa zone không tồn tại.");
         List<SeatShape> seats = new ArrayList<>();
-        for (var zone : parsed.zones()) for (var seat : zone.seats()) {
-            Area shape = geometry.seatArea(detailElements.get(seat.svgId()));
-            contained(shape, canvas, seat.svgId(), "SEAT_OUTSIDE_VIEW_BOX");
-            contained(shape, zones.get(zone.code()), seat.svgId(), "SEAT_OUTSIDE_ZONE");
-            seats.add(new SeatShape(seat.svgId(),shape,shape.getBounds2D()));
+        for (var zone : parsed.zones()) {
+            if (zone.seats().isEmpty()) continue;
+            Area zoneFill = zones.get(zone.code());
+            Area joinedZone = joinZonePaths(zoneFill);
+            for (var seat : zone.seats()) {
+                Area shape = geometry.seatArea(detailElements.get(seat.svgId()));
+                contained(shape, canvas, seat.svgId(), "SEAT_OUTSIDE_VIEW_BOX");
+                containedSeat(shape, zoneFill, joinedZone, seat, zone.svgId());
+                seats.add(new SeatShape(seat.svgId(),shape,shape.getBounds2D()));
+            }
         }
         seats.sort(Comparator.comparingDouble(s -> s.bounds().getMinX()));
         List<SeatShape> active=new ArrayList<>();
@@ -152,6 +162,35 @@ public class VenueSvgProcessor {
         return new Bundle(overviewSvg,new ParsedLayout(2,detailSvg,box,parsed.zones()),markers(baseElements,"GATE__"),areas,Map.copyOf(mappings));
     }
     private record SeatShape(String id, Area shape, Rectangle2D bounds) {}
+    private static void containedSeat(Area shape, Area zone, Area joinedZone, ParsedSeat seat, String zoneId) {
+        Area outside = new Area(shape);
+        outside.subtract(zone);
+        if (outside.isEmpty()) return;
+        double outsideArea = SeatLayoutAreaMeasure.area(outside);
+        // Giới hạn theo cả diện tích tuyệt đối lẫn tỷ lệ để ghế nhỏ không bị bỏ qua lỗi lớn.
+        double tolerance = Math.min(SEAT_ZONE_OUTSIDE_AREA_LIMIT,
+                SeatLayoutAreaMeasure.area(shape) * SEAT_ZONE_OUTSIDE_RATIO_LIMIT);
+        boolean centerInside = joinedZone.contains(seat.x().doubleValue(), seat.y().doubleValue());
+        if (centerInside && outsideArea <= tolerance) return;
+        throw new DomainException(ErrorCode.INVALID_SEAT_LAYOUT, "Sơ đồ sân không hợp lệ.", Map.of("issues", List.of(Map.of(
+                "reason", "SEAT_OUTSIDE_ZONE", "layer_id", seat.svgId(), "zone_id", zoneId,
+                "intersection_area", outsideArea, "tolerance", tolerance,
+                "message", centerInside
+                        ? "Phần ghế ngoài zone vượt sai số cho phép (tối đa 0,025 đơn vị SVG² và 1% diện tích ghế)."
+                        : "Tâm ghế phải nằm trong vùng zone hợp nhất; chỉ khép khe giữa các path với bán kính 0,005 đơn vị SVG."))));
+    }
+    private static Area joinZonePaths(Area zone) {
+        // Fill đã là hợp của mọi path/use sau transform, winding và mask.
+        // Giãn rồi co cùng bán kính để khép khe làm tròn, không dùng bounding box/convex hull.
+        BasicStroke edge = new BasicStroke((float) (2 * ZONE_PATH_JOIN_RADIUS),
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+        Area expanded = new Area(zone);
+        expanded.add(new Area(edge.createStrokedShape(zone)));
+        Area joined = new Area(expanded);
+        joined.subtract(new Area(edge.createStrokedShape(expanded)));
+        joined.add(zone);
+        return joined;
+    }
     private static Map<String,Element> overview(Document doc) {
         var root=doc.getDocumentElement(); var box=SeatLayoutSvgParser.readViewBox(root); origin(box);
         var ids=SeatLayoutSvgParser.validateElements(root); rejectDefinitionMarkers(ids); var geom=new SeatLayoutSvgGeometry(ids);

@@ -37,6 +37,11 @@ public class VenueService {
 
     public record VenuePage(List<VenueRow> data, String nextCursor) {}
 
+    @Transactional(readOnly = true)
+    public VenueRow get(UUID venueId) {
+        return repository.findActiveById(venueId).orElseThrow(VenueService::notFound);
+    }
+
     @Transactional
     public VenueRow create(VenueData input) {
         validateText(input.name(), "Tên sân");
@@ -83,7 +88,10 @@ public class VenueService {
                 keepIfAbsent(patch.district(), current.district()),
                 keepIfAbsent(patch.lat(), current.lat()),
                 keepIfAbsent(patch.lng(), current.lng()),
-                keepIfAbsent(patch.infoJson(), current.infoJson())
+                keepIfAbsent(patch.infoJson(), current.infoJson()),
+                patch.locationJson() != null ? patch.locationJson()
+                        : patch.address() != null || patch.city() != null || patch.district() != null
+                            || patch.lat() != null || patch.lng() != null ? null : current.locationJson()
         );
 
         validateCoordinates(merged);

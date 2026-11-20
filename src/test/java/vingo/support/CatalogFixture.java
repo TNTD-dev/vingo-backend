@@ -39,8 +39,8 @@ public class CatalogFixture {
     public Event eventWithTwoSeatedZones() {return event(EventSpec.defaults(),true);}
     private Event event(EventSpec spec,boolean splitZones) {
         UUID venueId = jdbc.sql("""
-                        INSERT INTO venue (name, type, city)
-                        VALUES ('Test venue', 'STADIUM', :city) RETURNING id
+                        INSERT INTO venue (name, type, location)
+                        VALUES ('Test venue', 'STADIUM', jsonb_build_object('city_code',CAST(:city AS text),'source','LEGACY')) RETURNING id
                         """)
                 .param("city", spec.city()).query(UUID.class).single();
         UUID layoutId = VenueSchemaFixture.draft(jdbc,venueId);

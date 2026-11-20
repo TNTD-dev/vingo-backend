@@ -14,7 +14,7 @@ public final class MetricRegistry {
                     MetricSources.SALES, "paid_at", "COALESCE(SUM(quantity),0)", null),
             "checkins", new Definition("checkins", "Distinct USED tickets of PAID orders; time = first OK scan",
                     MetricSources.CHECKINS, "checked_in_at", "COUNT(*)", null),
-            "fill_rate", new Definition("percent", "100 * SUM(inventory sold) / SUM(capacity); time = starts_at; zero capacity = 0",
+            "fill_rate", new Definition("percent", "100 * SUM(inventory sold) / SUM(capacity) of SCHEDULED showtimes; time = starts_at; zero capacity = 0",
                     MetricSources.INVENTORY, "starts_at", "COALESCE(SUM(sold),0)", "COALESCE(SUM(capacity),0)"));
 
     private MetricRegistry() {}

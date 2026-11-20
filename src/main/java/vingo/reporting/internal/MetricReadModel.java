@@ -24,9 +24,10 @@ public class MetricReadModel {
     public List<Point> read(MetricRegistry.Definition definition, MetricQuery query, String group) {
         String bucket = switch (group) {
             case "none" -> "'all'";
-            case "day" -> "to_char(" + definition.timeColumn() + " AT TIME ZONE 'UTC','YYYY-MM-DD')";
-            case "hour" -> "to_char(" + definition.timeColumn() + " AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:00:00\"Z\"')";
-            case "tier" -> "price_tier_id::text";
+            case "day" -> "to_char(" + definition.timeColumn() + " AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM-DD')";
+            case "month" -> "to_char(" + definition.timeColumn() + " AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM')";
+            case "hour" -> "to_char(" + definition.timeColumn() + " AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM-DD\"T\"HH24:00:00\"+07:00\"')";
+            case "tier" -> "COALESCE(price_tier_id::text,'unassigned')";
             case "zone" -> "zone_id::text";
             default -> throw new IllegalArgumentException("Grouping must be validated by ReportingService");
         };
