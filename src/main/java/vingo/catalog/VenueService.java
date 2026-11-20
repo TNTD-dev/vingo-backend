@@ -37,6 +37,11 @@ public class VenueService {
 
     public record VenuePage(List<VenueRow> data, String nextCursor) {}
 
+    @Transactional(readOnly = true)
+    public VenueRow get(UUID venueId) {
+        return repository.findActiveById(venueId).orElseThrow(VenueService::notFound);
+    }
+
     @Transactional
     public VenueRow create(VenueData input) {
         validateText(input.name(), "Tên sân");

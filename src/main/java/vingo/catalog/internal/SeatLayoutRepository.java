@@ -238,17 +238,14 @@ public class SeatLayoutRepository {
                 .list();
     }
 
-    boolean activeVenueExists(UUID venueId) {
+    boolean activeVenueExists(UUID venueId, boolean lock) {
         return jdbc.sql("""
-                SELECT count(*) > 0 FROM (
-                    SELECT 1 FROM venue v
-                    WHERE v.id = :venueId AND v.deleted_at IS NULL
-                    FOR UPDATE OF v
-                ) locked
-                """)
+                SELECT id FROM venue WHERE id = :venueId AND deleted_at IS NULL
+                """ + (lock ? " FOR UPDATE" : ""))
                 .param("venueId", venueId)
-                .query(Boolean.class)
-                .single();
+                .query(UUID.class)
+                .optional()
+                .isPresent();
     }
 
     List<LayoutHeaderRow> findByVenue(UUID venueId, String type, LayoutPosition after, int fetchSize) {

@@ -280,7 +280,7 @@ public class VenueImportService {
                 venue = venues.create(new VenueData(
                         v.getName(),
                         v.getAddress(),
-                        v.getCity() == null ? null : v.getCity().getValue(),
+                        v.getCity(),
                         v.getDistrict(),
                         v.getLat(),
                         v.getLng(),

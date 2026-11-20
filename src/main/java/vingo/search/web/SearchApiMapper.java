@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventDetail;
 import vingo.api.model.EventStatus;
@@ -67,10 +66,10 @@ class SearchApiMapper {
         }
         String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {
-            summary.city(CityCode.fromValue(r.city())).cityName(cityName);
+            summary.city(r.city()).cityName(cityName);
         } else if (r.city() != null) {
             // Mã chưa có trong danh sách tạm: không ép vào enum, trả nguyên giá trị làm tên hiển thị.
-            summary.cityName(r.city());
+            summary.city(r.city()).cityName(r.city());
         }
         return summary;
     }
@@ -179,9 +178,9 @@ class SearchApiMapper {
                 .address(r.address());
         String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {
-            venue.city(CityCode.fromValue(r.city())).cityName(cityName);
+            venue.city(r.city()).cityName(cityName);
         } else if (r.city() != null) {
-            venue.cityName(r.city());
+            venue.city(r.city()).cityName(r.city());
         }
         return venue;
     }

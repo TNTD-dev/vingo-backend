@@ -16,7 +16,9 @@ public class VenueRepository {
 
     private static final String COLUMNS = """
             id, name, address, city, district, lat, lng,
-            rules, created_at, updated_at
+            rules, created_at, updated_at,
+            (SELECT count(*) FROM seat_map m WHERE m.venue_id = venue.id) AS layout_count,
+            (SELECT count(*) FROM venue_import_session i WHERE i.venue_id = venue.id) AS draft_layout_count
             """;
 
     private final JdbcClient jdbc;
@@ -39,7 +41,9 @@ public class VenueRepository {
             UUID id,
             VenueData data,
             OffsetDateTime createdAt,
-            OffsetDateTime updatedAt
+            OffsetDateTime updatedAt,
+            long layoutCount,
+            long draftLayoutCount
             ) {}
 
     public record VenuePosition(OffsetDateTime createdAt, UUID id) {}
@@ -59,7 +63,9 @@ public class VenueRepository {
                 rs.getObject("id", UUID.class),
                 data,
                 rs.getObject("created_at", OffsetDateTime.class),
-                rs.getObject("updated_at", OffsetDateTime.class)
+                rs.getObject("updated_at", OffsetDateTime.class),
+                rs.getLong("layout_count"),
+                rs.getLong("draft_layout_count")
         );
     }
 
@@ -119,6 +125,13 @@ public class VenueRepository {
                 .param("fetchSize", fetchSize)
                 .query(VenueRepository::mapRow)
                 .list();
+    }
+
+    public Optional<VenueRow> findActiveById(UUID venueId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM venue WHERE id = :id AND deleted_at IS NULL")
+                .param("id", venueId)
+                .query(VenueRepository::mapRow)
+                .optional();
     }
 
     public Optional<VenueRow> findActiveByIdForUpdate(UUID venueId) {

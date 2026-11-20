@@ -12,7 +12,6 @@ import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
 import vingo.api.model.CheckinResult;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventSummary;
 import vingo.api.model.Showtime;
@@ -90,23 +89,16 @@ public class TicketingReader {
                             .id(rs.getObject("venue_id", UUID.class))
                             .name(rs.getString("venue_name"))
                             .address(rs.getString("address"))
-                            .cityName(city);
+                            .city(city).cityName(city);
                     var event = new EventSummary()
                             .id(rs.getObject("event_id", UUID.class))
                             .title(rs.getString("title"))
                             .category(EventCategory.fromValue(rs.getString("category")))
                             .venueName(rs.getString("venue_name"))
-                            .cityName(city)
+                            .city(city).cityName(city)
                             .priceFrom(rs.getObject("price_from", Long.class))
                             .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
                             .onSale(rs.getBoolean("on_sale"));
-                    for (CityCode code : CityCode.values()) {
-                        if (code.getValue().equals(city)) {
-                            venue.city(code);
-                            event.city(code);
-                            break;
-                        }
-                    }
                     String poster = rs.getString("poster_url");
                     if (poster != null) {
                         event.posterUrl(URI.create(poster));

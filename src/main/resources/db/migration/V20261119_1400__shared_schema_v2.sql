@@ -495,9 +495,9 @@ CREATE TABLE audit_log (
     actor_id  uuid        NOT NULL REFERENCES user_account,
     action    text        NOT NULL CHECK (action IN (
                   'VOID_TICKET', 'REISSUE_QR', 'RESEND_TICKET', 'RESOLVE_REVIEW',
-                  'BLOCK_SEATS', 'UNBLOCK_SEATS', 'CANCEL_EVENT', 'CANCEL_SHOWTIME', 'UPDATE_ACCOUNT')),
+                  'BLOCK_SEATS', 'UNBLOCK_SEATS', 'CANCEL_EVENT', 'CANCEL_SHOWTIME', 'UPDATE_ACCOUNT', 'ADMIN_ACTIVITY')),
     entity    text        NOT NULL CHECK (entity IN (   -- = tên bảng của đối tượng
-                  'ticket_order', 'ticket', 'event', 'showtime', 'user_account')),
+                  'ticket_order', 'ticket', 'event', 'showtime', 'user_account', 'admin_activity')),
     entity_id uuid        NOT NULL,
     reason    text,
     before    jsonb,
@@ -507,6 +507,7 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX audit_log_entity_idx ON audit_log (entity, entity_id);
 CREATE INDEX audit_log_at_idx     ON audit_log (at DESC);
+CREATE INDEX audit_log_actor_at_idx ON audit_log (actor_id, at DESC, id DESC);
 
 CREATE TABLE notification_outbox (
     id         uuid            PRIMARY KEY DEFAULT uuidv7(),
@@ -826,8 +827,8 @@ COMMENT ON COLUMN idempotency_record.created_at IS 'Thời điểm nhận; job d
 COMMENT ON TABLE audit_log IS 'Thao tác admin (kể cả qua AI agent) kèm trạng thái trước/sau.';
 COMMENT ON COLUMN audit_log.id IS 'Khoá chính';
 COMMENT ON COLUMN audit_log.actor_id IS 'Admin thực hiện';
-COMMENT ON COLUMN audit_log.action IS 'Loại thao tác; danh sách mở rộng theo tính năng';
-COMMENT ON COLUMN audit_log.entity IS 'Tên bảng của đối tượng: ticket_order | ticket | event | showtime | user_account';
+COMMENT ON COLUMN audit_log.action IS 'Loại thao tác quản trị, gồm ADMIN_ACTIVITY cho từng lần gọi API quản trị';
+COMMENT ON COLUMN audit_log.entity IS 'Tên bảng của đối tượng: ticket_order | ticket | event | showtime | user_account | admin_activity';
 COMMENT ON COLUMN audit_log.entity_id IS 'id đối tượng';
 COMMENT ON COLUMN audit_log.reason IS 'Lý do admin nhập';
 COMMENT ON COLUMN audit_log.before IS 'Giá trị cũ của các trường bị thay đổi, đọc từ dòng đã khoá trong cùng transaction';

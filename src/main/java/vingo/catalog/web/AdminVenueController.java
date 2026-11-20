@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -25,7 +24,6 @@ import tools.jackson.databind.json.JsonMapper;
 import vingo.api.AdminCatalogApi;
 import vingo.api.model.AdminEventPage;
 import vingo.api.model.AdminEventSummary;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventCreateInput;
 import vingo.api.model.EventDetail;
@@ -116,7 +114,7 @@ class AdminVenueController implements AdminCatalogApi {
         VenueRow created = venues.create(new VenueData(
                 input.getName(),
                 input.getAddress(),
-                input.getCity().getValue(),
+                input.getCity(),
                 input.getDistrict(),
                 input.getLat(),
                 input.getLng(),
@@ -161,11 +159,16 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
+    public ResponseEntity<Venue> getAdminVenue(UUID venueId) {
+        return ResponseEntity.ok(toApi(venues.get(venueId)));
+    }
+
+    @Override
     public ResponseEntity<Venue> updateVenue(UUID venueId, VenueInput input) {
         VenueRow updated = venues.update(venueId, new VenueData(
                 input.getName(),
                 input.getAddress(),
-                input.getCity() == null ? null : input.getCity().getValue(),
+                input.getCity(),
                 input.getDistrict(),
                 input.getLat(),
                 input.getLng(),
@@ -199,34 +202,33 @@ class AdminVenueController implements AdminCatalogApi {
                 .body(content);
     }
 
-    private static CityCode toCityCode(String storedCity) {
-        for (CityCode code : CityCode.values()) {
-            if (code.getValue().equals(storedCity)) {
-                return code;
-            }
-        }
-        return null;
+    private static String cityName(String city) {
+        return switch (city) {
+            case null -> null;
+            case "HCM" -> "TP. Hồ Chí Minh";
+            case "HN" -> "Hà Nội";
+            case "DN" -> "Đà Nẵng";
+            default -> city;
+        };
     }
 
     private Venue toApi(VenueRow row) {
         VenueData data = row.data();
-        CityCode city = toCityCode(data.city());
-        String cityName = city == null ? data.city() : switch (city) {
-            case HCM -> "TP. Hồ Chí Minh";
-            case HN -> "Hà Nội";
-            case DN -> "Đà Nẵng";
-        };
-
         return new Venue()
                 .id(row.id())
                 .name(data.name())
                 .address(data.address())
-                .city(city)
-                .cityName(cityName)
+                .city(data.city())
+                .cityName(cityName(data.city()))
                 .district(data.district())
                 .lat(data.lat())
                 .lng(data.lng())
-                .rules(data.rules());
+                .rules(data.rules())
+                .createdAt(row.createdAt())
+                .updatedAt(row.updatedAt())
+                .layoutCount(row.layoutCount())
+                .publishedLayoutCount(row.layoutCount())
+                .draftLayoutCount(row.draftLayoutCount());
     }
 
     @Override
@@ -439,23 +441,12 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     private Venue toAdminEventVenue(EventDetails.VenueInfo source) {
-        CityCode city = Arrays.stream(CityCode.values())
-                .filter(code -> code.getValue().equals(source.city()))
-                .findFirst()
-                .orElse(null);
-
-        String cityName = city == null ? source.city() : switch (city) {
-            case HCM -> "TP. Hồ Chí Minh";
-            case HN -> "Hà Nội";
-            case DN -> "Đà Nẵng";
-        };
-
         return new Venue()
                 .id(source.id())
                 .name(source.name())
                 .address(source.address())
-                .city(city)
-                .cityName(cityName);
+                .city(source.city())
+                .cityName(cityName(source.city()));
     }
 
     @Override

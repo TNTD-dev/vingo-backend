@@ -16,7 +16,6 @@ import tools.jackson.databind.json.JsonMapper;
 import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.AdminGetOrder200ResponseAllOfHistoryInner;
 import vingo.api.model.Buyer;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventSummary;
 import vingo.api.model.Order;
@@ -115,16 +114,10 @@ public class OrderReader {
                             .title(rs.getString("title"))
                             .category(EventCategory.fromValue(rs.getString("category")))
                             .venueName(rs.getString("venue_name"))
-                            .cityName(city)
+                            .city(city).cityName(city)
                             .priceFrom(rs.getObject("price_from", Long.class))
                             .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
                             .onSale(rs.getBoolean("on_sale"));
-                    for (CityCode code : CityCode.values()) {
-                        if (code.getValue().equals(city)) {
-                            event.city(code);
-                            break;
-                        }
-                    }
                     String poster = rs.getString("poster_url");
                     if (poster != null) {
                         event.posterUrl(URI.create(poster));

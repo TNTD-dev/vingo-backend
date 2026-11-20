@@ -522,7 +522,7 @@ paths:
             venue: { summary: Tên sân, value: Mỹ Đình }
             city: { summary: Thành phố, value: Hà Nội }
         - { name: category, in: query, schema: { $ref: '#/components/schemas/EventCategory' } }
-        - { name: city, in: query, schema: { $ref: '#/components/schemas/CityCode' } }
+        - { name: city, in: query, schema: { type: string, maxLength: 100 } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
         - { name: price_min, in: query, schema: { type: integer, format: int64 } }
@@ -1105,6 +1105,45 @@ paths:
                         items: { $ref: '#/components/schemas/CheckinResult' }
 
   # ------------------------------------------------------------------ Admin Catalog
+  /admin/users/statistics:
+    get:
+      operationId: adminUserStatistics
+      tags: [Admin Accounts]
+      summary: Thống kê trạng thái người dùng
+      description: 'Chỉ ADMIN. Đếm trên toàn bộ tài khoản, không phụ thuộc trang danh sách. ACTIVE/LOCKED/UNVERIFIED/DELETED được tính từ thông tin xác minh, khoá và xoá; không suy số người online từ ACTIVE.'
+      responses:
+        '200':
+          description: Số tài khoản theo trạng thái
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserStatistics' }
+              example: { total: 10, active: 8, locked: 1, unverified: 1, deleted: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/users/export:
+    get:
+      operationId: exportAdminUsers
+      tags: [Admin Accounts]
+      summary: Xuất danh sách người dùng
+      description: 'Chỉ ADMIN. CSV UTF-8 theo bộ lọc, tối đa 10000 tài khoản; vượt giới hạn trả 413 PAYLOAD_TOO_LARGE, cần thu hẹp bộ lọc. Không xuất token, hash, OTP. Các ô được chống CSV formula injection.'
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: role, in: query, schema: { type: string, enum: [BUYER, ADMIN] } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, LOCKED, UNVERIFIED, DELETED] } }
+      responses:
+        '200':
+          description: Tệp CSV
+          content:
+            text/csv:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413':
+          description: Quá giới hạn xuất dữ liệu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /admin/users:
     get:
       operationId: adminListUsers
@@ -1117,6 +1156,7 @@ paths:
         - { name: status, in: query, schema: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED] } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - { name: sort, in: query, schema: { type: string, enum: [newest, oldest, name], default: newest } }
       responses:
         '200':
           description: Trang tài khoản
@@ -1328,7 +1368,7 @@ paths:
       operationId: previewVenueImport
       tags: [Venue Imports]
       summary: Ghép nhiều SVG và kiểm tra hình học
-      description: 'Chỉ ADMIN sở hữu nháp. Một overview, ít nhất một detail, cùng viewBox; kiểm tra ID trùng, tọa độ, mapping AREA, zone/ghế và cổng. Trả valid=false cùng issues để sửa, không tạo venue/layout; revision không đổi. Lỗi 409 ACTION_STATE_INVALID nếu dữ liệu đổi; 404 NOT_FOUND.'
+      description: 'Chỉ ADMIN sở hữu nháp. Một overview, ít nhất một detail, cùng viewBox; kiểm tra ID trùng, tọa độ, mapping AREA, zone/ghế và cổng. Zone lấy hợp fill của tất cả path/use sau transform, winding và mask; kiểm tra tâm ghế trên vùng hợp được khép khe bằng phép giãn/co bán kính 0.005 đơn vị viewBox. Diện tích ghế ngoài hình zone gốc vẫn phải đạt min(0.025 đơn vị viewBox², 1% diện tích ghế). Không nới collision ghế–cổng hoặc ghế–ghế. Trả valid=false cùng issues để sửa, không tạo venue/layout; revision không đổi. Lỗi 409 ACTION_STATE_INVALID nếu dữ liệu đổi; 404 NOT_FOUND.'
       requestBody:
         required: true
         content:
@@ -1478,6 +1518,20 @@ paths:
               schema: { $ref: '#/components/schemas/Venue' }
         '400': { $ref: '#/components/responses/ValidationError' }
   /admin/venues/{venue_id}:
+    get:
+      operationId: getAdminVenue
+      tags: [Admin Catalog]
+      summary: Chi tiết sân dành cho quản trị
+      description: 'Chỉ ADMIN. Trả địa chỉ và tọa độ, ngày tạo/cập nhật và số sơ đồ. Lỗi 404 NOT_FOUND khi sân đã ngừng dùng hoặc không tồn tại.'
+      responses:
+        '200':
+          description: Thông tin sân
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Venue' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     parameters: [ { $ref: '#/components/parameters/VenueId' } ]
     patch:
       operationId: updateVenue
@@ -1515,6 +1569,28 @@ paths:
                 status: 409
                 code: VENUE_IN_USE
                 detail: Sân còn suất diễn DRAFT hoặc SCHEDULED chưa kết thúc.
+  /admin/venues/{venue_id}/layout-tree:
+    get:
+      operationId: getAdminLayoutTree
+      tags: [Admin Workspace]
+      summary: Cây phiên bản sơ đồ theo loại
+      description: 'Chỉ ADMIN. Chọn FOOTBALL hoặc CONCERT để lấy đúng loại layout của sân, theo phiên bản giảm dần. Cây không phụ thuộc file nhập tạm; tải ghế qua API chi tiết zone hiện có. Không cho sửa hình học. Lỗi 400 VALIDATION_ERROR hoặc 404 NOT_FOUND.'
+      parameters:
+        - { name: venue_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: layout_type, in: query, required: true, schema: { $ref: '#/components/schemas/LayoutType' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Cây phiên bản của loại layout được chọn
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminLayoutTree' }
+              example: { venue_id: '019a0000-0000-7000-8000-000000000001', layout_type: FOOTBALL, data: [], next_cursor: null }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /admin/venues/{venue_id}/seat-layouts:
     get:
       operationId: listSeatLayouts
@@ -2527,6 +2603,12 @@ paths:
         - { name: entity_id, in: query, schema: { type: string, format: uuid } }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - { name: actor_id, in: query, schema: { type: string, format: uuid } }
+        - { name: action, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: outcome, in: query, schema: { type: string, enum: [STARTED, SUCCEEDED, FAILED] } }
+        - { name: activity_only, in: query, schema: { type: boolean, default: false }, description: Chỉ hoạt động ghi thành công cho feed; loại bỏ request đọc và audit nghiệp vụ trùng }
       responses:
         '200':
           description: OK
@@ -2545,6 +2627,25 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
 
   # ------------------------------------------------------------------ Admin Reports
+  /admin/dashboard:
+    get:
+      operationId: getAdminDashboard
+      tags: [Admin Reports]
+      summary: Tổng quan quản trị
+      description: 'Chỉ ADMIN. Khoảng [from,to), mặc định 30 ngày, tối đa 366 ngày. Chia ngày/tháng theo Asia/Ho_Chi_Minh. Doanh thu và vé bán theo paid_at của đơn PAID; không tự giảm theo vé VOID. Tỷ lệ bán dùng SOLD/capacity của các suất SCHEDULED có starts_at trong kỳ. Suất sắp diễn và số đang mở bán là snapshot tại computed_at, độc lập khoảng lọc. Kỳ trước có cùng độ dài. Không trả dữ liệu log máy chủ. Lỗi 400 VALIDATION_ERROR.'
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: group_by, in: query, schema: { type: string, enum: [day, month], default: day } }
+      responses:
+        '200':
+          description: Số liệu và thời điểm tính
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminDashboard' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /admin/reports/metrics:
     get:
       operationId: queryMetric
@@ -2572,7 +2673,7 @@ paths:
         - { name: price_tier_id, in: query, schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
-        - { name: group_by, in: query, schema: { type: string, enum: [none, day, hour, tier, zone], default: none } }
+        - { name: group_by, in: query, schema: { type: string, enum: [none, day, hour, month, tier, zone], default: none } }
       responses:
         '200':
           description: OK
@@ -2582,6 +2683,54 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/location-suggestions:
+    get:
+      operationId: suggestVenueLocations
+      tags: [Venue Setup]
+      x-required-role: ADMIN
+      summary: Gợi ý địa điểm bằng Geoapify Address Autocomplete
+      description: Proxy server tới Geoapify; chỉ nhận q từ 3 ký tự, debounce 300–500 ms ở client, giới hạn 10 kết quả. API key không gửi về client. Dữ liệu OSM được trả theo điều khoản attribution của Geoapify.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 3, maxLength: 200 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10, default: 5 } }
+      responses:
+        '200':
+          description: Gợi ý chuẩn hóa, không làm thay đổi vị trí đã lưu.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/LocationSuggestion' }, maxItems: 10 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /admin/location-reverse-geocode:
+    get:
+      operationId: reverseGeocodeVenueLocation
+      tags: [Venue Setup]
+      x-required-role: ADMIN
+      summary: Chuẩn hóa địa chỉ từ vị trí đã chọn
+      description: Proxy reverse geocode Geoapify sau khi admin chọn điểm hoặc thả marker; không gọi liên tục trong lúc kéo marker.
+      parameters:
+        - { name: lat, in: query, required: true, schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: lng, in: query, required: true, schema: { type: number, minimum: -180, maximum: 180 } }
+      responses:
+        '200':
+          description: Địa chỉ chuẩn hóa; tỉnh/thành và quận/huyện có thể thiếu nếu nguồn không cung cấp.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationSuggestion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
 components:
   securitySchemes:
@@ -2734,11 +2883,11 @@ components:
                   intersection_area:
                     type: number
                     minimum: 0
-                    description: Diện tích fill giao nhau, đơn vị tọa độ viewBox bình phương, không phải CSS pixel².
+                    description: Diện tích fill giao nhau, hoặc phần ghế ngoài zone với SEAT_OUTSIDE_ZONE; đơn vị tọa độ viewBox bình phương, không phải CSS pixel².
                   tolerance:
                     type: number
                     minimum: 0
-                    description: Ngưỡng diện tích được phép; 0 cho ghế và 0.5 cho zone.
+                    description: 'Ngưỡng diện tích được phép: collision cổng là 0 cho ghế và 0.5 cho zone; riêng SEAT_OUTSIDE_ZONE là min(0.025, 1% diện tích ghế).'
                   message:
                     type: string
                     description: Thông báo để admin biết cần sửa gì trong Figma.
@@ -2814,14 +2963,6 @@ components:
         phone: { type: string }
         email: { type: string, format: email, description: Email nhận vé }
 
-    CityCode:
-      type: string
-      enum: [HCM, HN, DN]
-      description: |
-        Mã thành phố (danh sách tạm, catalog sẽ chốt). Backend không tự đổi tên sang mã; agent tự map tên người dùng nói sang mã:
-        HCM: TP. Hồ Chí Minh, Sài Gòn, HCMC;
-        HN: Hà Nội, Hanoi;
-        DN: Đà Nẵng, Da Nang.
     EventCategory: { type: string, enum: [FOOTBALL, CONCERT] }
     EventStatus: { type: string, enum: [DRAFT, PUBLISHED, CANCELLED] }
     ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
@@ -2876,8 +3017,12 @@ components:
         gate_id: { type: string }
         zone_id: { type: string }
         file_id: { type: string, format: uuid }
-        intersection_area: { type: number }
-        tolerance: { type: number }
+        intersection_area:
+          type: number
+          description: Diện tích va chạm hoặc diện tích ghế nằm ngoài zone với SEAT_OUTSIDE_ZONE, tính bằng đơn vị viewBox².
+        tolerance:
+          type: number
+          description: 'Ngưỡng diện tích được phép; SEAT_OUTSIDE_ZONE dùng min(0.025 đơn vị viewBox², 1% diện tích ghế) trên zone gốc. Tâm ghế kiểm tra trên hợp fill toàn bộ zone sau khi khép khe bằng phép giãn/co bán kính 0.005 đơn vị viewBox.'
     VenueImportFile:
       type: object
       properties:
@@ -2973,24 +3118,66 @@ components:
         areas: { type: array, items: { $ref: '#/components/schemas/OverviewArea' } }
         zone_areas: { type: object, additionalProperties: { type: string } }
         issues: { type: array, items: { $ref: '#/components/schemas/VenueImportIssue' } }
+    AdminLayoutTree:
+      type: object
+      required: [venue_id, layout_type, data]
+      properties:
+        venue_id: { type: string, format: uuid }
+        layout_type: { $ref: '#/components/schemas/LayoutType' }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AdminLayoutTreeVersion' }
+        next_cursor: { type: [string, 'null'] }
+    AdminLayoutTreeVersion:
+      type: object
+      required: [id, name, version, status, zones]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: integer, format: int64 }
+        status: { type: string, enum: [DRAFT, PUBLISHED] }
+        overview_id: { type: string, format: uuid }
+        overview_name: { type: string }
+        overview_status: { type: string }
+        published_at: { type: string, format: date-time }
+        zones:
+          type: array
+          items: { $ref: '#/components/schemas/AdminLayoutTreeZone' }
+    AdminLayoutTreeZone:
+      type: object
+      required: [id, code, name, kind, capacity]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [SEATED, STANDING] }
+        stand_code: { type: string }
+        level: { type: integer }
+        capacity: { type: integer }
+        overview_area_id: { type: string, format: uuid }
     Venue:
       type: object
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         address: { type: string }
-        city: { $ref: '#/components/schemas/CityCode' }
+        city: { type: string, maxLength: 100 }
         city_name: { type: string, description: Tên hiển thị của thành phố }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
         rules: { type: [string, 'null'], description: Nội quy sân }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        layout_count: { type: integer, format: int64 }
+        published_layout_count: { type: integer, format: int64 }
+        draft_layout_count: { type: integer, format: int64 }
     VenueInput:
       type: object
       properties:
         name: { type: string }
         address: { type: string }
-        city: { $ref: '#/components/schemas/CityCode' }
+        city: { type: string, maxLength: 100 }
         district: { type: string }
         lat: { type: number }
         lng: { type: number }
@@ -3198,7 +3385,7 @@ components:
         category: { $ref: '#/components/schemas/EventCategory' }
         poster_url: { type: string, format: uri }
         venue_name: { type: string }
-        city: { $ref: '#/components/schemas/CityCode' }
+        city: { type: string, maxLength: 100 }
         city_name: { type: string, description: Tên hiển thị của thành phố }
         first_starts_at: { type: string, format: date-time }
         price_from: { type: integer, format: int64 }
@@ -3394,15 +3581,26 @@ components:
         buyer: { $ref: '#/components/schemas/Buyer' }
         review_reason: { type: [string, 'null'], enum: [PAID_AFTER_EXPIRY, PAID_AFTER_CANCEL, AMOUNT_MISMATCH, PAYMENT_SUSPECTED, null] }
         created_at: { type: string, format: date-time }
+    AdminUserStatistics:
+      type: object
+      required: [total, active, locked, unverified, deleted]
+      properties:
+        total: { type: integer, format: int64 }
+        active: { type: integer, format: int64 }
+        locked: { type: integer, format: int64 }
+        unverified: { type: integer, format: int64 }
+        deleted: { type: integer, format: int64 }
     AdminAccount:
       type: object
-      required: [id, email, full_name, role, admin_locked, has_password, created_at]
+      required: [id, email, full_name, role, status, admin_locked, has_password, created_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string }
         phone: { type: [string, 'null'] }
+        avatar_url: { type: [string, 'null'] }
         full_name: { type: string }
         role: { type: string, enum: [BUYER, ADMIN] }
+        status: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED], description: Trạng thái suy ra tại thời điểm đọc }
         email_verified_at: { type: [string, 'null'], format: date-time }
         phone_verified_at: { type: [string, 'null'], format: date-time }
         admin_locked: { type: boolean }
@@ -3478,8 +3676,9 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
+        actor_name: { type: string }
         actor_id: { type: string, format: uuid }
-        action: { type: string, enum: [VOID_TICKET, REISSUE_QR, RESEND_TICKET, RESOLVE_REVIEW, BLOCK_SEATS, UNBLOCK_SEATS, CANCEL_EVENT, CANCEL_SHOWTIME, UPDATE_ACCOUNT] }
+        action: { type: string, enum: [VOID_TICKET, REISSUE_QR, RESEND_TICKET, RESOLVE_REVIEW, BLOCK_SEATS, UNBLOCK_SEATS, CANCEL_EVENT, CANCEL_SHOWTIME, UPDATE_ACCOUNT, ADMIN_ACTIVITY] }
         entity: { type: string }
         entity_id: { type: string, format: uuid }
         reason: { type: string }
@@ -3487,6 +3686,49 @@ components:
         at: { type: string, format: date-time }
         before: { type: [object, 'null'], description: Trạng thái liên quan trước thao tác }
         after: { type: [object, 'null'], description: Trạng thái liên quan sau thao tác }
+    AdminDashboard:
+      type: object
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        computed_at: { type: string, format: date-time }
+        timezone: { type: string }
+        current: { $ref: '#/components/schemas/AdminDashboardKpis' }
+        previous: { $ref: '#/components/schemas/AdminDashboardKpis' }
+        on_sale_showtimes: { type: integer, format: int64 }
+        revenue: { $ref: '#/components/schemas/MetricResult' }
+        tickets: { $ref: '#/components/schemas/MetricResult' }
+        tiers: { $ref: '#/components/schemas/MetricResult' }
+        upcoming:
+          type: array
+          items: { $ref: '#/components/schemas/AdminDashboardShowtime' }
+        venues:
+          type: array
+          items: { $ref: '#/components/schemas/AdminDashboardVenue' }
+    AdminDashboardKpis:
+      type: object
+      properties:
+        revenue: { type: number }
+        tickets_sold: { type: number }
+        new_users: { type: integer, format: int64 }
+    AdminDashboardShowtime:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        title: { type: string }
+        venue_name: { type: string }
+        starts_at: { type: string, format: date-time }
+        sold: { type: integer, format: int64 }
+        capacity: { type: integer, format: int64 }
+        on_sale: { type: boolean }
+    AdminDashboardVenue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sold: { type: integer, format: int64 }
+        capacity: { type: integer, format: int64 }
     MetricResult:
       type: object
       properties:
@@ -3501,5 +3743,17 @@ components:
             type: object
             properties:
               key: { type: string }
+              label: { type: string }
               value: { type: number }
         definition: { type: string, description: 'Cách tính, ví dụ fill_rate = sold / capacity' }
+
+    LocationSuggestion:
+      type: object
+      required: [label, address, lat, lng]
+      properties:
+        label: { type: string, maxLength: 500 }
+        address: { type: string, maxLength: 500 }
+        city: { type: string, maxLength: 100 }
+        district: { type: string }
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }

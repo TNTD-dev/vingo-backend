@@ -146,7 +146,7 @@ public class SeatLayoutImportService {
         if (pageSize < 1 || pageSize > 100) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "limit phải nằm trong khoảng 1 đến 100.");
         }
-        if (!repository.activeVenueExists(venueId)) {
+        if (!repository.activeVenueExists(venueId, false)) {
             throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sân đang hoạt động.");
         }
         var after = cursor == null ? null : decodeCursor(cursor);
@@ -265,7 +265,7 @@ public class SeatLayoutImportService {
     private void requireActiveVenueLayout(UUID layoutId) {
         var layout = repository.findLayoutForAttach(layoutId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sơ đồ sân đang hoạt động."));
-        if (!repository.activeVenueExists(layout.venueId())) {
+        if (!repository.activeVenueExists(layout.venueId(), true)) {
             throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sân.");
         }
     }

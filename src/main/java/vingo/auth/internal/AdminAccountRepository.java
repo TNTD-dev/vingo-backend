@@ -25,29 +25,45 @@ public class AdminAccountRepository {
                  ELSE 'ACTIVE' END
             """;
     private static final String ACCOUNTS = """
-            (SELECT id, email, phone, full_name, role, email_verified_at, phone_verified_at,
+            (SELECT id, email, phone, avatar_url, full_name, role, email_verified_at, phone_verified_at,
                     admin_locked, locked_until, deleted_at, created_at, password_hash,
                     (%s) AS status
              FROM user_account) a
             """.formatted(STATUS_EXPR);
-    private static final String COLUMNS = "id, email, phone, full_name, role, email_verified_at, phone_verified_at, admin_locked, locked_until, deleted_at, created_at, (password_hash IS NOT NULL) AS has_password";
+    private static final String COLUMNS = "id, email, phone, avatar_url, full_name, role, email_verified_at, phone_verified_at, admin_locked, locked_until, deleted_at, created_at, status, (password_hash IS NOT NULL) AS has_password";
 
     private final JdbcClient jdbc;
 
     public AdminAccountRepository(JdbcClient jdbc) { this.jdbc = jdbc; }
 
-    public List<AdminAccount> list(String q, String role, String status, UUID after, int limit) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM " + ACCOUNTS + """
-                 WHERE
-                 (CAST(:q AS text) IS NULL OR strpos(lower(full_name), lower(:q)) > 0
-                  OR strpos(lower(email), lower(:q)) > 0 OR strpos(COALESCE(phone, ''), :q) > 0)
-                 AND (CAST(:role AS text) IS NULL OR role::text = :role)
-                 AND (CAST(:status AS text) IS NULL OR status = :status)
-                 AND (CAST(:after AS uuid) IS NULL OR id < :after)
-                 ORDER BY id DESC LIMIT :limit
-                """)
-                .param("q", q).param("role", role).param("status", status)
-                .param("after", after).param("limit", limit).query(AdminAccountRepository::map).list();
+    public List<AdminAccount> listSorted(String q, String role, String status, UUID after, int limit, String sort) {
+        String order = switch (sort) {
+            case "oldest" -> "id ASC";
+            case "name" -> "lower(full_name) ASC, id ASC";
+            default -> "id DESC";
+        };
+        String boundary = switch (sort) {
+            case "oldest" -> "id > :after";
+            case "name" -> "(lower(full_name),id) > (SELECT lower(full_name),id FROM user_account WHERE id=:after)";
+            default -> "id < :after";
+        };
+        return jdbc.sql("SELECT " + COLUMNS + " FROM " + ACCOUNTS + " WHERE "
+                + "(CAST(:q AS text) IS NULL OR strpos(lower(full_name),lower(:q))>0 OR strpos(lower(email),lower(:q))>0 OR strpos(COALESCE(phone,''),:q)>0)"
+                + " AND (CAST(:role AS text) IS NULL OR role::text=:role) AND (CAST(:status AS text) IS NULL OR status=:status)"
+                + " AND (CAST(:after AS uuid) IS NULL OR " + boundary + ") ORDER BY " + order + " LIMIT :limit")
+                .param("q",q).param("role",role).param("status",status).param("after",after).param("limit",limit)
+                .query(AdminAccountRepository::map).list();
+    }
+
+    public vingo.api.model.AdminUserStatistics statistics() {
+        return jdbc.sql("""
+                SELECT count(*) AS total, count(*) FILTER(WHERE status='ACTIVE') AS active,
+                    count(*) FILTER(WHERE status='LOCKED') AS locked,
+                    count(*) FILTER(WHERE status='UNVERIFIED') AS unverified,
+                    count(*) FILTER(WHERE status='DELETED') AS deleted FROM %s
+                """.formatted(ACCOUNTS)).query((rs,n) -> new vingo.api.model.AdminUserStatistics().total(rs.getLong("total"))
+                    .active(rs.getLong("active")).locked(rs.getLong("locked"))
+                    .unverified(rs.getLong("unverified")).deleted(rs.getLong("deleted"))).single();
     }
 
     public Optional<AdminAccount> find(UUID id, boolean lock) {
@@ -108,8 +124,9 @@ public class AdminAccountRepository {
 
     private static AdminAccount map(ResultSet rs, int row) throws SQLException {
         return new AdminAccount().id(rs.getObject("id", UUID.class)).email(rs.getString("email"))
-                .phone(rs.getString("phone")).fullName(rs.getString("full_name"))
+                .phone(rs.getString("phone")).avatarUrl(rs.getString("avatar_url")).fullName(rs.getString("full_name"))
                 .role(AdminAccount.RoleEnum.fromValue(rs.getString("role")))
+                .status(AdminAccount.StatusEnum.fromValue(rs.getString("status")))
                 .emailVerifiedAt(rs.getObject("email_verified_at", OffsetDateTime.class))
                 .phoneVerifiedAt(rs.getObject("phone_verified_at", OffsetDateTime.class))
                 .adminLocked(rs.getBoolean("admin_locked")).hasPassword(rs.getBoolean("has_password"))

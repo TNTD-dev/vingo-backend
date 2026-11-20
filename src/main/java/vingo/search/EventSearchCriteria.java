@@ -8,7 +8,7 @@ import java.util.UUID;
  *
  * @param q        từ khoá, null hoặc rỗng là không lọc theo từ khoá
  * @param category FOOTBALL, CONCERT, THEATER, OTHER
- * @param city     mã thành phố (HCM, HN, DN)
+ * @param city     mã địa phương mở, lấy từ location của sân
  * @param from     suất bắt đầu từ mốc này
  * @param to       suất bắt đầu tới mốc này
  * @param sort     null thì có {@code q} dùng RELEVANCE, không có thì dùng STARTS_AT
@@ -75,6 +75,9 @@ public record EventSearchCriteria(
 
     public EventSearchCriteria {
         q = q == null || q.isBlank() ? null : q.strip();
+        if (city != null && city.length() > 100) {
+            throw new InvalidSearchRequestException("city", "city tối đa 100 ký tự");
+        }
         if (limit < 1 || limit > MAX_LIMIT) {
             throw new InvalidSearchRequestException("limit", "limit phải từ 1 đến " + MAX_LIMIT);
         }
