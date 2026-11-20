@@ -25,6 +25,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import vingo.booking.BookingService;
 import vingo.shared.security.Role;
+import vingo.ticketing.internal.QrCodec;
 
 class CheckinApiTest extends TicketingTestSupport {
 
@@ -269,6 +270,96 @@ class CheckinApiTest extends TicketingTestSupport {
         assertThat(ticket(id).status()).isEqualTo("USED");
         assertThat(checkins(id)).containsExactly(
                 new CheckinRow(showtime.id(), admin, "GA Gate", "OK", catalog.now()));
+    }
+
+    @Test
+    void checkIn_returnsInvalidQr_whenSignatureTampered() {
+        var stored = ticket(issueSeats(showtime.event().seat(1)).getFirst());
+        String tokenStr = stored.qrToken();
+        char last = tokenStr.charAt(tokenStr.length() - 1);
+        String tampered = tokenStr.substring(0, tokenStr.length() - 1) + (last == 'A' ? 'B' : 'A');
+        int beforeNullScans = invalidScanCount();
+
+        String json = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\",\"gate\":\"Gate A\"}"
+                .formatted(tampered, showtime.id())), 409);
+
+        assertThat(text(json, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(invalidScanCount()).isEqualTo(beforeNullScans + 1);
+        assertThat(ticket(stored.id()).status()).isEqualTo("ISSUED");
+        assertThat(checkins(stored.id())).isEmpty();
+    }
+
+    @Test
+    void checkIn_returnsInvalidQr_whenSignedWithDifferentSecret() {
+        var stored = ticket(issueSeats(showtime.event().seat(1)).getFirst());
+        QrCodec foreignCodec = new QrCodec("another-secret-that-does-not-match-server-key");
+        String foreignQr = foreignCodec.sign(stored.id(), 1);
+        int beforeNullScans = invalidScanCount();
+
+        String json = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\"}"
+                .formatted(foreignQr, showtime.id())), 409);
+
+        assertThat(text(json, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(invalidScanCount()).isEqualTo(beforeNullScans + 1);
+        assertThat(ticket(stored.id()).status()).isEqualTo("ISSUED");
+        assertThat(checkins(stored.id())).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"VG1.not-a-uuid", "VG2.00000000-0000-0000-0000-000000000001.1.sig", "plain-token"})
+    void checkIn_returnsInvalidQr_whenFormatInvalid(String malformedQr) {
+        int beforeNullScans = invalidScanCount();
+
+        String json = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\"}"
+                .formatted(malformedQr, showtime.id())), 409);
+
+        assertThat(text(json, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(invalidScanCount()).isEqualTo(beforeNullScans + 1);
+    }
+
+    @Test
+    void checkIn_returnsInvalidQr_whenQrVersionStaleAfterReissue() {
+        var stored = ticket(issueSeats(showtime.event().seat(1)).getFirst());
+        String oldQr = stored.qrToken();
+        reissueQr(stored.id());
+
+        String json = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\",\"gate\":\"Gate A\"}"
+                .formatted(oldQr, showtime.id())), 409);
+
+        assertThat(text(json, "$.result")).isEqualTo("INVALID_QR");
+        assertThat(ticket(stored.id()).status()).isEqualTo("ISSUED");
+        assertThat(checkins(stored.id())).isEmpty();
+    }
+
+    @Test
+    void checkIn_succeedsWithNewQr_afterReissue() {
+        var stored = ticket(issueSeats(showtime.event().seat(1)).getFirst());
+        String newQr = reissueQr(stored.id());
+
+        String json = body(checkIn(adminToken, "{\"qr_token\":\"%s\",\"showtime_id\":\"%s\",\"gate\":\"Gate A\"}"
+                .formatted(newQr, showtime.id())), 200);
+
+        assertThat(text(json, "$.result")).isEqualTo("OK");
+        assertThat(ticket(stored.id()).status()).isEqualTo("USED");
+        assertThat(checkins(stored.id())).containsExactly(
+                new CheckinRow(showtime.id(), admin, "Gate A", "OK", catalog.now()));
+    }
+
+    private String reissueQr(UUID ticketId) {
+        body(client.post().uri("/api/v1/admin/tickets/{id}/reissue-qr", ticketId)
+                .headers(headers -> headers.setBearerAuth(adminToken))
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body("{\"reason\":\"Cấp lại QR cho khách\"}")
+                .exchange(), 200);
+        return ticket(ticketId).qrToken();
+    }
+
+    private int invalidScanCount() {
+        return jdbc.sql("""
+                        SELECT count(*) FROM ticket_scan
+                        WHERE showtime_id = :id AND result = 'INVALID_QR' AND ticket_id IS NULL
+                        """)
+                .param("id", showtime.id()).query(Integer.class).single();
     }
 
     private int showtimeCheckinCount() {
