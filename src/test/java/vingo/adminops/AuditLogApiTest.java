@@ -54,8 +54,8 @@ class AuditLogApiTest extends AdminOpsTestSupport {
         assertThat(data.getFirst().get("after"))
                 .isEqualTo(object(audits(target).getFirst().afterJson()));
         assertThat(data.getLast()).containsEntry("action", "REISSUE_QR").containsEntry("reason", REASON)
-                .containsEntry("before", Map.of("status", "ISSUED"))
-                .containsEntry("after", Map.of("status", "ISSUED"));
+                .containsEntry("before", Map.of("status", "ISSUED", "qr_version", 1))
+                .containsEntry("after", Map.of("status", "ISSUED", "qr_version", 2));
         assertLastPage(json);
 
         String wrongEntity = body(get(adminToken,
