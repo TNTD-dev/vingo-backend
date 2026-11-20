@@ -35,9 +35,9 @@ public class IdempotencyCleanupJob {
         int deleted;
         do {
             deleted = jdbc.sql("""
-                            DELETE FROM idempotency_key WHERE id IN (
-                                SELECT id FROM idempotency_key WHERE created_at < :cutoff
-                                ORDER BY created_at, id LIMIT :batch
+                            DELETE FROM idempotency_record WHERE ctid IN (
+                                SELECT ctid FROM idempotency_record WHERE created_at < :cutoff
+                                ORDER BY created_at LIMIT :batch
                             )
                             """)
                     .param("cutoff", cutoff).param("batch", BATCH).update();

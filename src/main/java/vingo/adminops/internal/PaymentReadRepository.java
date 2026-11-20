@@ -25,11 +25,15 @@ public class PaymentReadRepository {
     public List<PaymentIntent> readPayments(UUID orderId) {
         // shortcut: đọc thẳng bảng payment, đổi sang PaymentService khi Luân có
         return jdbc.sql("""
-                        SELECT p.id, p.order_id, p.txn_ref, p.amount, p.status, p.expires_at,
-                               (SELECT t.response_code FROM payment_transaction t
-                                WHERE t.payment_intent_id = p.id
-                                ORDER BY t.received_at DESC, t.id DESC LIMIT 1) AS last_response_code
-                        FROM payment_intent p WHERE p.order_id = :order ORDER BY p.created_at, p.id
+                        SELECT p.id, p.order_id, p.txn_ref, o.total_amount AS amount,
+                               p.status::text AS status, o.expires_at,
+                               (SELECT l.response_code FROM payment_gateway_log l
+                                WHERE l.payment_id = p.id
+                                ORDER BY l.received_at DESC, l.id DESC LIMIT 1) AS last_response_code
+                        FROM payment p
+                        JOIN ticket_order o ON o.id = p.order_id
+                        WHERE p.order_id = :order
+                        ORDER BY p.created_at, p.id
                         """)
                 .param("order", orderId).query((rs, row) -> new PaymentIntent()
                         .id(rs.getObject("id", UUID.class)).orderId(rs.getObject("order_id", UUID.class))

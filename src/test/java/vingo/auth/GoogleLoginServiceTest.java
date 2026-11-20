@@ -43,7 +43,8 @@ class GoogleLoginServiceTest {
     void newAccount_usesNormalizedEmailAsNameWhenGoogleOmitsProfile() {
         var account = account("ACTIVE");
         when(accounts.findByGoogleSubject(SUBJECT)).thenReturn(Optional.empty());
-        when(accounts.createGoogleAccount(SUBJECT, EMAIL, EMAIL, null)).thenReturn(Optional.of(account));
+        when(accounts.createGoogleAccount(SUBJECT, EMAIL, EMAIL, null, OffsetDateTime.now(CLOCK)))
+                .thenReturn(Optional.of(account));
 
         var result = login.login(new GoogleLoginRequest(SUBJECT, " Buyer@gmail.com ", true, null, null));
 

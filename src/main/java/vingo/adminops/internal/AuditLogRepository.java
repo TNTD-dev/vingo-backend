@@ -60,7 +60,7 @@ public class AuditLogRepository {
             UUID actor, String action, OffsetDateTime from, OffsetDateTime to, String outcome, boolean activityOnly) {
         var query = jdbc.sql("""
                         SELECT id, actor_id, action, entity, entity_id, reason, via_agent, at,
-                               (SELECT u.full_name FROM users u WHERE u.id=audit_log.actor_id) AS actor_name,
+                               (SELECT u.full_name FROM user_account u WHERE u.id=audit_log.actor_id) AS actor_name,
                                before::text AS before_json, after::text AS after_json FROM audit_log WHERE true
                         """
                         + (entity == null ? "" : " AND entity = :entity")

@@ -48,11 +48,11 @@ class EventDetailTest extends IntegrationTest {
                 .tier("VIP", 2_000_000)
                 .tier("Thường", 500_000)
                 // Suất đã qua, ở sân cũ: không được chọn làm venue.
-                .showtime(s -> s.venue("Sân cũ").startsAt(NOW.minus(Duration.ofDays(5))).saleWindow(
+                .venue("Sân gần")
+                .showtime(s -> s.startsAt(NOW.minus(Duration.ofDays(5))).saleWindow(
                         NOW.minus(Duration.ofDays(40)), NOW.minus(Duration.ofDays(5))).seated(2, "VIP"))
-                // Hai suất sắp tới, suất sớm hơn ở "Sân gần".
-                .showtime(s -> s.venue("Sân xa").startsAt(NOW.plus(Duration.ofDays(20))).onSale().seated(3, "Thường"))
-                .showtime(s -> s.venue("Sân gần").startsAt(NOW.plus(Duration.ofDays(10))).onSale().seated(3, "VIP"))
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(20))).onSale().seated(2, "VIP"))
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(10))).onSale().seated(2, "VIP"))
                 .create();
 
         JsonNode body = get("/api/v1/events/" + created.id());
@@ -101,11 +101,9 @@ class EventDetailTest extends IntegrationTest {
     }
 
     @Test
-    void getEvent_returns404_whenEventEndedOrCancelled() {
-        UUID ended = fixtures.event().status("ENDED").create().id();
+    void getEvent_returns404_whenEventCancelled() {
         UUID cancelled = fixtures.event().status("CANCELLED").create().id();
 
-        assertNotFound("/api/v1/events/" + ended);
         assertNotFound("/api/v1/events/" + cancelled);
     }
 
@@ -135,9 +133,8 @@ class EventDetailTest extends IntegrationTest {
     }
 
     @Test
-    void listEventShowtimes_excludesDraftShowtimes_includesCancelled() {
+    void listEventShowtimes_includesCancelledAndOnSale() {
         var created = fixtures.event()
-                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(3))).onSale().seated(1).draft())
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(4))).onSale().seated(1).cancelled())
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(1))
                 .create();
@@ -145,49 +142,49 @@ class EventDetailTest extends IntegrationTest {
         JsonNode data = get("/api/v1/events/" + created.id() + "/showtimes").path("data");
 
         assertThat(data).hasSize(2);
-        assertThat(data.get(0).path("id").asString()).isEqualTo(created.showtimeIds().get(1).toString());
+        assertThat(data.get(0).path("id").asString()).isEqualTo(created.showtimeIds().get(0).toString());
         assertThat(data.get(0).path("status").asString()).isEqualTo("CANCELLED");
-        assertThat(data.get(1).path("id").asString()).isEqualTo(created.showtimeIds().get(2).toString());
+        assertThat(data.get(1).path("id").asString()).isEqualTo(created.showtimeIds().get(1).toString());
         assertThat(data.get(1).path("status").asString()).isEqualTo("ON_SALE");
-        // Chi tiết sự kiện cũng không lộ suất DRAFT.
-        assertThat(get("/api/v1/events/" + created.id()).path("showtimes")).hasSize(2);
     }
 
     @Test
     void listEventShowtimes_marksSoldOut_whenNoSeatsLeft() {
-        var created = fixtures.event()
+        var seatedOnly = fixtures.event()
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(3))).onSale().seated(2).sold(2))
-                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(4))).onSale().seated(2).standing(10).sold(2))
-                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(2).standing(10).sold(12))
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(6))).onSale().seated(2).sold(1))
                 .create();
-        String path = "/api/v1/events/" + created.id() + "/showtimes";
+        var mixed = fixtures.event()
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(4))).onSale().seated(2).standing(10).sold(2))
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(2).standing(10).sold(12))
+                .create();
+        String seatedPath = "/api/v1/events/" + seatedOnly.id() + "/showtimes";
 
-        JsonNode data = get(path).path("data");
+        JsonNode seatedData = get(seatedPath).path("data");
+        JsonNode mixedData = get("/api/v1/events/" + mixed.id() + "/showtimes").path("data");
 
-        assertThat(data.get(0).path("sold_out").asBoolean()).isTrue();   // hết ghế ngồi
-        assertThat(data.get(1).path("sold_out").asBoolean()).isFalse();  // khu đứng còn chỗ
-        assertThat(data.get(2).path("sold_out").asBoolean()).isTrue();   // hết cả ghế lẫn khu đứng
-        assertThat(data.get(3).path("sold_out").asBoolean()).isFalse();  // còn 1 ghế
+        assertThat(seatedData.get(0).path("sold_out").asBoolean()).isTrue();   // hết ghế ngồi
+        assertThat(seatedData.get(1).path("sold_out").asBoolean()).isFalse();  // còn 1 ghế
+        assertThat(mixedData.get(0).path("sold_out").asBoolean()).isFalse();   // khu đứng còn chỗ
+        assertThat(mixedData.get(1).path("sold_out").asBoolean()).isTrue();    // hết cả ghế lẫn khu đứng
 
         // Ghế HELD chưa quá hạn vẫn bị giữ; quá hạn thì tính là trống (Implicit Status).
-        UUID showtime = created.showtimeIds().get(0);
+        UUID showtime = seatedOnly.showtimeIds().get(0);
         jdbc.sql("""
-                UPDATE showtime_seat SET status = 'HELD', held_until = :until
-                WHERE showtime_id = :s AND seat_id = (SELECT seat_id FROM showtime_seat WHERE showtime_id = :s LIMIT 1)
+                UPDATE seat_inventory SET status = 'HELD', held_until = :until
+                WHERE showtime_id = :s AND seat_id = (SELECT seat_id FROM seat_inventory WHERE showtime_id = :s LIMIT 1)
                 """).param("s", showtime).param("until", NOW.plus(Duration.ofMinutes(10)).atOffset(java.time.ZoneOffset.UTC))
                 .update();
-        assertThat(get(path).path("data").get(0).path("sold_out").asBoolean()).isTrue();
+        assertThat(get(seatedPath).path("data").get(0).path("sold_out").asBoolean()).isTrue();
 
         clock.set(NOW.plus(Duration.ofMinutes(11)));
-        assertThat(get(path).path("data").get(0).path("sold_out").asBoolean()).isFalse();
+        assertThat(get(seatedPath).path("data").get(0).path("sold_out").asBoolean()).isFalse();
     }
 
     @Test
-    void listEventShowtimes_returnsVenuePerShowtime_forTouringEvent() {
-        var created = fixtures.event()
-                .showtime(s -> s.venue("Sân Phú Thọ").city("HCM").startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(1))
-                .showtime(s -> s.venue("Sân Mỹ Đình").city("HN").startsAt(NOW.plus(Duration.ofDays(9))).onSale().seated(1))
+    void listEventShowtimes_returnsVenueOfEvent() {
+        var created = fixtures.event().venue("Sân Phú Thọ").city("HCM")
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(5))).onSale().seated(1))
                 .create();
 
         JsonNode data = get("/api/v1/events/" + created.id() + "/showtimes").path("data");
@@ -195,19 +192,12 @@ class EventDetailTest extends IntegrationTest {
         assertThat(data.get(0).path("venue").path("name").asString()).isEqualTo("Sân Phú Thọ");
         assertThat(data.get(0).path("venue").path("city").asString()).isEqualTo("HCM");
         assertThat(data.get(0).path("venue").path("city_name").asString()).isEqualTo("TP. Hồ Chí Minh");
-        assertThat(data.get(1).path("venue").path("name").asString()).isEqualTo("Sân Mỹ Đình");
-        assertThat(data.get(1).path("venue").path("city").asString()).isEqualTo("HN");
-        assertThat(data.get(1).path("venue").path("city_name").asString()).isEqualTo("Hà Nội");
-
-        JsonNode inDetail = get("/api/v1/events/" + created.id()).path("showtimes");
-        assertThat(inDetail.get(0).path("venue").path("name").asString()).isEqualTo("Sân Phú Thọ");
-        assertThat(inDetail.get(1).path("venue").path("name").asString()).isEqualTo("Sân Mỹ Đình");
     }
 
     @Test
     void getEvent_omitsPoster_whenPosterUrlInvalid() {
         UUID id = fixtures.event().create().id();
-        jdbc.sql("UPDATE event SET poster_url = 'http://bad url' WHERE id = :id").param("id", id).update();
+        jdbc.sql("UPDATE event SET poster_mobile_url = 'http://bad url', poster_desktop_url = NULL WHERE id = :id").param("id", id).update();
 
         JsonNode body = get("/api/v1/events/" + id);
 

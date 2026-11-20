@@ -31,28 +31,25 @@ Nếu chưa có dependencies, chạy `npm.cmd ci` trước. Bản contract FE đ
 
 ## Thay đổi schema cần lưu ý trước khi chạy ứng dụng
 
-### DB local mới sau khi đồng bộ develop
+### DB demo schema v2
 
-Đã tạo DB `vingo_admin_ui_20261118` trên PostgreSQL local và đặt `DB_URL=jdbc:postgresql://localhost:5432/vingo_admin_ui_20261118` trong `.env.local` (file bị Git bỏ qua). DB `vingo` cũ và dữ liệu của nó vẫn được giữ nguyên. Đã chạy riêng Flyway thành công với 32 migration, đến `20261118.1600`, để tạo schema và thêm tài khoản `admin@luannt.com` có role `ADMIN`, status `ACTIVE`. Mật khẩu được lưu dạng Argon2, không ghi vào tài liệu. Chưa khởi động ứng dụng hay chạy test.
-
-DB cũ thiếu migration `20261114.1000` và `20261115.1000` dù đã chạy đến `20261117.0200`. Không bật `outOfOrder` cho DB cũ: migration 15/11 dùng `showtime.hall_id`, cột đã bị migration 16/11 xóa. DB mới cho phép Flyway chạy toàn bộ migration theo thứ tự từ đầu.
-
-Khởi động API bằng PowerShell:
+Tạo DB PostgreSQL 18 riêng tên `vingo_admin_ui_v2` bằng `createdb -U vingo vingo_admin_ui_v2`. Giữ DB demo v1 cho phiên bản cũ. Trong terminal của API và worker, đặt kết nối:
 
 ```powershell
-cd D:/Luan_document/InternVSF/backend/vingo-backend
+$env:DB_URL = 'jdbc:postgresql://localhost:5432/vingo_admin_ui_v2'
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=api,local"
 ```
 
-Worker cũng cần profile `local` để đọc cùng `.env.local`:
+Đợi Flyway hoàn tất migration v2 rồi nạp hai bộ seed vào đúng DB này bằng psql:
 
 ```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=worker,local"
+psql -U vingo -d vingo_admin_ui_v2 -v ON_ERROR_STOP=1 -f scripts/seed.sql
+psql -U vingo -d vingo_admin_ui_v2 -v ON_ERROR_STOP=1 -f scripts/seed-admin-ui.sql
 ```
 
-DB mới có tài khoản admin nêu trên và đã được nạp bộ dữ liệu DEMO ngày 19/11/2026: 7 địa điểm, 26 layout, 12 sự kiện, 14 suất, 32 người dùng mẫu, 166 đơn và 320 vé. Xem [chi tiết dữ liệu và cách xem giao diện](admin-ui-demo-data.md). Không dùng `scripts/seed.sql` cũ. Nếu IDE hoặc terminal đã đặt biến môi trường `DB_URL` hay tham số `spring.datasource.url`, cần đổi chúng sang DB mới vì chúng có thể ghi đè `.env.local`. Các phiên API/worker đang chạy trước đó cần được khởi động lại để dùng cấu hình mới. Việc chuyển về DB `vingo` chỉ đổi kết nối, không sửa được lịch sử Flyway đang thiếu ở DB cũ.
+Sau khi cả hai lệnh thành công, đăng nhập và chạy smoke test trên DB v2. Worker dùng cùng DB và profile `worker,local`. Profile local/test cho phép reset dữ liệu v1. Các môi trường khác mặc định dừng migration nếu có dữ liệu nghiệp vụ.
 
-### Migration địa điểm
+### Lịch sử migration địa điểm của bản v1
 
 Migration `V20261118_1600__catalog_location_source_of_truth.sql`:
 
@@ -65,15 +62,12 @@ Backup DB trước khi khởi động API trên DB đang dùng. Backend cũ khô
 
 Tọa độ của dữ liệu cũ có thể thiếu; khi sửa sân, chọn lại vị trí để xác nhận. Cần cấu hình `GEOAPIFY_API_KEY` ở backend cho reverse geocode; khóa tile công khai `VITE_GEOAPIFY_TILE_KEY` là tùy chọn. Không đặt khóa backend trong VITE_*.
 
-Script `scripts/seed.sql` có cấu trúc hall cũ từ trước đợt này; không dùng nó để seed schema mới. Testcontainers sử dụng fixture riêng đã được điều chỉnh ở những chỗ ghi cột địa chỉ cũ.
-
 ## API mới/mở rộng
 
 - `GET /api/v1/admin/venues/{venue_id}`: location, metadata, thời điểm, người sửa, số layout nháp/đã công bố.
 - `GET /api/v1/admin/venues/{venue_id}/layout-tree?layout_type=FOOTBALL|CONCERT`: phiên bản giảm dần, overview và zone; cursor/limit. Ghế/hàng dùng API zone có sẵn khi mở khu.
 - `GET /api/v1/admin/users?sort=newest|oldest|name`: avatar, sort và cursor tương ứng.
 - `GET /api/v1/admin/users/statistics`: số tài khoản theo trạng thái lưu; ACTIVE không có nghĩa đang online.
-- `GET /api/v1/admin/users/{user_id}/login-history`: các lần đăng nhập đã ghi nhận; bổ sung ghi thành công Google từ lúc triển khai, không khôi phục lịch sử Google đã mất.
 - `GET /api/v1/admin/users/export`: CSV theo bộ lọc, giới hạn 10000 và chống formula injection.
 - `GET /api/v1/admin/dashboard?from=...&to=...&group_by=day|month`: KPI, kỳ trước cùng độ dài, biểu đồ, cơ cấu hạng có tên sự kiện, suất sắp diễn, tỷ lệ bán theo sân.
 - `GET /api/v1/admin/audit-logs`: thêm actor/action/from/to/outcome/activity_only và tên admin. Activity feed dùng `activity_only=true`, không phải log máy chủ.
@@ -84,8 +78,8 @@ Tất cả endpoint trên yêu cầu ADMIN. Khoảng báo cáo là [from,to), ng
 
 1. Đăng nhập admin; tạo sân qua bản đồ ở một tỉnh ngoài HN/HCM/DN; mở lại kiểm tra location, người sửa và timestamp.
 2. Nhập layout FOOTBALL và CONCERT; chọn từng loại để xác nhận không lẫn phiên bản; kiểm tra trạng thái riêng của overview/layout và số đếm.
-3. Publish layout hợp lệ; tạo sự kiện đúng loại và gán hạng giá theo khu. Không sửa hình học trên layout đã công bố.
-4. Mở người dùng: lọc/sort/tải thêm, avatar, lịch sử đăng nhập, đổi quyền/khóa có lý do, lịch sử quản trị và CSV.
+3. Hoàn tất phiên nhập và dùng sơ đồ đã lưu để tạo sự kiện đúng loại và gán hạng giá theo khu. Không sửa hình học trên layout đã công bố.
+4. Mở người dùng: lọc/sort/tải thêm, avatar, đổi quyền/khóa có lý do, lịch sử quản trị và CSV.
 5. Dashboard: đổi khoảng ngày/nhóm tháng, đối chiếu tổng với báo cáo và giao dịch PAID; kiểm tra suất/khu đứng/công suất.
 6. Logs: lọc admin, thời gian, kết quả; feed không lẫn request GET hoặc thao tác lỗi.
 7. Kiểm tra desktop và chiều rộng 360px; không dùng số minh họa để nghiệm thu dữ liệu thật.

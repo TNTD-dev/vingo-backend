@@ -121,8 +121,17 @@ public class PaymentService {
             if (!order.expiresAt().isAfter(now)) {
                 throw new DomainException(ErrorCode.HOLD_EXPIRED, "Đơn đã hết hạn giữ chỗ");
             }
-            if (!auth.hasBuyerProfile(userId)) {
-                throw new DomainException(ErrorCode.PROFILE_REQUIRED, "Chưa có hồ sơ người mua");
+            if (normalizedBody.getBuyer() != null) {
+                var b = normalizedBody.getBuyer();
+                if (b.getFullName() == null || b.getFullName().isBlank() || b.getFullName().strip().length() > 120
+                        || b.getEmail() == null || b.getEmail().isBlank() || !b.getEmail().contains("@")
+                        || b.getPhone() == null || !b.getPhone().strip().matches("^\\+[1-9][0-9]{8,14}$")) {
+                    throw new DomainException(ErrorCode.VALIDATION_ERROR, "Thông tin người mua không hợp lệ");
+                }
+                booking.saveBuyer(orderId, b.getFullName().strip(),
+                        b.getEmail().strip().toLowerCase(java.util.Locale.ROOT), b.getPhone().strip());
+            } else if (!booking.hasBuyer(orderId)) {
+                throw new DomainException(ErrorCode.PROFILE_REQUIRED, "Chưa có thông tin người mua");
             }
 
             var existingOpen = repository.findOpenIntentByOrderId(orderId);

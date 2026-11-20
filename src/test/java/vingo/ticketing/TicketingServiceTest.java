@@ -3,7 +3,6 @@ package vingo.ticketing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.util.Base64;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -35,17 +34,15 @@ class TicketingServiceTest extends TicketingTestSupport {
         assertThat(ids).hasSize(2).doesNotHaveDuplicates()
                 .containsExactlyInAnyOrderElementsOf(rows.stream().map(TicketRow::id).toList());
         assertThat(rows).extracting(TicketRow::seatId).containsExactlyInAnyOrder(first, second);
-        assertThat(rows).extracting(TicketRow::orderItemId).doesNotHaveDuplicates();
         assertThat(rows).extracting(TicketRow::code).doesNotHaveDuplicates();
         assertThat(rows).extracting(TicketRow::qrToken).doesNotHaveDuplicates();
         assertThat(rows).allSatisfy(row -> {
             assertThat(row.status()).isEqualTo("ISSUED");
-            assertThat(row.seq()).isEqualTo(1);
+            assertThat(row.seq()).isNull();
+            assertThat(row.zoneId()).isNull();
             assertThat(row.code()).isNotBlank();
-            assertThat(row.qrToken()).hasSizeGreaterThanOrEqualTo(40).matches("[A-Za-z0-9_-]{43}");
-            assertThat(Base64.getUrlDecoder().decode(row.qrToken())).hasSize(32);
-            assertThat(jdbc.sql("SELECT seat_id FROM order_item WHERE id = :id")
-                    .param("id", row.orderItemId()).query(UUID.class).single()).isEqualTo(row.seatId());
+            assertThat(row.qrToken()).startsWith("VG1." + row.id() + ".1.");
+            assertThat(qrCodec.verify(row.qrToken())).isPresent();
         });
     }
 
@@ -58,7 +55,7 @@ class TicketingServiceTest extends TicketingTestSupport {
         var rows = ticketsForOrder(order);
         assertThat(ids).hasSize(3).doesNotHaveDuplicates()
                 .containsExactlyInAnyOrderElementsOf(rows.stream().map(TicketRow::id).toList());
-        assertThat(rows).extracting(TicketRow::orderItemId).containsOnly(rows.getFirst().orderItemId());
+        assertThat(rows).extracting(TicketRow::zoneId).containsOnly(showtime.event().standingZoneId());
         assertThat(rows).extracting(TicketRow::seq).containsExactly(1, 2, 3);
         assertThat(rows).allSatisfy(row -> {
             assertThat(row.seatId()).isNull();
@@ -87,7 +84,7 @@ class TicketingServiceTest extends TicketingTestSupport {
                         ex -> assertThat(ex.code()).isEqualTo(ErrorCode.ORDER_STATE_INVALID));
 
         assertThat(ticketsForOrder(order)).isEmpty();
-        assertThat(jdbc.sql("SELECT status FROM orders WHERE id = :id")
+        assertThat(jdbc.sql("SELECT status FROM ticket_order WHERE id = :id")
                 .param("id", order).query(String.class).single()).isEqualTo("PENDING");
         assertThat(issuedEventCount(order)).isZero();
     }

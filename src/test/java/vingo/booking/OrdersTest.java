@@ -41,22 +41,24 @@ class OrdersTest extends BookingTestSupport {
     }
 
     @Test
-    void getOrder_usesNamesAndPriceCapturedAtHold() {
+    void getOrder_usesPriceCapturedAtHold_andCurrentZoneName() {
         var event = showtime.event();
         jdbc.sql("""
-                UPDATE zone_price SET display_name = 'Khán đài A'
+                UPDATE event_zone SET display_name = 'Khán đài A'
                 WHERE event_id = :event AND zone_id = :zone
                 """).param("event", event.id()).param("zone", event.seatedZoneId()).update();
         UUID id = seatedHold();
         jdbc.sql("""
-                UPDATE zone_price SET display_name = 'Tên mới'
+                UPDATE event_zone SET display_name = 'Tên mới'
                 WHERE event_id = :event AND zone_id = :zone
                 """).param("event", event.id()).param("zone", event.seatedZoneId()).update();
-        jdbc.sql("UPDATE price_tier SET name = 'Hạng mới', price = 1 WHERE id = :tier")
-                .param("tier", event.vipPriceTierId()).update();
+        jdbc.sql("""
+                INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                VALUES (:sku, 1, :now, :user)
+                """).param("sku", event.vipPriceTierId()).param("now", catalog.now()).param("user", buyer).update();
 
         String json = body(get(token, "/api/v1/orders/{id}", id), 200);
-        assertThat(text(json, "$.items[0].zone")).isEqualTo("Khán đài A");
+        assertThat(text(json, "$.items[0].zone")).isEqualTo("Tên mới");
         assertThat(text(json, "$.items[0].tier")).isEqualTo("VIP");
         assertThat(number(json, "$.items[0].unit_price")).isEqualTo(VIP_PRICE);
     }
@@ -263,16 +265,17 @@ class OrdersTest extends BookingTestSupport {
     private UUID seedOrder(UUID userId, String status, int seatNumber, int minutesAgo) {
         UUID id = catalog.order(userId, showtime.id(), status, catalog.now().minusMinutes(1));
         jdbc.sql("""
-                        UPDATE orders SET total_amount = :price, created_at = :created WHERE id = :id
+                        UPDATE ticket_order SET total_amount = :price, created_at = :created WHERE id = :id
                         """)
                 .param("price", VIP_PRICE).param("created", catalog.now().minusMinutes(minutesAgo))
                 .param("id", id).update();
         jdbc.sql("""
-                        INSERT INTO order_item (order_id, zone_id, seat_id, price_tier_id, quantity, unit_price)
-                        VALUES (:order, :zone, :seat, :tier, 1, :price)
+                        INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
+                        SELECT :order, :showtime, :seat, sp.id, sp.price FROM sku_price sp
+                        WHERE sp.sku_id = :sku AND sp.price = :price
                         """)
-                .param("order", id).param("zone", showtime.event().seatedZoneId())
-                .param("seat", showtime.event().seat(seatNumber)).param("tier", showtime.event().vipPriceTierId())
+                .param("order", id).param("showtime", showtime.id())
+                .param("seat", showtime.event().seat(seatNumber)).param("sku", showtime.event().vipPriceTierId())
                 .param("price", VIP_PRICE).update();
         if (status.equals("PAID")) {
             catalog.setSeat(showtime.id(), showtime.event().seat(seatNumber), "SOLD", id, null);

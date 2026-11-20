@@ -32,7 +32,7 @@ class DemoOtpApiTest extends IntegrationTest {
     @AfterEach
     void releaseSendLimits() {
         if (buyer != null) {
-            jdbc.sql("DELETE FROM phone_otp_send WHERE user_id = :id").param("id", buyer).update();
+            jdbc.sql("DELETE FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE'").param("id", buyer).update();
         }
     }
 
@@ -40,7 +40,7 @@ class DemoOtpApiTest extends IntegrationTest {
     void requestPhoneOtp_returnsCodeInHeader_andTheCodeVerifiesThePhone() {
         assertThat(sms).isInstanceOf(DemoSmsSender.class);
         buyer = catalog.buyer();
-        jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
+        jdbc.sql("UPDATE user_account SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
         String phone = "09" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
         String token = tokenFor(buyer, Role.BUYER);
 
@@ -56,7 +56,7 @@ class DemoOtpApiTest extends IntegrationTest {
         client.post().uri(VERIFY).headers(h -> h.setBearerAuth(token))
                 .body(new PhoneVerifyRequest(result.getResponseBody().getOtpSessionId(), code)).exchange()
                 .expectStatus().isOk();
-        assertThat(jdbc.sql("SELECT phone_verified_at IS NOT NULL FROM users WHERE id = :id")
+        assertThat(jdbc.sql("SELECT phone_verified_at IS NOT NULL FROM user_account WHERE id = :id")
                 .param("id", buyer).query(Boolean.class).single()).isTrue();
     }
 }

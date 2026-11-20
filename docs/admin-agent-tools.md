@@ -32,7 +32,6 @@ Có **61 operations**: **59 tool đề xuất bật** và **2 operations không 
 | `list_showtime_checkins` | `GET /api/v1/admin/showtimes/{showtime_id}/checkins` | Lịch sử quét theo suất | Đọc |
 | `admin_user_statistics` | `GET /api/v1/admin/users/statistics` | Thống kê trạng thái người dùng | Đọc |
 | `export_admin_users` | `GET /api/v1/admin/users/export` | Xuất danh sách người dùng | Đọc |
-| `admin_user_login_history` | `GET /api/v1/admin/users/{user_id}/login-history` | Lịch sử đăng nhập tài khoản | Đọc |
 | `admin_list_users` | `GET /api/v1/admin/users` | Tìm và lọc tài khoản | Đọc |
 | `admin_get_user` | `GET /api/v1/admin/users/{user_id}` | Xem tài khoản | Đọc |
 | `admin_update_user` | `PATCH /api/v1/admin/users/{user_id}` | Đổi quyền hoặc khóa/mở khóa tài khoản | Xác nhận |
@@ -229,42 +228,6 @@ Chỉ ADMIN. Đọc dữ liệu. Chỉ ADMIN. CSV UTF-8 theo bộ lọc, tối �
     }
   },
   "required": [],
-  "additionalProperties": false
-}
-```
-
-### 5. `admin_user_login_history`
-
-- Operation: `adminUserLoginHistory`.
-- API: `GET /api/v1/admin/users/{user_id}/login-history`.
-- Controller: `src/main/java/vingo/auth/web/AdminAccountController.java`
-- Inputs: `user_id`* (path), `cursor` (query), `limit` (query)
-- Status theo contract: 200, 400, 401, 403, 404.
-
-Chỉ ADMIN. Đọc dữ liệu. Chỉ ADMIN. Trả các lần đăng nhập đã ghi nhận, mới nhất trước; không phải lịch sử truy cập mọi API. Lỗi 400 VALIDATION_ERROR hoặc 404 NOT_FOUND.
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "user_id": {
-      "type": "string",
-      "format": "uuid"
-    },
-    "cursor": {
-      "type": "string"
-    },
-    "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 20
-    }
-  },
-  "required": [
-    "user_id"
-  ],
   "additionalProperties": false
 }
 ```

@@ -71,10 +71,10 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
-    void getSeatmap_includesCouplePairAndStandingSeatsLeft() {
+    void getSeatmap_includesStandingSeatsLeft() {
         var created = fixtures.event()
                 .tier("VIP", 2_000_000).tier("Thường", 500_000)
-                .showtime(s -> s.onSale().seatedRows(2, 2, "VIP").standing(100, "Thường").couple(2))
+                .showtime(s -> s.onSale().seatedRows(2, 2, "VIP").standing(100, "Thường"))
                 .create();
         UUID showtime = created.showtimeId();
         List<UUID> zones = fixtures.zoneIds(showtime);
@@ -93,15 +93,8 @@ class SeatmapTest extends IntegrationTest {
         assertThat(list).hasSize(4);
         assertThat(list.get(0).path("row").asString()).isEqualTo("A");
         assertThat(list.get(0).path("number").asInt()).isEqualTo(1);
-        assertThat(list.get(0).path("seat_type").asString()).isEqualTo("STANDARD");
         assertThat(list.get(0).path("seat_id").asString()).isEqualTo(seats.get(0).toString());
-        assertThat(list.get(0).path("pair_seat_id").isMissingNode() || list.get(0).path("pair_seat_id").isNull())
-                .isTrue();
         assertThat(list.get(2).path("row").asString()).isEqualTo("B");
-        assertThat(list.get(2).path("seat_type").asString()).isEqualTo("COUPLE");
-        // Cặp tra được từ cả hai chiều.
-        assertThat(list.get(2).path("pair_seat_id").asString()).isEqualTo(seats.get(3).toString());
-        assertThat(list.get(3).path("pair_seat_id").asString()).isEqualTo(seats.get(2).toString());
         JsonNode standing = body.path("zones").get(1);
         assertThat(standing.path("kind").asString()).isEqualTo("STANDING");
         assertThat(standing.path("seats_left").asInt()).isEqualTo(60);
@@ -110,14 +103,14 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
-    void getSeatmap_leavesTierEmpty_whenZoneHasNoPriceTier() {
+    void getSeatmap_hidesZoneWithoutEventSku() {
         UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(2)).create().showtimeId();
         UUID zone = fixtures.zoneIds(showtime).getFirst();
-        jdbc.sql("DELETE FROM zone_price WHERE zone_id = :z").param("z", zone).update();
+        jdbc.sql("DELETE FROM event_zone WHERE zone_id = :z").param("z", zone).update();
 
-        JsonNode body = get("/api/v1/showtimes/" + showtime + "/seatmap").path("zones").get(0);
+        JsonNode zones = get("/api/v1/showtimes/" + showtime + "/seatmap").path("zones");
 
-        assertThat(body.path("tier").isMissingNode() || body.path("tier").isNull()).isTrue();
+        assertThat(zones).isEmpty();
     }
 
     @Test
@@ -140,13 +133,6 @@ class SeatmapTest extends IntegrationTest {
 
         assertNotFound("/api/v1/showtimes/" + showtime + "/seatmap?zone_id=" + foreignZone);
         assertNotFound("/api/v1/showtimes/" + showtime + "/seatmap?zone_id=" + UUID.randomUUID());
-    }
-
-    @Test
-    void getSeatmap_returns404_whenShowtimeDraft() {
-        UUID showtime = fixtures.event().showtime(s -> s.draft().seated(2)).create().showtimeId();
-
-        assertNotFound("/api/v1/showtimes/" + showtime + "/seatmap");
     }
 
     @Test
@@ -215,6 +201,16 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
+    void getAvailability_hidesZonesWithoutEventSku() {
+        var showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10)).create().showtimeId();
+        var zones = fixtures.zoneIds(showtime);
+        jdbc.sql("DELETE FROM event_zone WHERE zone_id = :zone")
+                .param("zone", zones.getLast()).update();
+        var base = "/api/v1/showtimes/" + showtime;
+        assertThat(get(base + "/availability").path("zones")).hasSize(1);
+    }
+
+    @Test
     void getAvailability_soldOut_whenAllZonesEmpty() {
         UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10).sold(12)).create()
                 .showtimeId();
@@ -261,73 +257,30 @@ class SeatmapTest extends IntegrationTest {
         assertNotFound("/api/v1/showtimes/" + showtime + "/availability");
     }
 
-    @Test
-    void getAvailability_returns404_whenShowtimeDraft() {
-        UUID showtime = fixtures.event().showtime(s -> s.draft().seated(2)).create().showtimeId();
-
-        assertNotFound("/api/v1/showtimes/" + showtime + "/availability");
-    }
-
     // ------------------------------------------------------------------ suggestSeats với ghế đôi
 
-    /** Suất 4 ghế, ghế 0 và 1 là một cặp; trả (suất, khu, ghế). */
-    private record CoupleSetup(UUID showtime, UUID zone, List<UUID> seats) {
+    /** Suất 4 ghế cùng hàng; trả (suất, khu, ghế). */
+    private record SeatSetup(UUID showtime, UUID zone, List<UUID> seats) {
     }
 
-    private CoupleSetup coupleSetup() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(4).couple(0)).create().showtimeId();
+    private SeatSetup seatSetup() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(4)).create().showtimeId();
         UUID zone = fixtures.zoneIds(showtime).getFirst();
         List<UUID> seats = fixtures.seatIds(zone);
-        return new CoupleSetup(showtime, zone, seats);
+        return new SeatSetup(showtime, zone, seats);
     }
 
     @Test
-    void suggestSeats_excludesCoupleSeat_whenPartnerHeld() {
-        var c = coupleSetup();
-        fixtures.holdSeat(c.showtime(), c.seats().get(1), NOW.plus(Duration.ofMinutes(5)));
-
-        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
-                .containsExactly(c.seats().get(2), c.seats().get(3));
-    }
-
-    @Test
-    void suggestSeats_excludesCoupleSeat_whenPartnerSold() {
-        var c = coupleSetup();
-        fixtures.sellSeat(c.showtime(), c.seats().get(1));
-
-        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
-                .containsExactly(c.seats().get(2), c.seats().get(3));
-    }
-
-    @Test
-    void suggestSeats_excludesCoupleSeat_whenPartnerBlocked() {
-        var c = coupleSetup();
-        fixtures.blockSeat(c.showtime(), c.seats().get(0));
-
-        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
-                .containsExactly(c.seats().get(2), c.seats().get(3));
-    }
-
-    @Test
-    void suggestSeats_excludesCoupleSeat_whenPartnerRowMissing() {
-        var c = coupleSetup();
-        fixtures.deleteShowtimeSeat(c.showtime(), c.seats().get(1));
-
-        assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4))
-                .containsExactly(c.seats().get(2), c.seats().get(3));
-    }
-
-    @Test
-    void suggestSeats_includesCoupleSeats_whenPartnerHoldExpired() {
-        var c = coupleSetup();
+    void suggestSeats_includesSeat_whenItsHoldExpired() {
+        var c = seatSetup();
         fixtures.holdSeat(c.showtime(), c.seats().get(1), NOW.minus(Duration.ofMinutes(1)));
 
         assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4)).containsExactlyInAnyOrderElementsOf(c.seats());
     }
 
     @Test
-    void suggestSeats_includesBothCoupleSeats_whenPairFree() {
-        var c = coupleSetup();
+    void suggestSeats_returnsAllSeats_whenRowIsFree() {
+        var c = seatSetup();
 
         assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4)).containsExactlyInAnyOrderElementsOf(c.seats());
     }

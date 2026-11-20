@@ -32,11 +32,6 @@ public class AdminAccountController implements AdminAccountsApi {
     }
 
     @Override
-    public ResponseEntity<vingo.api.model.AdminLoginHistory> adminUserLoginHistory(UUID userId,String cursor,Integer limit) {
-        return ResponseEntity.ok(accounts.loginHistory(userId,cursor,limit));
-    }
-
-    @Override
     public ResponseEntity<String> exportAdminUsers(String q,String role,String status) {
         return ResponseEntity.ok().header("Content-Disposition","attachment; filename=users.csv")
                 .contentType(new org.springframework.http.MediaType("text","csv",java.nio.charset.StandardCharsets.UTF_8))

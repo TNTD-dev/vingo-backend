@@ -21,6 +21,8 @@ vingo:
       lock-duration: PT15M
   jwt:
     secret: test-secret-for-integration-tests-only-32b
+  qr:
+    secret: test-qr-secret-for-integration-tests-only-32b
   realtime:
     heartbeat: PT1S
   search:
@@ -40,4 +42,6 @@ server:
     accept-count: 2048
 spring:
   flyway:
+    placeholders:
+      allowDestructiveReset: true
     locations: classpath:db/migration

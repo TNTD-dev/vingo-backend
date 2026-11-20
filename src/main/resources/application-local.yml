@@ -1,5 +1,8 @@
 # Profile local: máy dev. Đọc .env.local, log dạng dễ đọc.
 spring:
+  flyway:
+    placeholders:
+      allowDestructiveReset: true
   config:
     import: optional:file:.env.local[.properties]
 logging:
@@ -13,5 +16,7 @@ vingo:
     secure-cookies: ${AUTH_SECURE_COOKIES:false}
   jwt:
     secret: ${JWT_SECRET:local-dev-secret-change-me-at-least-32-bytes}
+  qr:
+    secret: ${QR_SECRET:local-dev-qr-secret-change-me-at-least-32b}
 sentry:
   environment: local

@@ -28,11 +28,10 @@ Các mục đánh dấu bên dưới là đã triển khai source, chưa xác nh
 - [x] Thêm updated_by, updated_by_name trong response; cập nhật cùng transaction khi sửa sân, kể cả luồng nhập.
 - [x] API chi tiết sân: metadata, location, thời điểm, người sửa, số layout total/published/draft.
 - [x] API cây layout theo loại, overview, phiên bản, khu; hàng/ghế dùng API chi tiết khu hiện có.
-- [x] Người dùng: avatar, thống kê trạng thái, sort có cursor, lịch sử đăng nhập, export CSV giới hạn/chống formula injection.
+- [x] Người dùng: avatar, thống kê trạng thái, sort có cursor, export CSV giới hạn/chống formula injection.
 - [x] Dashboard: KPI, kỳ trước cùng độ dài, doanh thu/vé tháng/ngày, cơ cấu hạng có nhãn, suất sắp diễn và tỷ lệ bán theo sân.
 - [x] Khoảng [from,to), Asia/Ho_Chi_Minh, paid_at/starts_at theo metric.
 - [x] Khôi phục audit có chọn lọc; thêm actor_name và bộ lọc actor/action/from/to/outcome/activity_only.
-- [x] Ghi thành công Google vào lịch sử đăng nhập từ lúc triển khai; lịch sử cũ không được bịa/backfill.
 
 ## Frontend
 
@@ -42,7 +41,7 @@ Các mục đánh dấu bên dưới là đã triển khai source, chưa xác nh
 - [x] Chọn FOOTBALL/CONCERT gọi API cây riêng theo loại, sau đó chọn phiên bản và xem khu.
 - [x] Giữ preview/publish/import và cấu hình giá hiện có; không thêm kéo zone/X/Y/lưu hình học.
 - [x] Giữ giới hạn một suất bóng đá có sẵn; giới hạn tạo mới theo FOOTBALL/CONCERT, vẫn hiển thị sự kiện lịch sử loại khác.
-- [x] Người dùng: danh sách, lọc/sort/tải thêm, avatar, quyền/khóa có lý do, thống kê, lịch sử và export.
+- [x] Người dùng: danh sách, lọc/sort/tải thêm, avatar, quyền/khóa có lý do, thống kê, lịch sử thao tác quản trị và export.
 - [x] Tổng quan dùng API dashboard thật và ngày Việt Nam; không thêm số liệu giả/hoàn tiền.
 - [x] Activity feed và Logs dùng API audit; không đọc log file server.
 - [x] Không thêm membership/Super Admin/mã giả; danh sách người dùng dùng cursor tải thêm.

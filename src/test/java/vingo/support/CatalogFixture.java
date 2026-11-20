@@ -37,94 +37,105 @@ public class CatalogFixture {
 
     public Event event(EventSpec spec) {return event(spec,false);}
     public Event eventWithTwoSeatedZones() {return event(EventSpec.defaults(),true);}
-    private Event event(EventSpec spec,boolean splitZones) {
+    private Event event(EventSpec spec, boolean splitZones) {
         UUID venueId = jdbc.sql("""
-                        INSERT INTO venue (name, type, location)
-                        VALUES ('Test venue', 'STADIUM', jsonb_build_object('city_code',CAST(:city AS text),'source','LEGACY')) RETURNING id
+                        INSERT INTO venue (name, city)
+                        VALUES ('Test venue', :city) RETURNING id
                         """)
                 .param("city", spec.city()).query(UUID.class).single();
-        UUID layoutId = VenueSchemaFixture.draft(jdbc,venueId);
+        UUID layoutId = VenueSchemaFixture.draft(jdbc, venueId);
         UUID seatedZoneId = jdbc.sql("""
-                        INSERT INTO zone (seat_layout_id, name, kind, capacity)
-                        VALUES (:layout, 'A', 'SEATED', 10) RETURNING id
+                        INSERT INTO zone (seat_map_id, code, name, kind, capacity)
+                        VALUES (:layout, 'A', 'A', 'SEATED', NULL) RETURNING id
                         """)
                 .param("layout", layoutId).query(UUID.class).single();
         UUID standingZoneId = jdbc.sql("""
-                        INSERT INTO zone (seat_layout_id, name, kind, capacity)
-                        VALUES (:layout, 'GA', 'STANDING', :capacity) RETURNING id
+                        INSERT INTO zone (seat_map_id, code, name, kind, capacity)
+                        VALUES (:layout, 'GA', 'GA', 'STANDING', :capacity) RETURNING id
                         """)
                 .param("layout", layoutId).param("capacity", spec.standingCapacity()).query(UUID.class).single();
 
-        UUID secondZone=splitZones?jdbc.sql("INSERT INTO zone(seat_layout_id,name,kind,capacity) VALUES(:id,'B','SEATED',4) RETURNING id")
-                .param("id",layoutId).query(UUID.class).single():null;
+        UUID secondZone = splitZones
+                ? jdbc.sql("INSERT INTO zone (seat_map_id, code, name, kind, capacity) VALUES (:id, 'B', 'B', 'SEATED', NULL) RETURNING id")
+                        .param("id", layoutId).query(UUID.class).single()
+                : null;
         List<UUID> seats = new ArrayList<>();
         for (int number = 1; number <= 10; number++) {
+            UUID zone = splitZones && number >= 5 && number <= 8 ? secondZone : seatedZoneId;
             seats.add(jdbc.sql("""
-                            INSERT INTO seat (zone_id, seat_type_id, row_label, number, x, y)
-                            VALUES (:zone, (SELECT id FROM seat_type WHERE code = :type), 'A', :number, :number, 0)
+                            INSERT INTO seat (zone_id, seat_map_id, zone_kind, row_label, number)
+                            VALUES (:zone, :layout, 'SEATED', 'A', :number)
                             RETURNING id
                             """)
-                    .param("zone", splitZones && number>=5 && number<=8?secondZone:seatedZoneId).param("type", number >= 9 ? "COUPLE" : "STANDARD")
-                    .param("number", number).query(UUID.class).single());
+                    .param("zone", zone).param("layout", layoutId).param("number", number)
+                    .query(UUID.class).single());
         }
-        jdbc.sql("""
-                        INSERT INTO seat_pair (seat_a_id, seat_b_id)
-                        VALUES (LEAST(CAST(:a AS uuid), CAST(:b AS uuid)),
-                                GREATEST(CAST(:a AS uuid), CAST(:b AS uuid)))
-                        """)
-                .param("a", seats.get(8)).param("b", seats.get(9)).update();
 
         UUID eventId = jdbc.sql("""
-                        INSERT INTO event (title, category, status, max_tickets_per_order, published_at)
-                        VALUES (:title, :category, :status, :maxTickets,
-                                CASE WHEN :status = 'PUBLISHED' THEN :now ELSE NULL END) RETURNING id
+                        INSERT INTO event (seat_map_id, title, category, status, max_tickets_per_order)
+                        VALUES (:layout, :title, :category, :status::event_status, :maxTickets) RETURNING id
                         """)
+                .param("layout", layoutId)
                 .param("title", spec.title()).param("category", spec.category()).param("status", spec.status())
-                .param("maxTickets", spec.maxTicketsPerOrder()).param("now", now()).query(UUID.class).single();
-        UUID vipPriceTierId = jdbc.sql("""
-                        INSERT INTO price_tier (event_id, name, price)
-                        VALUES (:event, 'VIP', :price) RETURNING id
+                .param("maxTickets", spec.maxTicketsPerOrder()).query(UUID.class).single();
+        UUID createdBy = buyer();
+        UUID vipSkuId = jdbc.sql("""
+                        INSERT INTO sku (event_id, name, color)
+                        VALUES (:event, 'VIP', '#FF0000') RETURNING id
                         """)
-                .param("event", eventId).param("price", VIP_PRICE).query(UUID.class).single();
-        UUID gaPriceTierId = jdbc.sql("""
-                        INSERT INTO price_tier (event_id, name, price)
-                        VALUES (:event, 'GA', :price) RETURNING id
+                .param("event", eventId).query(UUID.class).single();
+        UUID gaSkuId = jdbc.sql("""
+                        INSERT INTO sku (event_id, name, color)
+                        VALUES (:event, 'GA', '#00FF00') RETURNING id
                         """)
-                .param("event", eventId).param("price", GA_PRICE).query(UUID.class).single();
+                .param("event", eventId).query(UUID.class).single();
         jdbc.sql("""
-                        INSERT INTO zone_price (event_id, zone_id, price_tier_id)
-                        VALUES (:event, :seatedZone, :vipTier), (:event, :standingZone, :gaTier)
+                        INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                        VALUES (:vipSku, :vipPrice, :now, :createdBy), (:gaSku, :gaPrice, :now, :createdBy)
                         """)
-                .param("event", eventId).param("seatedZone", seatedZoneId).param("vipTier", vipPriceTierId)
-                .param("standingZone", standingZoneId).param("gaTier", gaPriceTierId).update();
-        if(splitZones) jdbc.sql("INSERT INTO zone_price(event_id,zone_id,price_tier_id) VALUES(:e,:z,:p)")
-                .param("e",eventId).param("z",secondZone).param("p",vipPriceTierId).update();
-        VenueSchemaFixture.publish(jdbc,layoutId);
+                .param("vipSku", vipSkuId).param("vipPrice", VIP_PRICE)
+                .param("gaSku", gaSkuId).param("gaPrice", GA_PRICE)
+                .param("now", now().minusDays(30)).param("createdBy", createdBy).update();
+        jdbc.sql("""
+                        INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id)
+                        VALUES (:event, :layout, :seatedZone, :vipSku), (:event, :layout, :standingZone, :gaSku)
+                        """)
+                .param("event", eventId).param("layout", layoutId)
+                .param("seatedZone", seatedZoneId).param("vipSku", vipSkuId)
+                .param("standingZone", standingZoneId).param("gaSku", gaSkuId).update();
+        if (splitZones) {
+            jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id) VALUES (:e, :l, :z, :p)")
+                    .param("e", eventId).param("l", layoutId).param("z", secondZone).param("p", vipSkuId).update();
+        }
         return new Event(eventId, venueId, layoutId, seatedZoneId, standingZoneId,
-                vipPriceTierId, gaPriceTierId, List.copyOf(seats));
+                vipSkuId, gaSkuId, List.copyOf(seats));
     }
 
     public Showtime showtime(Event event, Window window) {
         OffsetDateTime now = now();
         UUID showtimeId = jdbc.sql("""
-                        INSERT INTO showtime (event_id, seat_layout_id, starts_at, ends_at,
-                                              sale_opens_at, sale_closes_at, status)
-                        VALUES (:event, :layout, :starts, :ends, :opens, :closes, :status) RETURNING id
+                        INSERT INTO showtime (event_id, seat_map_id, starts_at, ends_at,
+                                              sale_opens_at, sale_closes_at, cancelled_at)
+                        VALUES (:event, :layout, :starts, :ends, :opens, :closes,
+                                CASE WHEN :status = 'CANCELLED' THEN :now ELSE NULL END) RETURNING id
                         """)
                 .param("event", event.id()).param("layout", event.layoutId())
                 .param("starts", now.plus(window.startsIn())).param("ends", now.plus(window.endsIn()))
                 .param("opens", now.plus(window.saleOpensIn())).param("closes", now.plus(window.saleClosesIn()))
-                .param("status", window.status()).query(UUID.class).single();
+                .param("status", window.status()).param("now", now).query(UUID.class).single();
         jdbc.sql("""
-                        INSERT INTO showtime_seat (showtime_id, seat_id, status)
-                        SELECT :showtime, s.id, 'AVAILABLE' FROM seat s JOIN zone z ON z.id=s.zone_id WHERE z.seat_layout_id=:layout
+                        INSERT INTO seat_inventory (showtime_id, seat_map_id, seat_id, zone_id, status)
+                        SELECT :showtime, :layout, s.id, s.zone_id, 'AVAILABLE'::seat_status
+                        FROM seat s WHERE s.seat_map_id = :layout
                         """)
                 .param("showtime", showtimeId).param("layout", event.layoutId()).update();
         jdbc.sql("""
-                        INSERT INTO showtime_zone_stock (showtime_id, zone_id, capacity)
-                        SELECT :showtime, id, capacity FROM zone WHERE id = :zone
+                        INSERT INTO standing_inventory (showtime_id, seat_map_id, zone_id, zone_kind, capacity)
+                        SELECT :showtime, :layout, id, 'STANDING'::zone_kind, capacity
+                        FROM zone WHERE id = :zone
                         """)
-                .param("showtime", showtimeId).param("zone", event.standingZoneId()).update();
+                .param("showtime", showtimeId).param("layout", event.layoutId())
+                .param("zone", event.standingZoneId()).update();
         return new Showtime(showtimeId, event);
     }
 
@@ -134,8 +145,8 @@ public class CatalogFixture {
 
     public UUID buyer() {
         return jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
-                        VALUES (:email, 'Test buyer', 'x', 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone, phone_verified_at)
+                        VALUES (:email, 'Test buyer', 'x', 'BUYER', :now, :phone, :now) RETURNING id
                         """)
                 .param("phone", uniquePhone()).param("now", now())
                 .param("email", UUID.randomUUID() + "@test.vingo").query(UUID.class).single();
@@ -147,19 +158,29 @@ public class CatalogFixture {
     }
 
     public UUID order(UUID userId, UUID showtimeId, String status, OffsetDateTime expiresAt) {
+        String dbStatus = "REFUNDED".equals(status) ? "REJECTED" : status;
         while (true) {
             var id = jdbc.sql("""
-                            INSERT INTO orders (code, user_id, showtime_id, status, total_amount, expires_at,
-                                                paid_at, review_reason)
-                            VALUES (:code, :user, :showtime, :status, 0, :expires,
-                                    CASE WHEN :status = 'PAID' THEN :now ELSE NULL END,
-                                    CASE WHEN :status = 'NEEDS_REVIEW' THEN 'AMOUNT_MISMATCH' ELSE NULL END)
+                            INSERT INTO ticket_order (code, user_id, showtime_id, status, total_amount, expires_at,
+                                                      buyer_name, buyer_email, buyer_phone, paid_at)
+                            VALUES (:code, :user, :showtime, :status::order_status, 0, :expires,
+                                    CASE WHEN :status = 'PAID' THEN 'Test Buyer' ELSE NULL END,
+                                    CASE WHEN :status = 'PAID' THEN 'buyer@vingo.test' ELSE NULL END,
+                                    CASE WHEN :status = 'PAID' THEN '+84901234567' ELSE NULL END,
+                                    CASE WHEN :status = 'PAID' THEN :now ELSE NULL END)
                             ON CONFLICT (code) DO NOTHING RETURNING id
                             """)
                     .param("code", UUID.randomUUID().toString().substring(0, 6).toUpperCase(Locale.ROOT))
-                    .param("user", userId).param("showtime", showtimeId).param("status", status)
+                    .param("user", userId).param("showtime", showtimeId).param("status", dbStatus)
                     .param("expires", expiresAt).param("now", now()).query(UUID.class).optional();
             if (id.isPresent()) {
+                if ("NEEDS_REVIEW".equals(dbStatus)) {
+                    jdbc.sql("""
+                                    INSERT INTO order_status_history (order_id, from_status, to_status, reason)
+                                    VALUES (:id, 'PENDING', 'NEEDS_REVIEW', 'AMOUNT_MISMATCH')
+                                    """)
+                            .param("id", id.get()).update();
+                }
                 return id.get();
             }
         }
@@ -167,7 +188,7 @@ public class CatalogFixture {
 
     public void setSeat(UUID showtimeId, UUID seatId, String status, UUID orderId, OffsetDateTime heldUntil) {
         jdbc.sql("""
-                        UPDATE showtime_seat SET status = :status, order_id = :order, held_until = :heldUntil
+                        UPDATE seat_inventory SET status = :status::seat_status, order_id = :order, held_until = :heldUntil
                         WHERE showtime_id = :showtime AND seat_id = :seat
                         """)
                 .param("status", status).param("order", orderId, Types.OTHER)
@@ -177,7 +198,7 @@ public class CatalogFixture {
 
     public void setZoneStock(UUID showtimeId, UUID zoneId, int sold, int held) {
         jdbc.sql("""
-                        UPDATE showtime_zone_stock SET sold = :sold, held = :held
+                        UPDATE standing_inventory SET sold = :sold, held = :held
                         WHERE showtime_id = :showtime AND zone_id = :zone
                         """)
                 .param("sold", sold).param("held", held).param("showtime", showtimeId).param("zone", zoneId).update();

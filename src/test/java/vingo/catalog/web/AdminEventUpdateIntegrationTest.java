@@ -72,7 +72,7 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
                 .jsonPath("$.max_tickets_per_order").isEqualTo(4)
                 .jsonPath("$.poster_mobile_url").isEqualTo("https://example.com/mobile.jpg")
                 .jsonPath("$.poster_desktop_url").isEqualTo("https://example.com/desktop.jpg")
-                .jsonPath("$.attributes.home_team").isEqualTo("Đội A");
+                .jsonPath("$.home_team").isEqualTo("Đội A");
         var after = snapshot(id);
         assertThat(after.get("title")).isEqualTo("Tên mới");
         assertThat(jdbc.sql("SELECT updated_at FROM event WHERE id = :id")
@@ -90,15 +90,12 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
         UUID id = createDraft();
         patch(id, """
                 {"title":"Concert mới","description":"Giới thiệu mới","category":"CONCERT",
-                 "attributes":{"artist":"Nghệ sĩ A"},
                  "poster_mobile_url":"https://example.com/new-mobile.jpg",
                  "poster_desktop_url":"https://example.com/new-desktop.jpg",
-                 "age_limit":0,"max_tickets_per_order":20}
+                 "max_tickets_per_order":20}
                 """).expectStatus().isOk().expectBody()
                 .jsonPath("$.category").isEqualTo("CONCERT")
-                .jsonPath("$.attributes.artist").isEqualTo("Nghệ sĩ A")
-                .jsonPath("$.attributes.home_team").doesNotExist()
-                .jsonPath("$.age_limit").isEqualTo(0)
+                .jsonPath("$.home_team").doesNotExist()
                 .jsonPath("$.max_tickets_per_order").isEqualTo(20);
         var saved = snapshot(id);
         assertThat(saved.get("title")).isEqualTo("Concert mới");
@@ -106,10 +103,7 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
         assertThat(saved.get("category")).isEqualTo("CONCERT");
         assertThat(saved.get("poster_mobile_url")).isEqualTo("https://example.com/new-mobile.jpg");
         assertThat(saved.get("poster_desktop_url")).isEqualTo("https://example.com/new-desktop.jpg");
-        assertThat(saved.get("age_limit")).isEqualTo(0);
         assertThat(saved.get("max_tickets_per_order")).isEqualTo(20);
-        assertThat(jdbc.sql("SELECT attributes ->> 'artist' FROM event WHERE id = :id")
-                .param("id", id).query(String.class).single()).isEqualTo("Nghệ sĩ A");
     }
 
     @ParameterizedTest
@@ -129,25 +123,21 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void updateEvent_allowsEmptyDescriptionAndEmptyAttributes() {
+    void updateEvent_allowsEmptyDescription() {
         UUID id = createDraft();
-        patch(id, "{\"description\":\"\",\"attributes\":{}}")
+        patch(id, "{\"description\":\"\"}")
                 .expectStatus().isOk().expectBody()
-                .jsonPath("$.description").isEqualTo("")
-                .jsonPath("$.attributes").isEmpty();
-        assertThat(jdbc.sql("SELECT attributes = '{}'::jsonb FROM event WHERE id = :id")
-                .param("id", id).query(Boolean.class).single()).isTrue();
+                .jsonPath("$.description").isEqualTo("");
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"{\"title\":\"\"}", "{\"title\":\"  \"}", "{\"category\":\"UNKNOWN\"}",
-            "{\"age_limit\":-1}", "{\"max_tickets_per_order\":0}", "{\"max_tickets_per_order\":21}",
-            "{\"attributes\":[]}", "{\"attributes\":\"text\"}",
+            "{\"max_tickets_per_order\":0}", "{\"max_tickets_per_order\":21}",
             "{\"poster_mobile_url\":\"/relative.jpg\"}",
             "{\"poster_desktop_url\":\"ftp://example.com/a.jpg\"}",
             "{\"poster_mobile_url\":\"https:/missing-host.jpg\"}",
             "{\"poster_mobile_url\":\"https://bad url\"}",
-            "{\"title\":\"Không được lưu\",\"age_limit\":-1}", "[]", "null"})
+            "{\"title\":\"Không được lưu\",\"max_tickets_per_order\":-1}", "[]", "null"})
     void updateEvent_returns400AndPreservesDatabaseAndCacheWhenInvalid(String body) {
         UUID id = createDraft();
         var before = snapshot(id);
@@ -160,7 +150,7 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"ENDED", "CANCELLED"})
+    @ValueSource(strings = {"CANCELLED"})
     void updateEvent_returns409ForClosedEvents(String status) {
         UUID id = catalog.event(EventSpec.defaults().withCity("HN").withStatus(status)).id();
         var before = snapshot(id);
@@ -191,13 +181,13 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
         var showtime = catalog.showtime(event, Window.onSale());
         String oldTitle = search.getEvent(event.id()).title();
         search.getSeatmap(showtime.id(), null);
-        var inventory = jdbc.sql("SELECT * FROM showtime_seat WHERE showtime_id = :id ORDER BY seat_id")
+        var inventory = jdbc.sql("SELECT * FROM seat_inventory WHERE showtime_id = :id ORDER BY seat_id")
                 .param("id", showtime.id()).query().listOfRows();
-        var stock = jdbc.sql("SELECT * FROM showtime_zone_stock WHERE showtime_id = :id ORDER BY zone_id")
+        var stock = jdbc.sql("SELECT * FROM standing_inventory WHERE showtime_id = :id ORDER BY zone_id")
                 .param("id", showtime.id()).query().listOfRows();
-        var prices = jdbc.sql("SELECT * FROM price_tier WHERE event_id = :id ORDER BY id")
+        var prices = jdbc.sql("SELECT * FROM sku WHERE event_id = :id ORDER BY id")
                 .param("id", event.id()).query().listOfRows();
-        var zonePrices = jdbc.sql("SELECT * FROM zone_price WHERE event_id = :id ORDER BY zone_id")
+        var zonePrices = jdbc.sql("SELECT * FROM event_zone WHERE event_id = :id ORDER BY zone_id")
                 .param("id", event.id()).query().listOfRows();
         long eventGen = generationNumber("event", event.id());
         long showtimeGen = generationNumber("showtime", showtime.id());
@@ -211,13 +201,13 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
         assertThat(search.getEvent(event.id()).maxTicketsPerOrder()).isEqualTo(4);
         assertThat(generationNumber("event", event.id())).isEqualTo(eventGen + 1);
         assertThat(generationNumber("showtime", showtime.id())).isEqualTo(showtimeGen + 1);
-        assertThat(jdbc.sql("SELECT * FROM showtime_seat WHERE showtime_id = :id ORDER BY seat_id")
+        assertThat(jdbc.sql("SELECT * FROM seat_inventory WHERE showtime_id = :id ORDER BY seat_id")
                 .param("id", showtime.id()).query().listOfRows()).isEqualTo(inventory);
-        assertThat(jdbc.sql("SELECT * FROM showtime_zone_stock WHERE showtime_id = :id ORDER BY zone_id")
+        assertThat(jdbc.sql("SELECT * FROM standing_inventory WHERE showtime_id = :id ORDER BY zone_id")
                 .param("id", showtime.id()).query().listOfRows()).isEqualTo(stock);
-        assertThat(jdbc.sql("SELECT * FROM price_tier WHERE event_id = :id ORDER BY id")
+        assertThat(jdbc.sql("SELECT * FROM sku WHERE event_id = :id ORDER BY id")
                 .param("id", event.id()).query().listOfRows()).isEqualTo(prices);
-        assertThat(jdbc.sql("SELECT * FROM zone_price WHERE event_id = :id ORDER BY zone_id")
+        assertThat(jdbc.sql("SELECT * FROM event_zone WHERE event_id = :id ORDER BY zone_id")
                 .param("id", event.id()).query().listOfRows()).isEqualTo(zonePrices);
     }
 
@@ -252,7 +242,7 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
             var second = executor.submit(() -> {
                 start.await();
                 return events.update(id, new EventService.UpdateEvent(
-                        null, "Mô tả đồng thời", null, null, null, null, null, null));
+                        null, "Mô tả đồng thời", null, null, null, null, null, null, null, null));
             });
             start.countDown();
             first.get(15, TimeUnit.SECONDS);
@@ -293,7 +283,7 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.title").isEqualTo(title)
                 .jsonPath("$.max_tickets_per_order").isEqualTo(4)
-                .jsonPath("$.attributes.home_team").isEqualTo("Đội A")
+                .jsonPath("$.home_team").isEqualTo("Đội A")
                 .jsonPath("$.showtimes").isEmpty();
         client.get().uri("/api/v1/events/{id}", id).exchange().expectStatus().isNotFound();
     }
@@ -302,10 +292,10 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
         String body = client.post().uri("/api/v1/admin/events").headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body("""
                         {"title":"Tên ban đầu","category":"FOOTBALL","description":"Mô tả cũ",
-                         "attributes":{"home_team":"Đội A"},
+                         "home_team":"Đội A",
                          "poster_mobile_url":"https://example.com/mobile.jpg",
                          "poster_desktop_url":"https://example.com/desktop.jpg",
-                         "age_limit":16,"max_tickets_per_order":4}
+                         "max_tickets_per_order":4}
                         """).exchange().expectStatus().isCreated().expectBody(String.class)
                 .returnResult().getResponseBody();
         return UUID.fromString(JsonPath.read(body, "$.id"));
@@ -331,25 +321,6 @@ class AdminEventUpdateIntegrationTest extends IntegrationTest {
     }
 
     private static EventService.UpdateEvent titlePatch(String title) {
-        return new EventService.UpdateEvent(title, null, null, null, null, null, null, null);
-    }
-    @Test
-    void updatePoster_keepsLegacyReaderUrlConsistentWithDesktopThenMobile() {
-        UUID id = createDraft();
-        patch(id, "{\"poster_desktop_url\":\"https://example.com/new-desktop.jpg\"}")
-                .expectStatus().isOk();
-        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",id).query(String.class).single())
-                .isEqualTo("https://example.com/new-desktop.jpg");
-        patch(id, "{\"poster_mobile_url\":\"https://example.com/new-mobile.jpg\"}")
-                .expectStatus().isOk();
-        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",id).query(String.class).single())
-                .isEqualTo("https://example.com/new-desktop.jpg");
-        String created = client.post().uri("/api/v1/admin/events").headers(h->h.setBearerAuth(token))
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("title","Mobile only", "category","CONCERT", "poster_mobile_url","https://example.com/only-mobile.jpg"))
-                .exchange().expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
-        UUID mobileOnly = UUID.fromString(JsonPath.read(created,"$.id"));
-        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",mobileOnly).query(String.class).single())
-                .isEqualTo("https://example.com/only-mobile.jpg");
+        return new EventService.UpdateEvent(title, null, null, null, null, null, null, null, null, null);
     }
 }

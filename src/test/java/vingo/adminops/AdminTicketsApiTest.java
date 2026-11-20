@@ -80,8 +80,8 @@ class AdminTicketsApiTest extends AdminOpsTestSupport {
     @Test
     void adminListTickets_filtersOrderId() {
         var expected = jdbc.sql("""
-                        SELECT t.id FROM ticket t JOIN order_item oi ON oi.id = t.order_item_id
-                        WHERE oi.order_id = :order ORDER BY t.issued_at DESC, t.id DESC
+                        SELECT t.id FROM ticket t
+                        WHERE t.order_id = :order ORDER BY t.id DESC
                         """)
                 .param("order", firstOrder).query(String.class).list();
 
@@ -171,7 +171,7 @@ class AdminTicketsApiTest extends AdminOpsTestSupport {
     }
 
     private List<String> showtimeTickets() {
-        return jdbc.sql("SELECT id FROM ticket WHERE showtime_id = :id ORDER BY issued_at DESC, id DESC")
+        return jdbc.sql("SELECT id FROM ticket WHERE showtime_id = :id ORDER BY id DESC")
                 .param("id", showtime.id()).query(String.class).list();
     }
 }

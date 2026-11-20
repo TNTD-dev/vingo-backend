@@ -42,7 +42,7 @@ class AvailabilityCacheTest extends SearchRepositorySpyTest {
     void getAvailability_queriesDbOnce_whenConcurrentMisses() throws Exception {
         var created = fixtures.event()
                 .showtime(s -> s.onSale().seated(5))
-                .showtime(s -> s.onSale().seated(1))
+                .showtime(s -> s.onSale().seated(5))
                 .create();
         UUID showtime = created.showtimeIds().get(0);
         // Làm nóng kết nối Redis và serializer bằng suất khác, để lần nạp đầu không vượt timeout 200ms của Redis.

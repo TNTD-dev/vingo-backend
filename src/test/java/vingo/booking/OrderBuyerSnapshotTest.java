@@ -19,7 +19,7 @@ import vingo.support.CatalogFixture.Showtime;
 class OrderBuyerSnapshotTest extends BookingTestSupport {
 
     private static final String BUYER_NAME = "Nguyễn Văn An";
-    private static final String BUYER_PHONE = "0901234567";
+    private static final String BUYER_PHONE = "+84901234567";
     private final BookingService booking;
     private final TransactionTemplate transactions;
     private Showtime showtime;
@@ -42,59 +42,19 @@ class OrderBuyerSnapshotTest extends BookingTestSupport {
     }
 
     @Test
-    void markSold_snapshotsBuyerProfileOnPendingOrder() {
-        createBuyerProfile();
-        UUID order = holdOrder();
-        assertThat(orderStatus(order)).isEqualTo("PENDING");
-        assertThat(snapshot(order)).containsEntry("buyer_email", null);
+    void markSold_preservesBuyerSnapshotStoredOnOrder() {
+        UUID order = holdOrderWithBuyer();
 
         var outcome = transactions.execute(status -> booking.markSold(order));
         assertThat(outcome).isEqualTo(SaleOutcome.SOLD);
 
         assertThat(orderStatus(order)).isEqualTo("PAID");
-        assertProfileSnapshot(order);
+        assertSnapshot(order);
     }
 
     @Test
-    void markSold_preservesFirstSnapshotWhenProfileChanges() {
-        createBuyerProfile();
-        UUID order = holdOrder();
-        jdbc.sql("""
-                        UPDATE orders SET buyer_name = :name, buyer_email = :email, buyer_phone = :phone
-                        WHERE id = :id
-                        """)
-                .param("name", BUYER_NAME).param("email", email).param("phone", BUYER_PHONE)
-                .param("id", order).update();
-        jdbc.sql("""
-                        UPDATE buyer_profile SET full_name = 'Tên mới', email = :email,
-                                                 phone = '0987654321', updated_at = :now
-                        WHERE user_id = :user
-                        """)
-                .param("email", buyer + "@changed.vingo.test").param("now", catalog.now())
-                .param("user", buyer).update();
-
-        var outcome = transactions.execute(status -> booking.markSold(order));
-        assertThat(outcome).isEqualTo(SaleOutcome.SOLD);
-
-        assertProfileSnapshot(order);
-    }
-
-    @Test
-    void markSold_succeedsWithoutBuyerProfileAndLeavesSnapshotNull() {
-        UUID order = holdOrder();
-
-        var outcome = transactions.execute(status -> booking.markSold(order));
-        assertThat(outcome).isEqualTo(SaleOutcome.SOLD);
-
-        assertThat(orderStatus(order)).isEqualTo("PAID");
-        assertThat(snapshot(order)).containsEntry("buyer_name", null)
-                .containsEntry("buyer_email", null).containsEntry("buyer_phone", null);
-    }
-
-    @Test
-    void markSold_snapshotsProfileWhenMissingInventoryMovesOrderToReview() {
-        createBuyerProfile();
-        UUID order = holdOrder();
+    void markSold_snapshotsStayWhenMissingInventoryMovesOrderToReview() {
+        UUID order = holdOrderWithBuyer();
         makeOverdue(order);
         holdOk(buyerToken(catalog.buyer()), showtime.id(), seats(showtime.event().seat(1)));
 
@@ -102,47 +62,23 @@ class OrderBuyerSnapshotTest extends BookingTestSupport {
         assertThat(outcome).isEqualTo(SaleOutcome.NEEDS_REVIEW);
 
         assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
-        assertProfileSnapshot(order);
+        assertSnapshot(order);
     }
 
     @Test
-    void markNeedsReview_snapshotsProfileForOverduePendingOrder() {
-        createBuyerProfile();
-        UUID order = holdOrder();
+    void markNeedsReview_keepsSnapshotForOverduePendingOrder() {
+        UUID order = holdOrderWithBuyer();
         makeOverdue(order);
 
         transactions.executeWithoutResult(status -> booking.markNeedsReview(order, ReviewReason.PAID_AFTER_EXPIRY));
 
         assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
-        assertProfileSnapshot(order);
+        assertSnapshot(order);
     }
 
     @Test
-    void markDuplicatePaymentForReview_snapshotsProfileForPaidOrder() {
-        UUID order = paidOrderWithoutSnapshot();
-        createBuyerProfile();
-
-        transactions.executeWithoutResult(status -> booking.markDuplicatePaymentForReview(order));
-
-        assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
-        assertProfileSnapshot(order);
-    }
-
-    @Test
-    void markSuspectedPaymentForReview_snapshotsProfileForPaidOrder() {
-        UUID order = paidOrderWithoutSnapshot();
-        createBuyerProfile();
-
-        transactions.executeWithoutResult(status -> booking.markSuspectedPaymentForReview(order));
-
-        assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
-        assertProfileSnapshot(order);
-    }
-
-    @Test
-    void adminOrders_findByUppercaseProfileEmailAndExposeSnapshotInDetail() {
-        createBuyerProfile();
-        UUID order = holdOrder();
+    void adminOrders_findByUppercaseBuyerEmailAndExposeSnapshotInDetail() {
+        UUID order = holdOrderWithBuyer();
         var outcome = transactions.execute(status -> booking.markSold(order));
         assertThat(outcome).isEqualTo(SaleOutcome.SOLD);
         String adminToken = tokenFor(Role.ADMIN);
@@ -156,34 +92,24 @@ class OrderBuyerSnapshotTest extends BookingTestSupport {
                 .containsEntry("email", email).containsEntry("phone", BUYER_PHONE);
     }
 
-    private void createBuyerProfile() {
+    /** v2: người mua nằm trên chính đơn (không còn buyer_profile), do payment ghi lúc tạo thanh toán. */
+    private UUID holdOrderWithBuyer() {
+        UUID order = orderId(holdOk(token, showtime.id(), seats(showtime.event().seat(1))));
         jdbc.sql("""
-                        INSERT INTO buyer_profile (user_id, full_name, email, phone, updated_at)
-                        VALUES (:user, :name, :email, :phone, :now)
+                        UPDATE ticket_order SET buyer_name = :name, buyer_email = :email, buyer_phone = :phone
+                        WHERE id = :id
                         """)
-                .param("user", buyer).param("name", BUYER_NAME).param("email", email)
-                .param("phone", BUYER_PHONE).param("now", catalog.now()).update();
-    }
-
-    private UUID holdOrder() {
-        return orderId(holdOk(token, showtime.id(), seats(showtime.event().seat(1))));
-    }
-
-    private UUID paidOrderWithoutSnapshot() {
-        UUID order = holdOrder();
-        var outcome = transactions.execute(status -> booking.markSold(order));
-        assertThat(outcome).isEqualTo(SaleOutcome.SOLD);
-        // Tạo profile sau khi bán để test không vô tình dựa vào snapshot của markSold.
-        assertThat(snapshot(order)).containsEntry("buyer_email", null);
+                .param("name", BUYER_NAME).param("email", email).param("phone", BUYER_PHONE)
+                .param("id", order).update();
         return order;
     }
 
     private Map<String, Object> snapshot(UUID order) {
-        return jdbc.sql("SELECT buyer_name, buyer_email, buyer_phone FROM orders WHERE id = :id")
+        return jdbc.sql("SELECT buyer_name, buyer_email, buyer_phone FROM ticket_order WHERE id = :id")
                 .param("id", order).query().singleRow();
     }
 
-    private void assertProfileSnapshot(UUID order) {
+    private void assertSnapshot(UUID order) {
         assertThat(snapshot(order)).containsExactlyInAnyOrderEntriesOf(Map.of(
                 "buyer_name", BUYER_NAME, "buyer_email", email, "buyer_phone", BUYER_PHONE));
     }

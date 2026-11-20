@@ -7,6 +7,7 @@ import static vingo.support.CatalogFixture.VIP_PRICE;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,11 @@ class HoldSeatsTest extends BookingTestSupport {
     private Showtime showtime;
     private UUID buyer;
     private String token;
+
+    @AfterEach
+    void resetClock() {
+        clock.reset();
+    }
 
     @BeforeEach
     void createBuyerAndShowtime() {
@@ -76,34 +82,6 @@ class HoldSeatsTest extends BookingTestSupport {
 
         assertThat(seatState(showtime.id(), seat).status()).isEqualTo("HELD");
         assertThat(seatState(showtime.id(), seat).orderId()).isEqualTo(id).isNotEqualTo(old);
-    }
-
-    @Test
-    void holdSeats_holdsBothCoupleSeats_whenOnlySeatNineRequested() {
-        var event = showtime.event();
-        String json = holdOk(token, showtime.id(), seats(event.seat(9)));
-        UUID id = orderId(json);
-
-        assertThat(strings(json, "$.items[*].seat_id"))
-                .containsExactlyInAnyOrder(event.seat(9).toString(), event.seat(10).toString());
-        assertThat(number(json, "$.total_amount")).isEqualTo(2 * VIP_PRICE);
-        for (UUID seat : new UUID[]{event.seat(9), event.seat(10)}) {
-            assertThat(seatState(showtime.id(), seat).status()).isEqualTo("HELD");
-            assertThat(seatState(showtime.id(), seat).orderId()).isEqualTo(id);
-        }
-    }
-
-    @Test
-    void holdSeats_deduplicatesCoupleExpansion_whenBothCoupleSeatsRequested() {
-        var limited = limitedShowtime();
-
-        String json = holdOk(token, limited.id(), seats(limited.event().seat(9), limited.event().seat(10)));
-
-        assertThat(strings(json, "$.items[*].seat_id")).containsExactlyInAnyOrder(
-                limited.event().seat(9).toString(), limited.event().seat(10).toString());
-        assertThat(number(json, "$.total_amount")).isEqualTo(2 * VIP_PRICE);
-        assertThat(jdbc.sql("SELECT count(*) FROM order_item WHERE order_id = :id")
-                .param("id", orderId(json)).query(Integer.class).single()).isEqualTo(2);
     }
 
     @Test
@@ -166,19 +144,6 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     @Test
-    void holdSeats_returns409_withoutHoldingSeatNine_whenCoupleSeatTenTaken() {
-        occupy(showtime.event().seat(10), "HELD");
-        var before = seatState(showtime.id(), showtime.event().seat(10));
-
-        String json = problem(hold(token, showtime.id(), seats(showtime.event().seat(9))), 409, "SEAT_TAKEN");
-
-        assertThat(strings(json, "$.taken_seat_ids")).containsExactly(showtime.event().seat(10).toString());
-        assertAvailable(showtime, showtime.event().seat(9));
-        assertThat(seatState(showtime.id(), showtime.event().seat(10))).isEqualTo(before);
-        assertThat(orderCount(buyer)).isZero();
-    }
-
-    @Test
     void holdSeats_returns201_andIncrementsStandingHeldWithOneQuantityItem() {
         catalog.setZoneStock(showtime.id(), showtime.event().standingZoneId(), 0, 1);
 
@@ -187,11 +152,11 @@ class HoldSeatsTest extends BookingTestSupport {
         assertThat(text(json, "$.status")).isEqualTo("PENDING");
         assertThat(number(json, "$.total_amount")).isEqualTo(3 * GA_PRICE);
         assertThat(held(showtime)).isEqualTo(4);
-        var items = jdbc.sql("SELECT seat_id, quantity, unit_price FROM order_item WHERE order_id = :id")
+        var items = jdbc.sql("SELECT zone_id, quantity, unit_price FROM order_standing WHERE order_id = :id")
                 .param("id", orderId(json)).query().listOfRows();
         assertThat(items).hasSize(1);
-        assertThat(items.getFirst()).containsEntry("seat_id", null).containsEntry("quantity", 3)
-                .containsEntry("unit_price", GA_PRICE);
+        assertThat(((Number) items.getFirst().get("quantity")).intValue()).isEqualTo(3);
+        assertThat(((Number) items.getFirst().get("unit_price")).longValue()).isEqualTo(GA_PRICE);
     }
 
     @Test
@@ -237,23 +202,9 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     @Test
-    void holdSeats_returns404_whenShowtimeDraft() {
-        var draft = catalog.showtime(showtime.event(), Window.draft());
-        problem(hold(token, draft.id(), seats(draft.event().seat(1))), 404, "NOT_FOUND");
-        assertAvailable(draft, draft.event().seats().toArray(UUID[]::new));
-        assertThat(orderCount(buyer)).isZero();
-    }
-
-    @Test
     void holdSeats_returns422_whenThreeSeatsExceedEventMaximumTwo() {
         var limited = limitedShowtime();
         assertMaximum(limited, seats(limited.event().seat(1), limited.event().seat(2), limited.event().seat(3)));
-    }
-
-    @Test
-    void holdSeats_returns422_whenCoupleExpansionExceedsEventMaximumTwo() {
-        var limited = limitedShowtime();
-        assertMaximum(limited, seats(limited.event().seat(8), limited.event().seat(9)));
     }
 
     @Test
@@ -307,7 +258,7 @@ class HoldSeatsTest extends BookingTestSupport {
 
         problem(hold(token, showtime.id(), key, request), 409, "SEAT_TAKEN");
 
-        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_key WHERE user_id = :user AND key = :key")
+        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_record WHERE user_id = :user AND key = :key")
                 .param("user", buyer).param("key", key).query(Integer.class).single()).isZero();
         catalog.setSeat(showtime.id(), seat, "AVAILABLE", null, null);
 
@@ -414,6 +365,95 @@ class HoldSeatsTest extends BookingTestSupport {
         assertThat(held(limited)).isZero();
         assertThat(orderCount(buyer)).isZero();
     }
+
+    @Test
+    void holdSeats_usesCurrentPrice_whenNextPriceIsScheduledInFuture() {
+        UUID eventId = showtime.event().id();
+        UUID vipSkuId = skuIdFor(eventId, "VIP");
+        UUID currentPriceId = latestSkuPriceId(vipSkuId);
+        OffsetDateTime tomorrow = catalog.now().plusDays(1);
+        UUID futurePriceId = insertSkuPrice(vipSkuId, 700_000, tomorrow, catalog.buyer());
+
+        UUID firstOrder = orderId(holdOk(token, showtime.id(), seats(showtime.event().seat(1))));
+        var firstRow = orderSeatPrice(firstOrder);
+        assertThat(firstRow.unitPrice()).isEqualTo(VIP_PRICE);
+        assertThat(firstRow.skuPriceId()).isEqualTo(currentPriceId);
+
+        clock.set(tomorrow.plusMinutes(1).toInstant());
+        String secondBuyerToken = buyerToken(catalog.buyer());
+        UUID secondOrder = orderId(holdOk(secondBuyerToken, showtime.id(), seats(showtime.event().seat(2))));
+        var secondRow = orderSeatPrice(secondOrder);
+        assertThat(secondRow.unitPrice()).isEqualTo(700_000);
+        assertThat(secondRow.skuPriceId()).isEqualTo(futurePriceId);
+
+        // Đơn giữ ở bước 1 vẫn giữ nguyên giá và phiên bản giá lúc giữ chỗ.
+        assertThat(orderSeatPrice(firstOrder)).isEqualTo(firstRow);
+    }
+
+    @Test
+    void holdStanding_usesCurrentPrice_whenNextPriceIsScheduledInFuture() {
+        UUID eventId = showtime.event().id();
+        UUID gaSkuId = skuIdFor(eventId, "GA");
+        UUID currentPriceId = latestSkuPriceId(gaSkuId);
+        OffsetDateTime tomorrow = catalog.now().plusDays(1);
+        UUID futurePriceId = insertSkuPrice(gaSkuId, 500_000, tomorrow, catalog.buyer());
+
+        UUID firstOrder = orderId(holdOk(token, showtime.id(), standing(showtime.event().standingZoneId(), 2)));
+        var firstRow = orderStandingPrice(firstOrder);
+        assertThat(firstRow.unitPrice()).isEqualTo(GA_PRICE);
+        assertThat(firstRow.skuPriceId()).isEqualTo(currentPriceId);
+
+        clock.set(tomorrow.plusMinutes(1).toInstant());
+        String secondBuyerToken = buyerToken(catalog.buyer());
+        UUID secondOrder = orderId(holdOk(secondBuyerToken, showtime.id(), standing(showtime.event().standingZoneId(), 1)));
+        var secondRow = orderStandingPrice(secondOrder);
+        assertThat(secondRow.unitPrice()).isEqualTo(500_000);
+        assertThat(secondRow.skuPriceId()).isEqualTo(futurePriceId);
+
+        // Đơn khu đứng giữ ở bước 1 vẫn giữ nguyên giá lúc giữ chỗ.
+        assertThat(orderStandingPrice(firstOrder)).isEqualTo(firstRow);
+    }
+
+    private UUID skuIdFor(UUID eventId, String name) {
+        return jdbc.sql("SELECT id FROM sku WHERE event_id = :event AND name = :name")
+                .param("event", eventId).param("name", name).query(UUID.class).single();
+    }
+
+    private UUID latestSkuPriceId(UUID skuId) {
+        return jdbc.sql("SELECT id FROM sku_price WHERE sku_id = :sku ORDER BY effective_from DESC LIMIT 1")
+                .param("sku", skuId).query(UUID.class).single();
+    }
+
+    private UUID insertSkuPrice(UUID skuId, long price, OffsetDateTime effectiveFrom, UUID createdBy) {
+        return jdbc.sql("""
+                        INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                        VALUES (:sku, :price, :effectiveFrom, :createdBy)
+                        RETURNING id
+                        """)
+                .param("sku", skuId)
+                .param("price", price)
+                .param("effectiveFrom", effectiveFrom)
+                .param("createdBy", createdBy)
+                .query(UUID.class).single();
+    }
+
+    private OrderPriceRow orderSeatPrice(UUID orderId) {
+        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_seat WHERE order_id = :order")
+                .param("order", orderId)
+                .query((rs, row) -> new OrderPriceRow(
+                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                .single();
+    }
+
+    private OrderPriceRow orderStandingPrice(UUID orderId) {
+        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_standing WHERE order_id = :order")
+                .param("order", orderId)
+                .query((rs, row) -> new OrderPriceRow(
+                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                .single();
+    }
+
+    private record OrderPriceRow(UUID skuPriceId, long unitPrice) {}
 
     private void assertValidation(String request) {
         problem(hold(token, showtime.id(), request), 400, "VALIDATION_ERROR");

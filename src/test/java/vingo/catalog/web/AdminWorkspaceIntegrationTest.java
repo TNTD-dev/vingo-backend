@@ -18,30 +18,30 @@ class AdminWorkspaceIntegrationTest extends IntegrationTest {
     @BeforeEach
     void admin() {
         admin=catalog.buyer();
-        jdbc.sql("UPDATE users SET role='ADMIN' WHERE id=:id").param("id",admin).update();
+        jdbc.sql("UPDATE user_account SET role='ADMIN' WHERE id=:id").param("id",admin).update();
         token=tokenFor(admin,Role.ADMIN);
     }
 
     @Test
-    void venueDetails_returnsCanonicalLocationAndUpdaterOutsideLegacyCities() {
-        var body=Map.of("name","Sân kiểm tra","type","STADIUM","location",Map.of(
-                "display_address","Hải Phòng","latitude",20.86,"longitude",106.68,
-                "city_code","HP","source","MANUAL_MAP_PIN"));
+    void venueDetails_returnsFlatLocationOutsideLegacyCities() {
+        var body=Map.of("name","Sân kiểm tra","address","Hải Phòng","city","Hải Phòng",
+                "district","Lê Chân","lat",20.86,"lng",106.68);
         Venue venue=client.post().uri("/api/v1/admin/venues").headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(body).exchange().expectStatus().isCreated()
                 .expectBody(Venue.class).returnResult().getResponseBody();
         client.get().uri("/api/v1/admin/venues/{id}",venue.getId()).headers(h->h.setBearerAuth(token))
-                .exchange().expectStatus().isOk().expectBody().jsonPath("$.location.city_code").isEqualTo("HP")
-                .jsonPath("$.address").isEqualTo("Hải Phòng").jsonPath("$.updated_by").isEqualTo(admin.toString())
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.city").isEqualTo("Hải Phòng")
+                .jsonPath("$.address").isEqualTo("Hải Phòng").jsonPath("$.district").isEqualTo("Lê Chân")
+                .jsonPath("$.lat").isEqualTo(20.86).jsonPath("$.lng").isEqualTo(106.68)
                 .jsonPath("$.layout_count").isEqualTo(0);
     }
 
     @Test
     void layoutTree_onlyReturnsSelectedTypeWithOwnVersions() {
-        UUID venue=jdbc.sql("INSERT INTO venue(name,type) VALUES ('Sân cây','STADIUM') RETURNING id")
+        UUID venue=jdbc.sql("INSERT INTO venue(name) VALUES ('Sân cây') RETURNING id")
                 .query(UUID.class).single();
         UUID football=VenueSchemaFixture.draft(jdbc,venue);
-        jdbc.sql("UPDATE seat_layout SET layout_type='FOOTBALL' WHERE id=:id").param("id",football).update();
+        jdbc.sql("UPDATE seat_map SET layout_type='FOOTBALL' WHERE id=:id").param("id",football).update();
         VenueSchemaFixture.draft(jdbc,venue);
         client.get().uri("/api/v1/admin/venues/{id}/layout-tree?layout_type=FOOTBALL",venue)
                 .headers(h->h.setBearerAuth(token)).exchange().expectStatus().isOk().expectBody()

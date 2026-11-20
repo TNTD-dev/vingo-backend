@@ -66,6 +66,28 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void putPriceTiers_comparesWithEffectivePriceAndPreservesHistoryAndScheduledPrices() {
+        UUID event = newDraft();
+        put(event, "price-tiers", List.of(Map.of("name", "VIP", "price", 100))).expectStatus().isOk();
+        UUID sku = tierIds(event).getFirst();
+        var future = clock.instant().plus(java.time.Duration.ofDays(1)).atOffset(java.time.ZoneOffset.UTC);
+        client.post().uri("/api/v1/admin/events/{event}/price-tiers/{sku}/prices", event, sku)
+                .headers(h -> h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("price", 300, "effective_from", future.toString())).exchange().expectStatus().isCreated();
+
+        clock.advance(java.time.Duration.ofSeconds(1));
+        put(event, "price-tiers", List.of(Map.of("id", sku, "name", "VIP", "price", 100))).expectStatus().isOk();
+        assertThat(prices(sku)).containsExactly(100L, 300L);
+        put(event, "price-tiers", List.of(Map.of("id", sku, "name", "VIP", "price", 300))).expectStatus().isOk();
+        assertThat(prices(sku)).containsExactly(100L, 300L, 300L);
+    }
+
+    private List<Long> prices(UUID sku) {
+        return jdbc.sql("SELECT price FROM sku_price WHERE sku_id = :sku ORDER BY effective_from")
+                .param("sku", sku).query(Long.class).list();
+    }
+
+    @Test
     void putPriceTiers_returns400WithoutPartialChanges_whenNamesDuplicate() {
         UUID eventId = newDraft();
 
@@ -163,7 +185,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<UUID> tierIds(UUID eventId) {
         return jdbc.sql("""
-                SELECT id FROM price_tier
+                SELECT id FROM sku
                 WHERE event_id = :id
                 ORDER BY id
                 """)
@@ -174,9 +196,11 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<Map<String, Object>> tierRows(UUID eventId) {
         return jdbc.sql("""
-                SELECT * FROM price_tier
-                WHERE event_id = :id
-                ORDER BY id
+                SELECT s.id, s.event_id, s.name, s.color, sp.price
+                FROM sku s
+                JOIN LATERAL (SELECT price FROM sku_price WHERE sku_id = s.id ORDER BY effective_from DESC LIMIT 1) sp ON true
+                WHERE s.event_id = :id
+                ORDER BY s.id
                 """)
                 .param("id", eventId)
                 .query()
@@ -215,7 +239,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
         assertThat(before).hasSize(2);
         assertThat(before).allSatisfy(row
-                -> assertThat(row.get("price_tier_id"))
+                -> assertThat(row.get("sku_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
 
@@ -336,7 +360,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
         )).expectStatus().isOk();
 
         assertThat(zoneRows(event.id())).allSatisfy(row
-                -> assertThat(row.get("price_tier_id"))
+                -> assertThat(row.get("sku_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
     }
@@ -375,7 +399,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<Map<String, Object>> zoneRows(UUID eventId) {
         return jdbc.sql("""
-            SELECT * FROM zone_price
+            SELECT * FROM event_zone
             WHERE event_id = :id
             ORDER BY zone_id
             """)

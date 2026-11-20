@@ -1,188 +1,283 @@
 package vingo.catalog.internal;
 
+import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.stereotype.Repository;
-import tools.jackson.databind.json.JsonMapper;
-import vingo.api.model.*;
 
-/** Lưu nháp riêng; không tạo venue/layout chưa hoàn chỉnh trong lúc upload. */
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.SqlArrayValue;
+import org.springframework.stereotype.Repository;
+
+import tools.jackson.databind.json.JsonMapper;
+import vingo.api.model.OverviewArea;
+import vingo.api.model.OverviewGate;
+import vingo.api.model.SeatLayoutBounds;
+import vingo.api.model.VenueImportDraft;
+import vingo.api.model.VenueImportResult;
+import vingo.api.model.VenueOverview;
+
+/** Lưu nháp phiên nhập sơ đồ; chỉ INSERT venue_map/seat_map/zone/seat khi hoàn tất. */
 @Repository
 public class VenueImportRepository {
+
     private final JdbcClient jdbc;
     private final JsonMapper json;
-    private final SeatLayoutRepository layouts;
-    public VenueImportRepository(JdbcClient jdbc, JsonMapper json, SeatLayoutRepository layouts) {this.jdbc=jdbc;this.json=json;this.layouts=layouts;}
-    public Optional<VenueLocationInput> venueLocation(UUID id) {
-        return jdbc.sql("""
-                SELECT location::text
-                FROM venue WHERE id = :id AND deleted_at IS NULL
-                """).param("id", id).query(String.class)
-                .optional().map(value -> json.readValue(value, VenueLocationInput.class));
+    private final SeatLayoutSvgParser parser;
+
+    public VenueImportRepository(JdbcClient jdbc, JsonMapper json, SeatLayoutSvgParser parser) {
+        this.jdbc = jdbc;
+        this.json = json;
+        this.parser = parser;
     }
 
-    public record FileSource(UUID id, String filename, String checksum, int size,
-                             String role, String safeSvg, String status, String issues) {}
-    public record Snapshot(UUID id, UUID ownerId, UUID venueId, String status, long revision,
-                           String step, VenueImportDraft draft, OffsetDateTime expiresAt,
-                           UUID completedVenue, UUID completedLayout) {}
+    public record FileSource(UUID sessionId, UUID id, String filename, String role, String svg, int size, String checksum) {}
+
+    public record Snapshot(
+            UUID id,
+            UUID ownerId,
+            UUID venueId,
+            VenueImportDraft draft,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            long revision,
+            String status,
+            VenueImportResult result) {
+        public OffsetDateTime expiresAt() {
+            return updatedAt.plusDays("DRAFT".equals(status) ? 30 : 7);
+        }
+    }
+
+    private static final String SNAPSHOT = "SELECT id, owner_id, venue_id, draft, created_at, updated_at, revision, status, result FROM venue_import_session ";
+
+    private Snapshot snapshot(ResultSet rs, int row) throws SQLException {
+        String result = rs.getString("result");
+        return new Snapshot(rs.getObject("id", UUID.class), rs.getObject("owner_id", UUID.class),
+                rs.getObject("venue_id", UUID.class), json.readValue(rs.getString("draft"), VenueImportDraft.class),
+                rs.getObject("created_at", OffsetDateTime.class), rs.getObject("updated_at", OffsetDateTime.class),
+                rs.getLong("revision"), rs.getString("status"),
+                result == null ? null : json.readValue(result, VenueImportResult.class));
+    }
+
     public UUID create(UUID owner, UUID venue, VenueImportDraft draft, OffsetDateTime now) {
         return jdbc.sql("""
-                INSERT INTO venue_import_session(owner_id,target_venue_id,draft_data,created_at,updated_at,expires_at)
-                VALUES(:owner,:venue,CAST(:draft AS jsonb),:now,:now,:expiry) RETURNING id
-                """).param("owner",owner).param("venue",venue).param("draft",json.writeValueAsString(draft))
-                .param("now",now).param("expiry",now.plusDays(30)).query(UUID.class).single();
-    }
-    public Optional<Snapshot> find(UUID id, UUID owner, boolean lock) {
-        return jdbc.sql("SELECT * FROM venue_import_session WHERE id=:id AND owner_id=:owner"+(lock?" FOR UPDATE":""))
-                .param("id",id).param("owner",owner).query((rs,n)->new Snapshot(id,owner,
-                        rs.getObject("target_venue_id",UUID.class),rs.getString("status"),rs.getLong("revision"),
-                        rs.getString("step"),json.readValue(rs.getString("draft_data"),VenueImportDraft.class),
-                        rs.getObject("expires_at",OffsetDateTime.class),rs.getObject("completed_venue_id",UUID.class),
-                        rs.getObject("completed_layout_id",UUID.class))).optional();
-    }
-    public List<UUID> list(UUID owner, UUID after, int limit, OffsetDateTime now) {
-        return jdbc.sql("""
-                SELECT id FROM venue_import_session WHERE owner_id=:owner AND status='DRAFT' AND expires_at>:now
-                AND (CAST(:after AS uuid) IS NULL OR id<:after) ORDER BY id DESC LIMIT :limit
-                """).param("owner",owner).param("after",after).param("limit",limit).param("now",now).query(UUID.class).list();
-    }
-    public List<FileSource> files(UUID id) {
-        return jdbc.sql("SELECT id,original_filename,checksum,size_bytes,role,sanitized_svg,validation_status,issues FROM venue_import_file WHERE session_id=:id ORDER BY id").param("id",id)
-                .query((rs,n)->new FileSource(rs.getObject("id",UUID.class),rs.getString("original_filename"),
-                        rs.getString("checksum"),rs.getInt("size_bytes"),rs.getString("role"),
-                        rs.getString("sanitized_svg"),rs.getString("validation_status"),rs.getString("issues"))).list();
-    }
-    public void insertFile(UUID session, String filename, byte[] source, VenueSvgProcessor.Source parsed) {
-        jdbc.sql("""
-                INSERT INTO venue_import_file(session_id,original_filename,source_bytes,role,layout_key,
-                    sanitized_svg,validation_status,schema_version,issues)
-                VALUES(:session,:filename,:source,:role,:key,:safe,:status,2,CAST(:issues AS jsonb))
-                ON CONFLICT(session_id,checksum) DO NOTHING
-                """).param("session",session).param("filename",filename).param("source",source)
-                .param("role",parsed.role()).param("key",parsed.role().equals("SEAT_LAYOUT")?session:null)
-                .param("safe",parsed.safeSvg()).param("status",parsed.valid()?"VALIDATED":"INVALID")
-                .param("issues",json.writeValueAsString(parsed.issues())).update();
-    }
-    public boolean deleteFile(UUID session, UUID file) {
-        return jdbc.sql("DELETE FROM venue_import_file WHERE id=:id AND session_id=:session")
-                .param("id",file).param("session",session).update()==1;
-    }
-    public void patch(UUID id,String step,VenueImportDraft draft,OffsetDateTime now) {
-        jdbc.sql("UPDATE venue_import_session SET step=:step,draft_data=CAST(:draft AS jsonb),updated_at=:now,expires_at=:expiry WHERE id=:id")
-                .param("id",id).param("step",step).param("draft",json.writeValueAsString(draft)).param("now",now).param("expiry",now.plusDays(30)).update();
-    }
-    public void close(UUID id,String status,UUID venue,UUID layout,OffsetDateTime now) {
-        jdbc.sql("UPDATE venue_import_session SET status=:status,completed_venue_id=:venue,completed_layout_id=:layout,updated_at=:now WHERE id=:id")
-                .param("id",id).param("status",status).param("venue",venue).param("layout",layout).param("now",now).update();
-    }
-    public boolean lockVenue(UUID id) {
-        return jdbc.sql("SELECT id FROM venue WHERE id=:id AND deleted_at IS NULL AND type='STADIUM' FOR UPDATE")
-                .param("id",id).query(UUID.class).optional().isPresent();
-    }
-    public boolean activeVenue(UUID id) {
-        return jdbc.sql("SELECT EXISTS(SELECT 1 FROM venue WHERE id=:id AND deleted_at IS NULL AND type='STADIUM')")
-                .param("id",id).query(Boolean.class).single();
-    }
-    public Optional<VenueOverview> overview(UUID id,boolean lock) {
-        return jdbc.sql("SELECT o.* FROM venue_overview o JOIN venue v ON v.id=o.venue_id WHERE o.id=:id AND v.deleted_at IS NULL"+(lock?" FOR UPDATE OF o":""))
-                .param("id",id).query((rs,n)->new VenueOverview().id(id).venueId(rs.getObject("venue_id",UUID.class))
-                        .name(rs.getString("name")).version(rs.getLong("version"))
-                        .status(VenueOverview.StatusEnum.fromValue(rs.getString("status"))).svgContent(rs.getString("svg_content"))
-                        .viewBox(new SeatLayoutBounds(rs.getBigDecimal("view_box_x"),rs.getBigDecimal("view_box_y"),rs.getBigDecimal("view_box_width"),rs.getBigDecimal("view_box_height"))))
-                .optional().map(o->o.gates(gates(id)).areas(areas(id)));
-    }
-    public List<UUID> overviews(UUID venue,UUID after,int limit) {
-        return jdbc.sql("SELECT id FROM venue_overview WHERE venue_id=:venue AND (CAST(:after AS uuid) IS NULL OR id<:after) ORDER BY id DESC LIMIT :limit")
-                .param("venue",venue).param("after",after).param("limit",limit).query(UUID.class).list();
-    }
-    public UUID overviewIdForLayout(UUID layout) {
-        return jdbc.sql("SELECT overview_id FROM seat_layout WHERE id=:id").param("id",layout).query(UUID.class).single();
-    }
-    public boolean certified(UUID layout) {
-        return jdbc.sql("SELECT validation_hash IS NOT NULL AND validation_hash=catalog_layout_hash(id) FROM seat_layout WHERE id=:id")
-                .param("id",layout).query(Boolean.class).single();
-    }
-    public void publishOverview(UUID id,OffsetDateTime now) {
-        jdbc.sql("UPDATE venue_overview SET status='PUBLISHED',published_at=:now WHERE id=:id AND status='DRAFT'")
-                .param("id",id).param("now",now).update();
-    }
-    private List<OverviewGate> gates(UUID id) {
-        return jdbc.sql("SELECT * FROM venue_gate WHERE overview_id=:id ORDER BY code").param("id",id)
-                .query((rs,n)->new OverviewGate().id(rs.getObject("id",UUID.class)).code(rs.getString("code")).name(rs.getString("name"))
-                        .svgId(rs.getString("svg_id")).direction(OverviewGate.DirectionEnum.fromValue(rs.getString("direction")))).list();
-    }
-    private List<OverviewArea> areas(UUID id) {
-        return jdbc.sql("SELECT * FROM venue_overview_area WHERE overview_id=:id ORDER BY code").param("id",id)
-                .query((rs,n)->new OverviewArea().id(rs.getObject("id",UUID.class)).code(rs.getString("code")).name(rs.getString("name")).svgId(rs.getString("svg_id"))).list();
-    }
-    public UUID insertOverview(UUID venue,String name,VenueSvgProcessor.Bundle bundle) {
-        var box=bundle.layout().viewBox();
-        UUID id=jdbc.sql("""
-                INSERT INTO venue_overview(venue_id,name,svg_content,view_box_width,view_box_height)
-                VALUES(:venue,:name,:svg,:width,:height) RETURNING id
-                """).param("venue",venue).param("name",name).param("svg",bundle.overviewSvg())
-                .param("width",box.width()).param("height",box.height()).query(UUID.class).single();
-        for(var g:bundle.gates()) jdbc.sql("INSERT INTO venue_gate(overview_id,code,name,svg_id,direction,label_svg_id) VALUES(:id,:code,:code,:svg,:direction,:label)")
-                .param("id",id).param("code",g.code()).param("svg",g.svgId()).param("direction",g.direction()).param("label",g.labelId()).update();
-        for(var a:bundle.areas()) jdbc.sql("INSERT INTO venue_overview_area(overview_id,code,name,svg_id) VALUES(:id,:code,:code,:svg)")
-                .param("id",id).param("code",a.code()).param("svg",a.svgId()).update();
-        return id;
-    }
-    public UUID insertLayout(UUID venue,UUID overview,String type,String name,VenueSvgProcessor.Bundle bundle) {
-        UUID id=jdbc.sql("INSERT INTO seat_layout(venue_id,overview_id,layout_type,name) VALUES(:venue,:overview,:type,:name) RETURNING id")
-                .param("venue",venue).param("overview",overview).param("type",type).param("name",name).query(UUID.class).single();
-        layouts.insertSvg(id,bundle.layout());
-        UUID seatType=layouts.standardSeatType();
-        for(var z:bundle.layout().zones()) {
-            UUID zone=layouts.insertZone(id,z);
-            if(bundle.zoneAreas().containsKey(z.code())) mapZone(zone,overview,bundle.zoneAreas().get(z.code()));
-            if(!z.seats().isEmpty()) layouts.insertSeats(zone,seatType,z.seats());
-        }
-        return id;
-    }
-    public void mapZone(UUID zone, UUID overview,String code) {
-        jdbc.sql("UPDATE zone SET overview_area_id=(SELECT id FROM venue_overview_area WHERE overview_id=:overview AND code=:code) WHERE id=:id")
-                .param("id",zone).param("overview",overview).param("code",code).update();
-    }
-    public void certify(UUID overview,UUID layout,OffsetDateTime now) {
-        jdbc.sql("UPDATE venue_overview SET validation_hash=catalog_overview_hash(id),validation_engine='svg-v2-area-1',validated_at=:now WHERE id=:id AND status='DRAFT'")
-                .param("id",overview).param("now",now).update();
-        jdbc.sql("UPDATE seat_layout SET validation_hash=catalog_layout_hash(id),validation_engine='svg-v2-area-1',validated_at=:now WHERE id=:id AND status='DRAFT'")
-                .param("id",layout).param("now",now).update();
-    }
-    public int cleanup(OffsetDateTime now,int batch) {
-        return jdbc.sql("""
-                DELETE FROM venue_import_session WHERE id IN
-                (SELECT id FROM venue_import_session WHERE expires_at<=:now ORDER BY expires_at FOR UPDATE SKIP LOCKED LIMIT :batch)
-                """).param("now",now).param("batch",batch).update();
+                INSERT INTO venue_import_session(owner_id, venue_id, draft, created_at, updated_at)
+                VALUES (:owner, :venue, CAST(:draft AS jsonb), :now, :now)
+                RETURNING id
+                """)
+                .param("owner", owner)
+                .param("venue", venue)
+                .param("draft", json.writeValueAsString(draft))
+                .param("now", now)
+                .query(UUID.class)
+                .single();
     }
 
-    public void persistSetup(UUID session,UUID venue,VenueImportDraft draft,OffsetDateTime now) {
-        if(draft.getVenue()!=null && draft.getVenue().getLocation()!=null) {
-            jdbc.sql("""
-                    UPDATE venue SET location=CAST(:location AS jsonb),
-                        updated_by=(SELECT owner_id FROM venue_import_session WHERE id=:session),
-                        updated_at=:now
-                    WHERE id=:id
-                    """)
-                .param("now",now).param("session",session).param("location",json.writeValueAsString(draft.getVenue().getLocation())).param("id",venue).update();
-        }
-        if(draft.getParkingLocations()!=null) {
-            int ordinal=0;
-            for(var p:draft.getParkingLocations()) {
-                jdbc.sql("""
-                    INSERT INTO parking_locations(venue_id,setup_session_id,ordinal,name,location,is_primary,price_status,price_vnd,price_unit,data)
-                    VALUES(:venue,:session,:ordinal,:name,CAST(:location AS jsonb),:primary,:status,:price,:unit,CAST(:data AS jsonb))
-                    ON CONFLICT(setup_session_id,ordinal) DO NOTHING
-                    """).param("venue",venue).param("session",session).param("ordinal",ordinal++).param("name",p.getName())
-                    .param("location",json.writeValueAsString(p.getLocation())).param("primary",Boolean.TRUE.equals(p.getIsPrimary()))
-                    .param("status",p.getPriceStatus().getValue()).param("price",p.getPriceVnd()).param("unit",p.getPriceUnit()==null?null:p.getPriceUnit().getValue())
-                    .param("data",json.writeValueAsString(p)).update();
+    public Optional<Snapshot> find(UUID id, UUID owner, boolean lock) {
+        return jdbc.sql(SNAPSHOT + "WHERE id = :id AND owner_id = :owner" + (lock ? " FOR UPDATE" : ""))
+                .param("id", id).param("owner", owner).query(this::snapshot)
+                .optional();
+    }
+
+    public List<Snapshot> list(UUID owner, UUID after, int limit, OffsetDateTime now) {
+        return jdbc.sql(SNAPSHOT + """
+                WHERE owner_id = :owner AND status = 'DRAFT'
+                  AND updated_at > :cutoff
+                  AND (CAST(:after AS uuid) IS NULL OR id < :after)
+                ORDER BY id DESC LIMIT :limit
+                """)
+                .param("owner", owner)
+                .param("cutoff", now.minusDays(30))
+                .param("after", after)
+                .param("limit", limit)
+                .query(this::snapshot)
+                .list();
+    }
+
+    public List<FileSource> files(UUID id) {
+        return files(List.of(id), true);
+    }
+
+    public List<FileSource> files(List<UUID> ids, boolean includeSvg) {
+        if (ids.isEmpty()) return List.of();
+        return jdbc.sql("""
+                SELECT session_id, id, filename, role, octet_length(svg) AS size,
+                       encode(sha256(convert_to(svg, 'UTF8')), 'hex') AS checksum, %s AS content
+                FROM venue_import_file WHERE session_id IN (:ids) ORDER BY id
+                """.formatted(includeSvg ? "svg" : "NULL"))
+                .param("ids", ids)
+                .query((rs, n) -> new FileSource(rs.getObject("session_id", UUID.class), rs.getObject("id", UUID.class),
+                        rs.getString("filename"), rs.getString("role"), rs.getString("content"),
+                        rs.getInt("size"), rs.getString("checksum")))
+                .list();
+    }
+
+    public void insertFile(UUID session, String filename, String role, String safeSvg) {
+        jdbc.sql("""
+                INSERT INTO venue_import_file(session_id, filename, role, svg)
+                VALUES (:session, :filename, :role, :svg)
+                """)
+                .param("session", session)
+                .param("filename", filename)
+                .param("role", role)
+                .param("svg", safeSvg)
+                .update();
+    }
+
+    public boolean deleteFile(UUID session, UUID file) {
+        return jdbc.sql("DELETE FROM venue_import_file WHERE id = :id AND session_id = :session")
+                .param("id", file)
+                .param("session", session)
+                .update() == 1;
+    }
+
+    public void patch(UUID id, VenueImportDraft draft, OffsetDateTime now) {
+        jdbc.sql("UPDATE venue_import_session SET draft = CAST(:draft AS jsonb), revision = revision + 1, updated_at = :now WHERE id = :id")
+                .param("id", id)
+                .param("draft", json.writeValueAsString(draft))
+                .param("now", now)
+                .update();
+    }
+
+    public void close(UUID id, String status, VenueImportResult result, OffsetDateTime now) {
+        jdbc.sql("""
+                UPDATE venue_import_session SET status = :status, result = CAST(:result AS jsonb),
+                    updated_at = :now, revision = revision + 1 WHERE id = :id
+                """).param("id", id).param("status", status).param("now", now)
+                .param("result", result == null ? null : json.writeValueAsString(result)).update();
+    }
+
+    public boolean lockVenue(UUID id) {
+        return jdbc.sql("SELECT id FROM venue WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
+                .param("id", id)
+                .query(UUID.class)
+                .optional()
+                .isPresent();
+    }
+
+    public boolean activeVenue(UUID id) {
+        return jdbc.sql("SELECT EXISTS(SELECT 1 FROM venue WHERE id = :id AND deleted_at IS NULL)")
+                .param("id", id)
+                .query(Boolean.class)
+                .single();
+    }
+
+    public Optional<VenueOverview> overview(UUID id, boolean lock) {
+        return jdbc.sql("""
+                SELECT m.id, m.venue_id, m.version, m.svg, m.created_at
+                FROM venue_map m
+                JOIN venue v ON v.id = m.venue_id
+                WHERE m.id = :id AND v.deleted_at IS NULL
+                """ + (lock ? " FOR UPDATE OF m" : ""))
+                .param("id", id)
+                .query((rs, n) -> mapOverview(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("venue_id", UUID.class),
+                        rs.getLong("version"),
+                        rs.getString("svg"),
+                        rs.getObject("created_at", OffsetDateTime.class)))
+                .optional();
+    }
+
+    public List<UUID> overviews(UUID venue, UUID after, int limit) {
+        return jdbc.sql("""
+                SELECT id FROM venue_map
+                WHERE venue_id = :venue
+                  AND (CAST(:after AS uuid) IS NULL OR id < :after)
+                ORDER BY id DESC LIMIT :limit
+                """)
+                .param("venue", venue)
+                .param("after", after)
+                .param("limit", limit)
+                .query(UUID.class)
+                .list();
+    }
+
+    public UUID insertOverview(UUID venue, String svg) {
+        return jdbc.sql("""
+                INSERT INTO venue_map(venue_id, version, svg)
+                VALUES (:venue, (SELECT COALESCE(MAX(version), 0) + 1 FROM venue_map WHERE venue_id = :venue), :svg)
+                RETURNING id
+                """)
+                .param("venue", venue)
+                .param("svg", svg)
+                .query(UUID.class)
+                .single();
+    }
+
+    public UUID insertLayout(UUID venue, UUID venueMapId, String type, String name, VenueSvgProcessor.Bundle bundle,
+                             SeatLayoutRepository layouts) {
+        var bounds = bundle.layout().viewBox();
+        UUID id = jdbc.sql("""
+                INSERT INTO seat_map(venue_id, venue_map_id, version, name, layout_type, svg, view_box)
+                VALUES (
+                    :venue,
+                    :venueMapId,
+                    (SELECT COALESCE(MAX(version), 0) + 1 FROM seat_map WHERE venue_id = :venue),
+                    :name,
+                    :type,
+                    :svg, CAST(:bounds AS numeric[])
+                )
+                RETURNING id
+                """)
+                .param("venue", venue)
+                .param("venueMapId", venueMapId)
+                .param("name", name)
+                .param("type", type)
+                .param("bounds", bounds == null ? null : new SqlArrayValue(
+                        "numeric", bounds.x(), bounds.y(), bounds.width(), bounds.height()))
+                .param("svg", bundle.layout().svgContent())
+                .query(UUID.class)
+                .single();
+
+        for (var z : bundle.layout().zones()) {
+            UUID zoneId = layouts.insertZone(id, z);
+            if (!z.seats().isEmpty()) {
+                layouts.insertSeats(id, zoneId, z.seats());
             }
         }
+        return id;
+    }
+
+    public int cleanup(OffsetDateTime now, int batch) {
+        return jdbc.sql("""
+                DELETE FROM venue_import_session WHERE id IN (
+                    SELECT id FROM venue_import_session
+                    WHERE (status = 'DRAFT' AND updated_at <= :cutoff)
+                       OR (status <> 'DRAFT' AND updated_at <= :closedCutoff)
+                    ORDER BY updated_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT :batch
+                )
+                """)
+                .param("cutoff", now.minusDays(30))
+                .param("closedCutoff", now.minusDays(7))
+                .param("batch", batch)
+                .update();
+    }
+
+    private VenueOverview mapOverview(UUID id, UUID venueId, long version, String svg, OffsetDateTime createdAt) {
+        var overview = new VenueOverview()
+                .id(id)
+                .venueId(venueId)
+                .version(version)
+                .svgContent(svg)
+                .createdAt(createdAt)
+                .gates(List.of())
+                .areas(List.of());
+        try {
+            var parsed = parser.parse(svg.getBytes(StandardCharsets.UTF_8));
+            if (parsed.viewBox() != null) {
+                overview.viewBox(new SeatLayoutBounds(
+                        parsed.viewBox().x(), parsed.viewBox().y(),
+                        parsed.viewBox().width(), parsed.viewBox().height()));
+            }
+        } catch (RuntimeException ignored) {
+            // Giữ viewBox null nếu SVG nền không có khung zone chuẩn.
+        }
+        return overview;
     }
 }

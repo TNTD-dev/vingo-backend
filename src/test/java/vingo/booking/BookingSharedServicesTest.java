@@ -68,7 +68,7 @@ class BookingSharedServicesTest extends BookingTestSupport {
         }
         assertThat(seatState(showtime.id(), event.seat(1))).isEqualTo(takenBefore);
         assertThat(orderCount(buyer)).isZero();
-        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_key WHERE user_id = :user AND key = :key")
+        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_record WHERE user_id = :user AND key = :key")
                 .param("user", buyer).param("key", key).query(Integer.class).single()).isZero();
         assertThat(jdbc.sql("SELECT count(*) FROM realtime_event WHERE user_id = :user")
                 .param("user", buyer).query(Integer.class).single()).isZero();
@@ -77,25 +77,6 @@ class BookingSharedServicesTest extends BookingTestSupport {
         UUID order = orderId(holdOk(token, showtime.id(), key, request));
         assertThat(orderId(holdOk(token, showtime.id(), key, request))).isEqualTo(order);
         assertThat(orderCount(buyer)).isEqualTo(1);
-    }
-
-    @Test
-    void holdSeats_countsExpandedCoupleSeats_whenRequestingSuggestions() {
-        var showtime = catalog.onSaleShowtime();
-        var event = showtime.event();
-        UUID otherOrder = catalog.order(catalog.buyer(), showtime.id(), "PENDING", catalog.now().plusMinutes(10));
-        catalog.setSeat(showtime.id(), event.seat(10), "HELD", otherOrder, catalog.now().plusMinutes(10));
-
-        String json = problem(hold(buyerToken(catalog.buyer()), showtime.id(), seats(event.seat(9))),
-                409, "SEAT_TAKEN");
-
-        assertThat(strings(json, "$.taken_seat_ids")).containsExactly(event.seat(10).toString());
-        var suggested = strings(json, "$.suggested_seat_ids");
-        assertThat(suggested).hasSize(2).doesNotHaveDuplicates().doesNotContain(event.seat(10).toString());
-        for (String seat : suggested) {
-            assertAvailable(showtime, UUID.fromString(seat));
-        }
-        assertAvailable(showtime, event.seat(9));
     }
 
     @Test
@@ -126,7 +107,6 @@ class BookingSharedServicesTest extends BookingTestSupport {
             "SCHEDULED, 0, ON_SALE, 201",
             "SCHEDULED, 168, SALES_CLOSED, 409",
             "SCHEDULED, 170, FINISHED, 409",
-            "DRAFT, 0, DRAFT, 404",
             "CANCELLED, 0, CANCELLED, 409"
     })
     void booking_usesCatalogStatusAtClockBoundaries(String storedStatus, long hours, String expectedStatus,
@@ -154,6 +134,6 @@ class BookingSharedServicesTest extends BookingTestSupport {
         var showtime = catalog.showtime(event, Window.onSale());
 
         problem(hold(buyerToken(catalog.buyer()), showtime.id(), seats(event.seat(1))),
-                409, "SHOWTIME_NOT_ON_SALE");
+                404, "NOT_FOUND");
     }
 }
