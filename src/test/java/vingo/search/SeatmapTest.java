@@ -103,14 +103,14 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
-    void getSeatmap_leavesTierEmpty_whenZoneHasNoPriceTier() {
+    void getSeatmap_hidesZoneWithoutEventSku() {
         UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(2)).create().showtimeId();
         UUID zone = fixtures.zoneIds(showtime).getFirst();
         jdbc.sql("DELETE FROM event_zone WHERE zone_id = :z").param("z", zone).update();
 
-        JsonNode body = get("/api/v1/showtimes/" + showtime + "/seatmap").path("zones").get(0);
+        JsonNode zones = get("/api/v1/showtimes/" + showtime + "/seatmap").path("zones");
 
-        assertThat(body.path("tier").isMissingNode() || body.path("tier").isNull()).isTrue();
+        assertThat(zones).isEmpty();
     }
 
     @Test
@@ -201,13 +201,12 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
-    void seatmapAndAvailability_hideZonesWithoutEventSku() {
+    void getAvailability_hidesZonesWithoutEventSku() {
         var showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10)).create().showtimeId();
         var zones = fixtures.zoneIds(showtime);
         jdbc.sql("DELETE FROM event_zone WHERE zone_id = :zone")
                 .param("zone", zones.getLast()).update();
         var base = "/api/v1/showtimes/" + showtime;
-        assertThat(get(base + "/seatmap").path("zones")).hasSize(1);
         assertThat(get(base + "/availability").path("zones")).hasSize(1);
     }
 
