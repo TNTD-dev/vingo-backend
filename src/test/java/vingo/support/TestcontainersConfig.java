@@ -31,6 +31,7 @@ public class TestcontainersConfig {
         // Migrate một lần ngay khi DB lên: context worker (profile worker tắt Flyway) chạy trước hay sau
         // context api đều thấy schema đầy đủ. Context api vẫn chạy Flyway nhưng không còn gì để áp.
         Flyway.configure()
+                .placeholders(java.util.Map.of("allowDestructiveReset", "true"))
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .load()
                 .migrate();

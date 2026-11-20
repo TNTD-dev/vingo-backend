@@ -83,14 +83,14 @@ class BookingPaymentApiTest extends BookingTestSupport {
         transactions.executeWithoutResult(status -> {
             assertThat(booking.lockOrderForPayment(id)).isPresent();
             var unlocked = competing.execute(other -> jdbc.sql("""
-                            SELECT id FROM orders WHERE id = :id FOR UPDATE SKIP LOCKED
+                            SELECT id FROM ticket_order WHERE id = :id FOR UPDATE SKIP LOCKED
                             """)
                     .param("id", id).query(UUID.class).optional());
             assertThat(unlocked).isEmpty();
         });
 
         var unlocked = competing.execute(status -> jdbc.sql("""
-                        SELECT id FROM orders WHERE id = :id FOR UPDATE SKIP LOCKED
+                        SELECT id FROM ticket_order WHERE id = :id FOR UPDATE SKIP LOCKED
                         """)
                 .param("id", id).query(UUID.class).optional());
         assertThat(unlocked).contains(id);
@@ -190,7 +190,7 @@ class BookingPaymentApiTest extends BookingTestSupport {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"CANCELLED", "EXPIRED", "PAID", "NEEDS_REVIEW", "REFUNDED"})
+    @ValueSource(strings = {"CANCELLED", "EXPIRED", "PAID", "NEEDS_REVIEW", "REJECTED"})
     void markSold_rejectsNonPendingOrderWithoutChangingData(String state) {
         UUID id = holdOrder(true);
         prepareState(id, state, true);
@@ -253,7 +253,7 @@ class BookingPaymentApiTest extends BookingTestSupport {
     @ParameterizedTest
     @CsvSource({
             "PAID, true", "PAID, false", "NEEDS_REVIEW, true", "NEEDS_REVIEW, false",
-            "REFUNDED, true", "REFUNDED, false"
+            "REJECTED, true", "REJECTED, false"
     })
     void markNeedsReview_rejectsPaidReviewedOrRefundedOrderWithoutChangingData(String state, boolean seated) {
         UUID id = holdOrder(seated);
@@ -282,7 +282,7 @@ class BookingPaymentApiTest extends BookingTestSupport {
                         showtime.event().seatedZoneId(), showtime.event().seat(1), 1),
                 new OrderLine(itemId(seated, showtime.event().seat(2)), showtime.id(),
                         showtime.event().seatedZoneId(), showtime.event().seat(2), 1));
-        assertThat(standingLines).containsExactly(new OrderLine(itemId(standing, null), showtime.id(),
+        assertThat(standingLines).containsExactly(new OrderLine(itemId(standing, showtime.event().standingZoneId()), showtime.id(),
                 showtime.event().standingZoneId(), null, 3));
     }
 
@@ -337,6 +337,17 @@ class BookingPaymentApiTest extends BookingTestSupport {
         }
     }
 
+    /** v2: đơn PAID bắt buộc có buyer_email; payment ghi người mua lúc tạo thanh toán nên test tự gán sau khi giữ chỗ. */
+    @Override
+    protected UUID orderId(String json) {
+        UUID id = super.orderId(json);
+        jdbc.sql("""
+                UPDATE ticket_order SET buyer_name = 'Người Mua', buyer_email = 'buyer@vingo.test',
+                                        buyer_phone = '+84979107396' WHERE id = :id
+                """).param("id", id).update();
+        return id;
+    }
+
     private UUID holdOrder(boolean seated) {
         return orderId(holdOk(token, showtime.id(), seated ? seats(showtime.event().seat(1))
                 : standing(showtime.event().standingZoneId(), 3)));
@@ -350,15 +361,19 @@ class BookingPaymentApiTest extends BookingTestSupport {
                 booking.expireOverdueHolds(100);
             }
             case "PAID" -> {
-                jdbc.sql("UPDATE orders SET status = 'PAID', paid_at = :now WHERE id = :id")
+                jdbc.sql("UPDATE ticket_order SET status = 'PAID', paid_at = :now WHERE id = :id")
                         .param("now", catalog.now()).param("id", id).update();
                 if (seated) catalog.setSeat(showtime.id(), showtime.event().seat(1), "SOLD", id, null);
                 else catalog.setZoneStock(showtime.id(), showtime.event().standingZoneId(), 3, 0);
             }
-            case "NEEDS_REVIEW", "REFUNDED" -> {
+            case "NEEDS_REVIEW", "REJECTED" -> {
                 body(cancel(token, id), 200);
-                jdbc.sql("UPDATE orders SET status = :status, review_reason = 'AMOUNT_MISMATCH' WHERE id = :id")
+                jdbc.sql("UPDATE ticket_order SET status = CAST(:status AS order_status) WHERE id = :id")
                         .param("status", state).param("id", id).update();
+                jdbc.sql("""
+                        INSERT INTO order_status_history (order_id, from_status, to_status, reason)
+                        VALUES (:id, 'CANCELLED', CAST(:status AS order_status), 'AMOUNT_MISMATCH')
+                        """).param("status", state).param("id", id).update();
             }
             default -> throw new AssertionError(state);
         }
@@ -367,7 +382,7 @@ class BookingPaymentApiTest extends BookingTestSupport {
 
     private void assertReview(UUID id, String from, ReviewReason reason) {
         assertThat(orderStatus(id)).isEqualTo("NEEDS_REVIEW");
-        assertThat(jdbc.sql("SELECT review_reason FROM orders WHERE id = :id")
+        assertThat(jdbc.sql("SELECT reason FROM order_status_history WHERE order_id = :id AND to_status = 'NEEDS_REVIEW'")
                 .param("id", id).query(String.class).single()).isEqualTo(reason.name());
         assertThat(historyCount(id, from, "NEEDS_REVIEW")).isEqualTo(1);
         assertHistoryActor(id, "NEEDS_REVIEW", null);
@@ -398,35 +413,34 @@ class BookingPaymentApiTest extends BookingTestSupport {
     }
 
     private OffsetDateTime paidAt(UUID id) {
-        return jdbc.sql("SELECT paid_at FROM orders WHERE id = :id").param("id", id)
+        return jdbc.sql("SELECT paid_at FROM ticket_order WHERE id = :id").param("id", id)
                 .query((rs, row) -> rs.getObject("paid_at", OffsetDateTime.class)).list().getFirst();
     }
 
     private int sold() {
-        return jdbc.sql("SELECT sold FROM showtime_zone_stock WHERE showtime_id = :showtime AND zone_id = :zone")
+        return jdbc.sql("SELECT sold FROM standing_inventory WHERE showtime_id = :showtime AND zone_id = :zone")
                 .param("showtime", showtime.id()).param("zone", showtime.event().standingZoneId())
                 .query(Integer.class).single();
     }
 
     private int soldSeats() {
-        return jdbc.sql("SELECT count(*) FROM showtime_seat WHERE showtime_id = :showtime AND status = 'SOLD'")
+        return jdbc.sql("SELECT count(*) FROM seat_inventory WHERE showtime_id = :showtime AND status = 'SOLD'")
                 .param("showtime", showtime.id()).query(Integer.class).single();
     }
 
     private UUID itemId(UUID orderId, UUID seatId) {
         return jdbc.sql("""
-                        SELECT id FROM order_item
-                        WHERE order_id = :order AND seat_id IS NOT DISTINCT FROM CAST(:seat AS uuid)
+                        SELECT :id::uuid
                         """)
-                .param("order", orderId).param("seat", seatId, java.sql.Types.OTHER).query(UUID.class).single();
+                .param("id", seatId).query(UUID.class).single();
     }
 
     private List<Object> paymentState(UUID id) {
         return List.of(
-                jdbc.sql("SELECT * FROM orders WHERE id = :id").param("id", id).query().singleRow(),
-                jdbc.sql("SELECT * FROM showtime_seat WHERE showtime_id = :id ORDER BY seat_id")
+                jdbc.sql("SELECT * FROM ticket_order WHERE id = :id").param("id", id).query().singleRow(),
+                jdbc.sql("SELECT * FROM seat_inventory WHERE showtime_id = :id ORDER BY seat_id")
                         .param("id", showtime.id()).query().listOfRows(),
-                jdbc.sql("SELECT * FROM showtime_zone_stock WHERE showtime_id = :id ORDER BY zone_id")
+                jdbc.sql("SELECT * FROM standing_inventory WHERE showtime_id = :id ORDER BY zone_id")
                         .param("id", showtime.id()).query().listOfRows(),
                 jdbc.sql("SELECT * FROM order_status_history WHERE order_id = :id ORDER BY id")
                         .param("id", id).query().listOfRows(),

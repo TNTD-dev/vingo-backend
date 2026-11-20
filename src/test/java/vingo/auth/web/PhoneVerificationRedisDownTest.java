@@ -60,7 +60,7 @@ class PhoneVerificationRedisDownTest extends IntegrationTest {
     @AfterEach
     void restoreClockAndReleasePhoneSendLimits() {
         if (!buyers.isEmpty()) {
-            jdbc.sql("DELETE FROM phone_otp_send WHERE user_id IN (:ids)").param("ids", buyers).update();
+            jdbc.sql("DELETE FROM otp_verification WHERE purpose = 'PHONE' AND user_id IN (:ids)").param("ids", buyers).update();
         }
         sms.reset();
         clock.reset();
@@ -74,7 +74,7 @@ class PhoneVerificationRedisDownTest extends IntegrationTest {
         for (int i = 0; i < 21; i++) {
             UUID buyer = catalog.buyer();
             buyers.add(buyer);
-            jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
+            jdbc.sql("UPDATE user_account SET phone_verified_at = NULL WHERE id = :id").param("id", buyer).update();
             var response = client.post().uri("/api/v1/me/phone/otp")
                     .headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
                     .body(new PhoneOtpRequest(uniquePhone())).exchange();
@@ -87,11 +87,11 @@ class PhoneVerificationRedisDownTest extends IntegrationTest {
             }
         }
         assertThat(sms.sent()).hasSize(20);
-        assertThat(jdbc.sql("SELECT count(*) FROM phone_otp_send WHERE user_id IN (:ids)")
+        assertThat(jdbc.sql("SELECT count(*) FROM otp_verification WHERE purpose = 'PHONE' AND user_id IN (:ids)")
                 .param("ids", buyers).query(Integer.class).single()).isEqualTo(20);
-        assertThat(jdbc.sql("SELECT count(DISTINCT client_key) FROM phone_otp_send WHERE user_id IN (:ids)")
+        assertThat(jdbc.sql("SELECT count(DISTINCT client_key) FROM otp_verification WHERE purpose = 'PHONE' AND user_id IN (:ids)")
                 .param("ids", buyers).query(Integer.class).single()).isEqualTo(1);
-        assertThat(jdbc.sql("SELECT count(*) FROM phone_otp_send WHERE user_id = :id")
+        assertThat(jdbc.sql("SELECT count(*) FROM otp_verification WHERE purpose = 'PHONE' AND user_id = :id")
                 .param("id", buyers.getLast()).query(Integer.class).single()).isZero();
     }
 }

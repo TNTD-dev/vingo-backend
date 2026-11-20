@@ -70,7 +70,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
     @AfterEach
     void restoreClockAndReleasePhoneSendLimits() {
         // Các user phụ cũng dùng chung IP; dọn đủ lượt của ca này để không ăn hạn mức ca sau.
-        jdbc.sql("DELETE FROM phone_otp_send WHERE user_id IN (:ids)").param("ids", buyers).update();
+        jdbc.sql("DELETE FROM otp_verification WHERE user_id IN (:ids) AND purpose = 'PHONE'").param("ids", buyers).update();
         sms.reset();
         clock.reset();
     }
@@ -104,7 +104,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         assertThat(passwords.matches(sent.code(), stored.hash())).isTrue();
         assertThat(stored.hash()).isNotEqualTo(sent.code());
         assertThat(sendCount(buyer)).isEqualTo(1);
-        assertThat(jdbc.sql("SELECT sent_at FROM phone_otp_send WHERE user_id = :id")
+        assertThat(jdbc.sql("SELECT sent_at FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE' AND consumed_at IS NULL")
                 .param("id", buyer).query(OffsetDateTime.class).single()).isEqualTo(now());
         assertThat(userPhone(buyer)).isEqualTo(previousPhone);
         assertThat(isVerified(buyer)).isFalse();
@@ -153,7 +153,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "60"),
                 429, "RATE_LIMITED");
         assertThat(sendCount(buyer)).isEqualTo(1);
-        assertThat(jdbc.sql("SELECT count(*) FROM otp_session WHERE user_id = :id AND purpose = 'PHONE'")
+        assertThat(jdbc.sql("SELECT count(*) FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE' AND consumed_at IS NULL")
                 .param("id", buyer).query(Integer.class).single()).isZero();
         assertThat(sms.sent()).isEmpty();
     }
@@ -170,7 +170,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "86095"),
                 429, "RATE_LIMITED");
         assertThat(sendCount(buyer)).isEqualTo(5);
-        assertThat(jdbc.sql("SELECT count(*) FROM otp_session WHERE user_id = :id AND purpose = 'PHONE'")
+        assertThat(jdbc.sql("SELECT count(*) FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE' AND consumed_at IS NULL")
                 .param("id", buyer).query(Integer.class).single()).isZero();
         assertThat(sms.sent()).isEmpty();
     }
@@ -190,6 +190,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         assertThat(sendCount(buyer)).isEqualTo(2);
         assertThat(snapshot(session.getOtpSessionId())).isEqualTo(before);
         assertThat(sms.sent()).hasSize(1);
+        verifyOk(buyer, session.getOtpSessionId(), sms.lastCode(phone));
     }
 
     @Test
@@ -212,7 +213,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @Test
-    void requestPhoneOtp_after61Seconds_refreshesSameSession_resetsAttemptsAndInvalidatesOldCode() {
+    void requestPhoneOtp_after61Seconds_createsNewSession_andInvalidatesOldCode() {
         OtpSession first = requestOk(buyer, phone);
         String oldCode = sms.lastCode(phone);
         String oldHash = snapshot(first.getOtpSessionId()).hash();
@@ -222,7 +223,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
             clock.advance(Duration.ofSeconds(61));
             second = requestOk(buyer, phone);
         } while (sms.lastCode(phone).equals(oldCode));
-        assertThat(second.getOtpSessionId()).isEqualTo(first.getOtpSessionId());
+        assertThat(second.getOtpSessionId()).isNotEqualTo(first.getOtpSessionId());
         var stored = snapshot(second.getOtpSessionId());
         assertThat(stored.hash()).isNotEqualTo(oldHash);
         assertThat(stored.attempts()).isZero();
@@ -235,12 +236,12 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @Test
-    void requestPhoneOtp_refreshesPhoneOnSameOpenSession() {
+    void requestPhoneOtp_newPhoneCreatesNewSession() {
         OtpSession first = requestOk(buyer, phone);
         String replacement = uniquePhone();
         clock.advance(Duration.ofSeconds(61));
         OtpSession second = requestOk(buyer, replacement);
-        assertThat(second.getOtpSessionId()).isEqualTo(first.getOtpSessionId());
+        assertThat(second.getOtpSessionId()).isNotEqualTo(first.getOtpSessionId());
         assertThat(snapshot(second.getOtpSessionId()).phone()).isEqualTo(replacement);
         assertThat(verifyOk(buyer, second.getOtpSessionId(), sms.lastCode(replacement)).getPhone()).isEqualTo(replacement);
     }
@@ -297,15 +298,15 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @Test
-    void requestPhoneOtp_returns503OnProviderFailure_keepsLogAndCooldown_thenRecovers() {
+    void requestPhoneOtp_returns503OnProviderFailure_keepsLogAndCooldown_thenNewSession() {
         sms.failNext();
         error(request(buyer, phone), 503, "SERVICE_UNAVAILABLE");
         assertThat(sendCount(buyer)).isEqualTo(1);
-        UUID session = jdbc.sql("SELECT id FROM otp_session WHERE user_id = :id AND purpose = 'PHONE' AND consumed_at IS NULL")
+        UUID session = jdbc.sql("SELECT id FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE' AND consumed_at IS NULL")
                 .param("id", buyer).query(UUID.class).single();
         error(request(buyer, phone).expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "60"), 429, "RATE_LIMITED");
         clock.advance(Duration.ofSeconds(61));
-        assertThat(requestOk(buyer, phone).getOtpSessionId()).isEqualTo(session);
+        assertThat(requestOk(buyer, phone).getOtpSessionId()).isNotEqualTo(session);
         assertThat(sendCount(buyer)).isEqualTo(2);
         assertThat(sms.sent()).extracting(RecordingSmsSender.SentSms::requestId).doesNotHaveDuplicates();
     }
@@ -318,7 +319,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         assertThat(user.getPhone()).isEqualTo(phone);
         assertThat(user.getPhoneVerified()).isTrue();
         assertThat(userPhone(buyer)).isEqualTo(phone);
-        assertThat(jdbc.sql("SELECT phone_verified_at FROM users WHERE id = :id")
+        assertThat(jdbc.sql("SELECT phone_verified_at FROM user_account WHERE id = :id")
                 .param("id", buyer).query(OffsetDateTime.class).single()).isEqualTo(now());
         assertThat(snapshot(session.getOtpSessionId()).consumedAt()).isEqualTo(now());
     }
@@ -379,9 +380,10 @@ class PhoneVerificationApiTest extends IntegrationTest {
     @Test
     void verifyPhoneOtp_returns400OtpInvalid_forEmailPurpose() {
         UUID session = jdbc.sql("""
-                INSERT INTO otp_session (user_id, purpose, channel, otp_hash, created_at, last_sent_at, expires_at)
-                VALUES (:user, 'VERIFY', 'EMAIL', :hash, :now, :now, :expires) RETURNING id
-                """).param("user", buyer).param("hash", passwords.encode("123456"))
+                INSERT INTO otp_verification (user_id, purpose, client_key, code_hash, sent_at, expires_at)
+                VALUES (:user, 'VERIFY', :clientKey, :hash, :now, :expires) RETURNING id
+                """).param("user", buyer).param("clientKey", UUID.randomUUID())
+                .param("hash", passwords.encode("123456"))
                 .param("now", now()).param("expires", now().plusMinutes(5)).query(UUID.class).single();
         error(verify(buyer, session, "123456"), 400, "OTP_INVALID");
         assertThat(snapshot(session).consumedAt()).isNull();
@@ -441,7 +443,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
                 .body(Map.of("phone", "0" + phone.substring(3))).exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.phone_verified").isEqualTo(true)
                 .jsonPath("$.phone").isEqualTo(phone);
-        assertThat(jdbc.sql("SELECT phone_verified_at FROM users WHERE id = :id")
+        assertThat(jdbc.sql("SELECT phone_verified_at FROM user_account WHERE id = :id")
                 .param("id", buyer).query(OffsetDateTime.class).single()).isEqualTo(verifiedAt);
     }
 
@@ -459,7 +461,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         verifyBuyer();
         client.delete().uri(ME).headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
                 .exchange().expectStatus().isNoContent();
-        assertThat(jdbc.sql("SELECT phone IS NULL AND phone_verified_at IS NULL FROM users WHERE id = :id")
+        assertThat(jdbc.sql("SELECT phone IS NULL AND phone_verified_at IS NULL FROM user_account WHERE id = :id")
                 .param("id", buyer).query(Boolean.class).single()).isTrue();
         UUID other = unverifiedBuyer();
         OtpSession session = requestOk(other, phone);
@@ -470,9 +472,9 @@ class PhoneVerificationApiTest extends IntegrationTest {
     @ValueSource(booleans = {false, true})
     void getMe_loginAndRefresh_alwaysExposeCurrentPhoneVerification(boolean verified) {
         if (verified) verifyBuyer();
-        jdbc.sql("UPDATE users SET password_hash = :hash WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET password_hash = :hash WHERE id = :id")
                 .param("hash", passwords.encode(PASSWORD)).param("id", buyer).update();
-        String email = jdbc.sql("SELECT email FROM users WHERE id = :id")
+        String email = jdbc.sql("SELECT email FROM user_account WHERE id = :id")
                 .param("id", buyer).query(String.class).single();
         client.get().uri(ME).headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.phone_verified").isEqualTo(verified);
@@ -489,7 +491,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
     void verifyEmailOtp_preservesCurrentPhoneVerification_includingFalseForNewRegistration(boolean verified) {
         OtpSession session = register(phone);
         if (verified) {
-            jdbc.sql("UPDATE users SET phone_verified_at = :now WHERE id = (SELECT user_id FROM otp_session WHERE id = :session)")
+            jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE id = (SELECT user_id FROM otp_verification WHERE id = :session)")
                     .param("now", now()).param("session", session.getOtpSessionId()).update();
         }
         var matcher = java.util.regex.Pattern.compile("<strong>(\\d{6})</strong>")
@@ -509,16 +511,16 @@ class PhoneVerificationApiTest extends IntegrationTest {
     }
 
     @Test
-    void register_acceptsDuplicateUnverifiedPhone_andPreservesRawFormatWithoutVerification() {
+    void register_acceptsDuplicateUnverifiedPhone_andNormalizesToE164WithoutVerification() {
         String localPhone = "0" + phone.substring(3);
         register(localPhone);
         OtpSession second = register(localPhone);
         var stored = jdbc.sql("""
                 SELECT u.phone, u.phone_verified_at IS NOT NULL AS verified
-                FROM users u JOIN otp_session o ON o.user_id = u.id WHERE o.id = :id
+                FROM user_account u JOIN otp_verification o ON o.user_id = u.id WHERE o.id = :id
                 """).param("id", second.getOtpSessionId())
                 .query((rs, row) -> Map.<String, Object>of("phone", rs.getString("phone"), "verified", rs.getBoolean("verified"))).single();
-        assertThat(stored).containsEntry("phone", localPhone).containsEntry("verified", false);
+        assertThat(stored).containsEntry("phone", phone).containsEntry("verified", false);
     }
 
     @Test
@@ -536,7 +538,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         client.patch().uri(ME).headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
                 .body(Map.of("phone", "")).exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.phone_verified").isEqualTo(false);
-        assertThat(jdbc.sql("SELECT phone IS NULL AND phone_verified_at IS NULL FROM users WHERE id = :id")
+        assertThat(jdbc.sql("SELECT phone IS NULL AND phone_verified_at IS NULL FROM user_account WHERE id = :id")
                 .param("id", buyer).query(Boolean.class).single()).isTrue();
     }
 
@@ -552,12 +554,12 @@ class PhoneVerificationApiTest extends IntegrationTest {
     private UUID unverifiedBuyer() {
         UUID id = catalog.buyer();
         buyers.add(id);
-        jdbc.sql("UPDATE users SET phone_verified_at = NULL WHERE id = :id").param("id", id).update();
+        jdbc.sql("UPDATE user_account SET phone_verified_at = NULL WHERE id = :id").param("id", id).update();
         return id;
     }
 
     private void verifiedOwner(String number) {
-        jdbc.sql("UPDATE users SET phone = :phone WHERE id = :id")
+        jdbc.sql("UPDATE user_account SET phone = :phone WHERE id = :id")
                 .param("phone", number).param("id", catalog.buyer()).update();
     }
 
@@ -604,26 +606,26 @@ class PhoneVerificationApiTest extends IntegrationTest {
     private OffsetDateTime now() { return OffsetDateTime.now(clock); }
 
     private String userPhone(UUID id) {
-        return jdbc.sql("SELECT phone FROM users WHERE id = :id").param("id", id).query(String.class).single();
+        return jdbc.sql("SELECT phone FROM user_account WHERE id = :id").param("id", id).query(String.class).single();
     }
 
     private boolean isVerified(UUID id) {
-        return jdbc.sql("SELECT phone_verified_at IS NOT NULL FROM users WHERE id = :id")
+        return jdbc.sql("SELECT phone_verified_at IS NOT NULL FROM user_account WHERE id = :id")
                 .param("id", id).query(Boolean.class).single();
     }
 
     private int sendCount(UUID id) {
-        return jdbc.sql("SELECT count(*) FROM phone_otp_send WHERE user_id = :id")
+        return jdbc.sql("SELECT count(*) FROM otp_verification WHERE user_id = :id AND purpose = 'PHONE'")
                 .param("id", id).query(Integer.class).single();
     }
 
     private static String wrongCode(String correct) { return correct.equals("000000") ? "000001" : "000000"; }
 
     private SessionSnapshot snapshot(UUID session) {
-        return jdbc.sql("SELECT * FROM otp_session WHERE id = :id").param("id", session)
+        return jdbc.sql("SELECT * FROM otp_verification WHERE id = :id").param("id", session)
                 .query((rs, row) -> new SessionSnapshot(rs.getObject("user_id", UUID.class), rs.getString("purpose"),
-                        rs.getString("channel"), rs.getString("phone"), rs.getString("otp_hash"), rs.getInt("attempts"),
-                        rs.getObject("last_sent_at", OffsetDateTime.class), rs.getObject("expires_at", OffsetDateTime.class),
+                        "SMS", rs.getString("phone"), rs.getString("code_hash"), rs.getInt("attempts"),
+                        rs.getObject("sent_at", OffsetDateTime.class), rs.getObject("expires_at", OffsetDateTime.class),
                         rs.getObject("consumed_at", OffsetDateTime.class))).single();
     }
 

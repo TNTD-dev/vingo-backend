@@ -42,9 +42,9 @@ class TicketQrApiTest extends TicketingTestSupport {
         UUID id = issueSeats(showtime.event().seat(1)).getFirst();
         String oldToken = ticket(id).qrToken();
         assertThat(decodedQr(id)).isEqualTo(oldToken);
-        String newToken = "reissued-" + UUID.randomUUID();
-        jdbc.sql("UPDATE ticket SET qr_token = :token WHERE id = :id")
-                .param("token", newToken).param("id", id).update();
+        jdbc.sql("UPDATE ticket SET qr_version = qr_version + 1 WHERE id = :id")
+                .param("id", id).update();
+        String newToken = ticket(id).qrToken();
 
         assertThat(decodedQr(id)).isEqualTo(newToken).isNotEqualTo(oldToken);
     }

@@ -39,7 +39,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(text(json, "$.id")).isEqualTo(order.toString());
         assertThat(text(json, "$.status")).isEqualTo("PAID");
         assertThat(orderStatus(order)).isEqualTo("PAID");
-        assertThat(jdbc.sql("SELECT paid_at FROM orders WHERE id = :id").param("id", order)
+        assertThat(jdbc.sql("SELECT paid_at FROM ticket_order WHERE id = :id").param("id", order)
                 .query(OffsetDateTime.class).single()).isEqualTo(catalog.now());
         for (UUID seat : List.of(first, second)) {
             assertThat(seatRow(seat)).containsEntry("status", "SOLD").containsEntry("order_id", order);
@@ -48,7 +48,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(tickets).hasSize(2).doesNotHaveDuplicates();
         tickets.forEach(id -> assertThat(ticketRow(id)).containsEntry("status", "ISSUED"));
         assertHistory(order, "PAID", admin);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
         assertOutbox(tickets);
         assertThat(eventCount(order, "order.paid")).isEqualTo(1);
         assertThat(eventCount(order, "ticket.issued")).isEqualTo(1);
@@ -59,6 +59,18 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
                 .param("user", buyer).param("order", order.toString()).query(String.class).single();
         assertThat(strings(issued, "$.ticket_ids"))
                 .containsExactlyInAnyOrderElementsOf(tickets.stream().map(UUID::toString).toList());
+    }
+
+    @Test
+    void issueTickets_rejectsMissingBuyerBeforeReclaimingSeats() {
+        UUID seat = showtime.event().seat(1);
+        UUID order = reviewSeats(seat);
+        removeEmail(order);
+        var before = seatRow(seat);
+        problem(resolve(order, "ISSUE_TICKETS"), 409, "ORDER_STATE_INVALID");
+        assertThat(seatRow(seat)).isEqualTo(before);
+        assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
+        assertThat(ticketIds(order)).isEmpty();
     }
 
     @Test
@@ -91,25 +103,8 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(tickets).hasSize(3);
         tickets.forEach(id -> assertThat(ticketRow(id)).containsEntry("status", "ISSUED").containsEntry("seat_id", null));
         assertHistory(order, "PAID", admin);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
         assertOutbox(tickets);
-    }
-
-    @Test
-    void issueTickets_succeedsWithoutEmailAndDoesNotEnqueue() {
-        UUID order = reviewSeats(showtime.event().seat(1));
-        removeEmail(order);
-
-        assertThat(text(body(resolve(order, "ISSUE_TICKETS"), 200), "$.status")).isEqualTo("PAID");
-
-        var tickets = ticketIds(order);
-        assertThat(tickets).hasSize(1);
-        assertThat(outbox()).isEmpty();
-        assertThat(jdbc.sql("SELECT count(*) FROM outbox_message WHERE payload->'ticket_ids' @> CAST(:ids AS jsonb)")
-                .param("ids", "[\"" + tickets.getFirst() + "\"]").query(Integer.class).single()).isZero();
-        assertHistory(order, "PAID", admin);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
-        assertThat(eventCount(order, "ticket.issued")).isEqualTo(1);
     }
 
     @Test
@@ -159,7 +154,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
     @Test
     void issueTickets_returns409WhenShowtimeIsCancelled() {
         UUID order = reviewSeats(showtime.event().seat(1));
-        jdbc.sql("UPDATE showtime SET status = 'CANCELLED' WHERE id = :id").param("id", showtime.id()).update();
+        jdbc.sql("UPDATE showtime SET cancelled_at = now() WHERE id = :id").param("id", showtime.id()).update();
 
         problem(resolve(order, "ISSUE_TICKETS"), 409, "ORDER_STATE_INVALID");
 
@@ -176,7 +171,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(text(body(resolve(order, "ISSUE_TICKETS"), 200), "$.status")).isEqualTo("PAID");
 
         assertThat(ticketIds(order)).hasSize(1);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
     }
 
     @Test
@@ -197,7 +192,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         UUID seat = showtime.event().seat(1);
         UUID order = reviewSeats(seat);
         hold(tokenFor(catalog.buyer(), Role.BUYER), seats(seat));
-        OffsetDateTime until = jdbc.sql("SELECT held_until FROM showtime_seat WHERE showtime_id = :showtime AND seat_id = :seat")
+        OffsetDateTime until = jdbc.sql("SELECT held_until FROM seat_inventory WHERE showtime_id = :showtime AND seat_id = :seat")
                 .param("showtime", showtime.id()).param("seat", seat).query(OffsetDateTime.class).single();
         clock.set(until.toInstant());
 
@@ -213,11 +208,11 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         hold(tokenFor(catalog.buyer(), Role.BUYER), seats(seat));
         var before = seatRow(seat);
 
-        assertThat(text(body(resolve(order, "REFUND"), 200), "$.status")).isEqualTo("REFUNDED");
+        assertThat(text(body(resolve(order, "REFUND"), 200), "$.status")).isEqualTo("REJECTED");
 
-        assertThat(orderStatus(order)).isEqualTo("REFUNDED");
-        assertHistory(order, "REFUNDED", admin);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "REFUNDED");
+        assertThat(orderStatus(order)).isEqualTo("REJECTED");
+        assertHistory(order, "REJECTED", admin);
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "REJECTED");
         assertThat(ticketIds(order)).isEmpty();
         assertThat(seatRow(seat)).isEqualTo(before);
         assertThat(outbox()).isEmpty();
@@ -235,8 +230,8 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
 
         assertThat(standingStock()).isEqualTo(before);
         assertThat(ticketIds(order)).isEmpty();
-        assertHistory(order, "REFUNDED", admin);
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "REFUNDED");
+        assertHistory(order, "REJECTED", admin);
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "REJECTED");
     }
 
     @ParameterizedTest
@@ -274,13 +269,13 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
         assertThat(object(second)).isEqualTo(object(first));
         var tickets = ticketIds(order);
         assertThat(tickets).hasSize(2).doesNotHaveDuplicates();
-        assertStatusAudit(order, "order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
+        assertStatusAudit(order, "ticket_order", "RESOLVE_REVIEW", "NEEDS_REVIEW", "PAID");
         assertHistory(order, "PAID", admin);
         assertOutbox(tickets);
         assertThat(eventCount(order, "order.paid")).isEqualTo(1);
         assertThat(eventCount(order, "ticket.issued")).isEqualTo(1);
         assertThat(jdbc.sql("""
-                        SELECT count(*) FROM idempotency_key
+                        SELECT count(*) FROM idempotency_record
                         WHERE user_id = :user AND endpoint = :endpoint AND key = :key AND response_status = 200
                         """)
                 .param("user", admin).param("endpoint", "resolve-review:" + order).param("key", key.toString())
@@ -339,7 +334,7 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
             UUID winner = first.status() == 200 ? admin : secondAdmin;
             var tickets = ticketIds(order);
             assertThat(tickets).hasSize(2).doesNotHaveDuplicates();
-            assertAudit(order, "order", "RESOLVE_REVIEW", winner, REASON);
+            assertAudit(order, "ticket_order", "RESOLVE_REVIEW", winner, REASON);
             assertHistory(order, "PAID", winner);
             assertOutbox(tickets);
             assertThat(eventCount(order, "order.paid")).isEqualTo(1);

@@ -44,21 +44,16 @@ abstract class PaymentTestSupport extends IntegrationTest {
     @Autowired
     protected PaymentService paymentService;
 
+    private final java.util.Set<UUID> buyersWithInfo = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     protected String buyerToken(UUID userId) {
         return tokenFor(userId, Role.BUYER);
     }
 
-    /** Tạo buyer kèm bản ghi hợp lệ trong bảng buyer_profile. */
+    /** Tạo buyer và đánh dấu tự động điền thông tin người mua trên đơn khi giữ chỗ (v2 không còn buyer_profile). */
     protected UUID buyerWithProfile() {
         UUID userId = catalog.buyer();
-        jdbc.sql("""
-                        INSERT INTO buyer_profile (user_id, full_name, phone, email, updated_at)
-                        VALUES (:user, 'Nguyen Van A', '0901234567', :email, :now)
-                        """)
-                .param("user", userId)
-                .param("email", userId + "@test.vingo")
-                .param("now", catalog.now())
-                .update();
+        buyersWithInfo.add(userId);
         return userId;
     }
 
@@ -88,7 +83,18 @@ abstract class PaymentTestSupport extends IntegrationTest {
                 .exchange()
                 .expectStatus().isEqualTo(201)
                 .expectBody(String.class).returnResult().getResponseBody();
-        return UUID.fromString(JsonPath.read(response, "$.id"));
+        UUID orderId = UUID.fromString(JsonPath.read(response, "$.id"));
+        if (buyersWithInfo.contains(buyerId)) {
+            jdbc.sql("""
+                            UPDATE ticket_order SET buyer_name = 'Nguyen Van A',
+                                   buyer_email = :email, buyer_phone = '+84901234567'
+                            WHERE id = :id
+                            """)
+                    .param("email", buyerId + "@test.vingo")
+                    .param("id", orderId)
+                    .update();
+        }
+        return orderId;
     }
 
     protected ResponseSpec createPayment(String token, UUID orderId, String idempotencyKey, String bodyJson) {
@@ -119,13 +125,13 @@ abstract class PaymentTestSupport extends IntegrationTest {
                 .expectStatus().isOk();
     }
 
-    /** Chèn trực tiếp một payment_intent OPEN để test IPN/querydr độc lập với createPayment. */
+    /** Chèn trực tiếp một payment OPEN để test IPN/querydr độc lập với createPayment. */
     protected String openIntent(UUID orderId) {
         return openIntent(orderId, 1);
     }
 
     protected String openIntent(UUID orderId, int attempt) {
-        var row = jdbc.sql("SELECT code, total_amount, expires_at FROM orders WHERE id = :id")
+        var row = jdbc.sql("SELECT code, total_amount, expires_at FROM ticket_order WHERE id = :id")
                 .param("id", orderId)
                 .query((rs, i) -> new OrderMeta(
                         rs.getString("code").trim(),
@@ -135,14 +141,12 @@ abstract class PaymentTestSupport extends IntegrationTest {
         String txnRef = row.code() + "-" + attempt;
         OffsetDateTime now = catalog.now();
         jdbc.sql("""
-                        INSERT INTO payment_intent (order_id, txn_ref, amount, status, created_at, updated_at, expires_at)
-                        VALUES (:order, :txnRef, :amount, 'OPEN', :now, :now, :expires)
+                        INSERT INTO payment (order_id, txn_ref, status, payment_url, created_at, updated_at)
+                        VALUES (:order, :txnRef, 'OPEN', 'https://sandbox.vnpayment.vn/test', :now, :now)
                         """)
                 .param("order", orderId)
                 .param("txnRef", txnRef)
-                .param("amount", row.totalAmount())
                 .param("now", now)
-                .param("expires", row.expiresAt())
                 .update();
         return txnRef;
     }
@@ -234,38 +238,40 @@ abstract class PaymentTestSupport extends IntegrationTest {
 
     protected void makeOverdue(UUID orderId) {
         OffsetDateTime past = catalog.now().minusMinutes(1);
-        jdbc.sql("UPDATE orders SET expires_at = :past WHERE id = :id")
+        jdbc.sql("UPDATE ticket_order SET expires_at = :past WHERE id = :id")
                 .param("past", past).param("id", orderId).update();
-        jdbc.sql("UPDATE showtime_seat SET held_until = :past WHERE order_id = :id AND status = 'HELD'")
-                .param("past", past).param("id", orderId).update();
-        jdbc.sql("UPDATE payment_intent SET expires_at = :past WHERE order_id = :id AND status = 'OPEN'")
+        jdbc.sql("UPDATE seat_inventory SET held_until = :past WHERE order_id = :id AND status = 'HELD'")
                 .param("past", past).param("id", orderId).update();
     }
 
     protected String orderStatus(UUID orderId) {
-        return jdbc.sql("SELECT status FROM orders WHERE id = :id")
+        return jdbc.sql("SELECT status::text FROM ticket_order WHERE id = :id")
                 .param("id", orderId).query(String.class).single();
     }
 
     protected String orderReviewReason(UUID orderId) {
-        return jdbc.sql("SELECT review_reason FROM orders WHERE id = :id")
+        return jdbc.sql("""
+                        SELECT reason FROM order_status_history
+                        WHERE order_id = :id AND to_status = 'NEEDS_REVIEW'
+                        ORDER BY at DESC, id DESC LIMIT 1
+                        """)
                 .param("id", orderId).query(String.class).optional().orElse(null);
     }
 
     protected String intentStatus(String txnRef) {
-        return jdbc.sql("SELECT status FROM payment_intent WHERE txn_ref = :ref")
+        return jdbc.sql("SELECT status::text FROM payment WHERE txn_ref = :ref")
                 .param("ref", txnRef).query(String.class).single();
     }
 
     protected int intentCount(UUID orderId) {
-        return jdbc.sql("SELECT count(*) FROM payment_intent WHERE order_id = :order")
+        return jdbc.sql("SELECT count(*) FROM payment WHERE order_id = :order")
                 .param("order", orderId).query(Integer.class).single();
     }
 
     protected int txCount(String txnRef) {
         return jdbc.sql("""
-                        SELECT count(*) FROM payment_transaction pt
-                        JOIN payment_intent pi ON pi.id = pt.payment_intent_id
+                        SELECT count(*) FROM payment_gateway_log pt
+                        JOIN payment pi ON pi.id = pt.payment_id
                         WHERE pi.txn_ref = :ref
                         """)
                 .param("ref", txnRef).query(Integer.class).single();
@@ -273,9 +279,9 @@ abstract class PaymentTestSupport extends IntegrationTest {
 
     protected int txCount(String txnRef, String source, String result) {
         return jdbc.sql("""
-                        SELECT count(*) FROM payment_transaction pt
-                        JOIN payment_intent pi ON pi.id = pt.payment_intent_id
-                        WHERE pi.txn_ref = :ref AND pt.source = :source AND pt.result = :result
+                        SELECT count(*) FROM payment_gateway_log pt
+                        JOIN payment pi ON pi.id = pt.payment_id
+                        WHERE pi.txn_ref = :ref AND pt.source = CAST(:source AS payment_source) AND pt.result = CAST(:result AS payment_result)
                         """)
                 .param("ref", txnRef).param("source", source).param("result", result)
                 .query(Integer.class).single();
@@ -284,25 +290,24 @@ abstract class PaymentTestSupport extends IntegrationTest {
     protected int ticketCount(UUID orderId) {
         return jdbc.sql("""
                         SELECT count(*) FROM ticket t
-                        JOIN order_item oi ON oi.id = t.order_item_id
-                        WHERE oi.order_id = :order AND t.status <> 'VOID'
+                        WHERE t.order_id = :order AND t.status <> 'VOID'
                         """)
                 .param("order", orderId).query(Integer.class).single();
     }
 
     protected int soldSeats(UUID orderId) {
-        return jdbc.sql("SELECT count(*) FROM showtime_seat WHERE order_id = :order AND status = 'SOLD'")
+        return jdbc.sql("SELECT count(*) FROM seat_inventory WHERE order_id = :order AND status = 'SOLD'")
                 .param("order", orderId).query(Integer.class).single();
     }
 
     protected int heldSeats(UUID orderId) {
-        return jdbc.sql("SELECT count(*) FROM showtime_seat WHERE order_id = :order AND status = 'HELD'")
+        return jdbc.sql("SELECT count(*) FROM seat_inventory WHERE order_id = :order AND status = 'HELD'")
                 .param("order", orderId).query(Integer.class).single();
     }
 
     protected int heldStanding(Showtime showtime) {
         return jdbc.sql("""
-                        SELECT held FROM showtime_zone_stock
+                        SELECT held FROM standing_inventory
                         WHERE showtime_id = :showtime AND zone_id = :zone
                         """)
                 .param("showtime", showtime.id())
@@ -312,7 +317,7 @@ abstract class PaymentTestSupport extends IntegrationTest {
 
     protected int soldStanding(Showtime showtime) {
         return jdbc.sql("""
-                        SELECT sold FROM showtime_zone_stock
+                        SELECT sold FROM standing_inventory
                         WHERE showtime_id = :showtime AND zone_id = :zone
                         """)
                 .param("showtime", showtime.id())
@@ -324,8 +329,8 @@ abstract class PaymentTestSupport extends IntegrationTest {
         return jdbc.sql("""
                         SELECT count(*) FROM order_status_history
                         WHERE order_id = :order
-                          AND from_status IS NOT DISTINCT FROM CAST(:from AS text)
-                          AND to_status = :to
+                          AND from_status IS NOT DISTINCT FROM CAST(:from AS order_status)
+                          AND to_status = CAST(:to AS order_status)
                         """)
                 .param("order", orderId)
                 .param("from", fromStatus, java.sql.Types.VARCHAR)

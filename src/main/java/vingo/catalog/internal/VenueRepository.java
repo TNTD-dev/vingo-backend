@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,8 +16,10 @@ import org.springframework.stereotype.Repository;
 public class VenueRepository {
 
     private static final String COLUMNS = """
-            id, name, type, address, city, district, lat, lng,
-            CAST(info AS text) AS info_json, created_at, updated_at
+            id, name, address, city, district, lat, lng,
+            rules, created_at, updated_at,
+            (SELECT count(*) FROM seat_map m WHERE m.venue_id = venue.id) AS layout_count,
+            (SELECT count(*) FROM venue_import_session i WHERE i.venue_id = venue.id) AS draft_layout_count
             """;
 
     private final JdbcClient jdbc;
@@ -27,20 +30,33 @@ public class VenueRepository {
 
     public record VenueData(
             String name,
-            String type,
             String address,
             String city,
             String district,
             BigDecimal lat,
             BigDecimal lng,
-            String infoJson
-            ) {}
+            String rules
+            ) {
+        public VenueData {
+            city = canonicalCity(city);
+        }
+    }
+
+    private static final Map<String, String> CITY_CODES = Map.of(
+            "Hà Nội", "HN", "TP. Hồ Chí Minh", "HCM", "Hồ Chí Minh", "HCM",
+            "Thành phố Hồ Chí Minh", "HCM", "Đà Nẵng", "DN");
+
+    public static String canonicalCity(String city) {
+        return city == null ? null : CITY_CODES.getOrDefault(city.strip(), city.strip());
+    }
 
     public record VenueRow(
             UUID id,
             VenueData data,
             OffsetDateTime createdAt,
-            OffsetDateTime updatedAt
+            OffsetDateTime updatedAt,
+            long layoutCount,
+            long draftLayoutCount
             ) {}
 
     public record VenuePosition(OffsetDateTime createdAt, UUID id) {}
@@ -48,30 +64,28 @@ public class VenueRepository {
     private static VenueRow mapRow(ResultSet rs, int rowNumber) throws SQLException {
         var data = new VenueData(
                 rs.getString("name"),
-                rs.getString("type"),
                 rs.getString("address"),
                 rs.getString("city"),
                 rs.getString("district"),
                 rs.getBigDecimal("lat"),
                 rs.getBigDecimal("lng"),
-                rs.getString("info_json")
+                rs.getString("rules")
         );
 
         return new VenueRow(
                 rs.getObject("id", UUID.class),
                 data,
                 rs.getObject("created_at", OffsetDateTime.class),
-                rs.getObject("updated_at", OffsetDateTime.class)
+                rs.getObject("updated_at", OffsetDateTime.class),
+                rs.getLong("layout_count"),
+                rs.getLong("draft_layout_count")
         );
     }
 
     public VenueRow insert(VenueData venue) {
         return bindVenue(jdbc.sql("""
-                INSERT INTO venue (name, type, address, city, district, lat, lng, info)
-                VALUES (
-                    :name, :type, :address, :city, :district, :lat, :lng,
-                    COALESCE(CAST(:info AS jsonb), '{}'::jsonb)
-                )
+                INSERT INTO venue (name, address, city, district, lat, lng, rules)
+                VALUES (:name, :address, :city, :district, :lat, :lng, :rules)
                 RETURNING
                 """ + COLUMNS), venue)
                 .query(VenueRepository::mapRow)
@@ -83,13 +97,12 @@ public class VenueRepository {
     ) {
         return statement
                 .param("name", venue.name())
-                .param("type", venue.type())
                 .param("address", venue.address())
                 .param("city", venue.city())
                 .param("district", venue.district())
                 .param("lat", venue.lat())
                 .param("lng", venue.lng())
-                .param("info", venue.infoJson());
+                .param("rules", venue.rules());
     }
 
     public List<VenueRow> findActive(
@@ -98,6 +111,11 @@ public class VenueRepository {
             VenuePosition after,
             int fetchSize
     ) {
+        var cityNames = new java.util.ArrayList<String>();
+        cityNames.add(city);
+        CITY_CODES.forEach((name, code) -> {
+            if (code.equals(city)) cityNames.add(name);
+        });
         return jdbc.sql("""
                 SELECT
                 """ + COLUMNS + """
@@ -107,7 +125,7 @@ public class VenueRepository {
                       CAST(:query AS text) IS NULL
                       OR strpos(lower(name), lower(CAST(:query AS text))) > 0
                   )
-                  AND (CAST(:city AS text) IS NULL OR city = :city)
+                  AND (CAST(:city AS text) IS NULL OR city = :city OR city IN (:cityNames))
                   AND (
                       CAST(:afterCreatedAt AS timestamptz) IS NULL
                       OR (created_at, id) < (
@@ -120,11 +138,19 @@ public class VenueRepository {
                 """)
                 .param("query", query)
                 .param("city", city)
+                .param("cityNames", cityNames)
                 .param("afterCreatedAt", after == null ? null : after.createdAt())
                 .param("afterId", after == null ? null : after.id())
                 .param("fetchSize", fetchSize)
                 .query(VenueRepository::mapRow)
                 .list();
+    }
+
+    public Optional<VenueRow> findActiveById(UUID venueId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM venue WHERE id = :id AND deleted_at IS NULL")
+                .param("id", venueId)
+                .query(VenueRepository::mapRow)
+                .optional();
     }
 
     public Optional<VenueRow> findActiveByIdForUpdate(UUID venueId) {
@@ -144,13 +170,12 @@ public class VenueRepository {
         return bindVenue(jdbc.sql("""
                 UPDATE venue
                 SET name = :name,
-                    type = :type,
                     address = :address,
                     city = :city,
                     district = :district,
                     lat = :lat,
                     lng = :lng,
-                    info = COALESCE(CAST(:info AS jsonb), '{}'::jsonb),
+                    rules = :rules,
                     updated_at = :now
                 WHERE id = :id AND deleted_at IS NULL
                 RETURNING
@@ -166,9 +191,11 @@ public class VenueRepository {
                 SELECT EXISTS (
                     SELECT 1
                     FROM showtime s
-                    JOIN seat_layout l ON l.id = s.seat_layout_id
-                    WHERE l.venue_id = :venueId
-                      AND s.status IN ('DRAFT', 'SCHEDULED')
+                    JOIN event e ON e.id = s.event_id
+                    JOIN seat_map m ON m.id = s.seat_map_id
+                    WHERE m.venue_id = :venueId
+                      AND s.cancelled_at IS NULL
+                      AND e.status IN ('DRAFT', 'PUBLISHED')
                       AND s.ends_at > :now
                 )
                 """)

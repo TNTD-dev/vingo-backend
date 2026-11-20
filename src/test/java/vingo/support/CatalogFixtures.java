@@ -44,11 +44,11 @@ public final class CatalogFixtures {
         this.clock = clock;
     }
 
-    /** Xoá toàn bộ dữ liệu catalog, booking và các bảng phụ thuộc. Giữ nguyên {@code seat_type} và {@code users}. */
+    /** Xoá toàn bộ dữ liệu catalog, booking và các bảng phụ thuộc. Giữ nguyên {@code user_account}. */
     public void reset() {
         jdbc.sql("""
-                TRUNCATE showtime_zone_stock, showtime_seat, zone_price, price_tier, showtime, event,
-                         seat_pair, seat, zone, seat_layout, venue_overview, venue CASCADE
+                TRUNCATE standing_inventory, seat_inventory, event_zone, sku_price, sku, showtime, event,
+                         seat, zone, seat_map, venue_map, venue CASCADE
                 """).update();
     }
 
@@ -70,10 +70,6 @@ public final class CatalogFixtures {
     // ------------------------------------------------------------------ Showtime
 
     public final class ShowtimeBuilder {
-        private int coupleFirst=-1;
-        public ShowtimeBuilder couple(int firstIndex) {this.coupleFirst=firstIndex;return this;}
-
-
         private Instant startsAt = clock.instant().plus(Duration.ofDays(7));
         private Duration length = Duration.ofHours(2);
         private String status = "SCHEDULED";
@@ -83,8 +79,6 @@ public final class CatalogFixtures {
         private String venueName;
         private int sold;
         private String layoutSvg;
-        private boolean publishLayout = true;
-        private boolean omitLayoutSvg;
         private final List<ZoneSpec> zones = new ArrayList<>();
 
         private ShowtimeBuilder() {
@@ -95,16 +89,6 @@ public final class CatalogFixtures {
             return this;
         }
 
-        public ShowtimeBuilder draftLayout() {
-            this.publishLayout = false;
-            return this;
-        }
-
-        public ShowtimeBuilder draftLayoutWithoutSvg() {
-            this.omitLayoutSvg = true;
-            return draftLayout();
-        }
-
         public ShowtimeBuilder startsAt(Instant startsAt) {
             this.startsAt = startsAt;
             return this;
@@ -112,11 +96,6 @@ public final class CatalogFixtures {
 
         public ShowtimeBuilder length(Duration length) {
             this.length = length;
-            return this;
-        }
-
-        public ShowtimeBuilder draft() {
-            this.status = "DRAFT";
             return this;
         }
 
@@ -229,7 +208,7 @@ public final class CatalogFixtures {
             return this;
         }
 
-        /** FOOTBALL, CONCERT, THEATER hoặc OTHER. */
+        /** FOOTBALL hoặc CONCERT. */
         public EventBuilder category(String category) {
             this.category = category;
             return this;
@@ -285,8 +264,26 @@ public final class CatalogFixtures {
             if (showtimes.isEmpty()) {
                 showtime(s -> s.onSale().seated(10));
             }
+            ShowtimeBuilder firstShowtime = showtimes.getFirst();
+            if (!"FOOTBALL".equals(category) && !"CONCERT".equals(category)) {
+                throw new IllegalArgumentException("Loại sự kiện không được hỗ trợ: " + category);
+            }
+            if (showtimes.stream().anyMatch(s -> !firstShowtime.zones.equals(s.zones))) {
+                throw new IllegalArgumentException("Mọi suất trong sự kiện phải dùng cùng cấu hình khu");
+            }
+            String eventCity = firstShowtime.city != null ? firstShowtime.city : city;
+            String eventVenueLabel = firstShowtime.venueName != null
+                    ? firstShowtime.venueName
+                    : venueName != null ? venueName : "Sân " + eventCity;
+            UUID venueId = insertVenue(eventVenueLabel, eventCity);
+            UUID layoutId = VenueSchemaFixture.draft(jdbc, venueId);
+            if (firstShowtime.layoutSvg != null) {
+                jdbc.sql("UPDATE seat_map SET svg = :svg WHERE id = :id")
+                        .param("svg", firstShowtime.layoutSvg).param("id", layoutId).update();
+            }
+
             Map<String, UUID> tierIds = new LinkedHashMap<>();
-            UUID eventId = insertEvent();
+            UUID eventId = insertEvent(venueId, layoutId);
             for (ShowtimeBuilder s : showtimes) {
                 for (ZoneSpec z : s.zones) {
                     if (z.tier() == null) {
@@ -296,74 +293,55 @@ public final class CatalogFixtures {
                     }
                 }
             }
-            tiers.forEach((name, price) -> tierIds.put(name, insertTier(eventId, name, price)));
+            UUID buyer = insertBuyer();
+            tiers.forEach((name, price) -> tierIds.put(name, insertTier(eventId, name, price, buyer)));
 
-            Map<String, UUID> venues = new HashMap<>();
-            UUID buyer = null;
             List<UUID> showtimeIds = new ArrayList<>();
+            Map<String, UUID> zonesByCode = new LinkedHashMap<>();
+            Map<UUID, ZoneSpec> createdZones = new LinkedHashMap<>();
+            Map<UUID, List<UUID>> seatsByZone = new HashMap<>();
+
+            // Tạo zone, giá và ghế từ showtime đầu tiên (v2: showtime dùng chung seat_map của event).
+            int zoneSeq = 1;
+            for (ZoneSpec z : firstShowtime.zones) {
+                String code = "Z" + zoneSeq++;
+                UUID zoneId = insertZone(layoutId, code, z);
+                insertZonePrice(eventId, layoutId, zoneId, tierIds.get(z.tier() != null ? z.tier() : DEFAULT_TIER));
+                zonesByCode.put(code, zoneId);
+                createdZones.put(zoneId, z);
+                if (z.kind().equals("SEATED")) {
+                    seatsByZone.put(zoneId, insertSeats(layoutId, zoneId, z.size(), z.perRow()));
+                }
+            }
+
             for (ShowtimeBuilder s : showtimes) {
-                String cityCode = s.city != null ? s.city : city;
-                String venueLabel = s.venueName != null ? s.venueName : venueName != null ? venueName : "Sân " + cityCode;
-                UUID venueId = venues.computeIfAbsent(cityCode + "/" + venueLabel, k -> insertVenue(venueLabel, cityCode));
-                UUID layoutId = VenueSchemaFixture.draft(jdbc,venueId);
-
-                // Tạo zone, giá và ghế theo thứ tự khai báo; ghi nhớ để phân bổ vé đã bán.
-                Map<UUID, ZoneSpec> created = new LinkedHashMap<>();
-                Map<UUID, List<UUID>> seatsByZone = new HashMap<>();
-                for (ZoneSpec z : s.zones) {
-                    UUID zoneId = insertZone(layoutId, z);
-                    insertZonePrice(eventId, zoneId, tierIds.get(z.tier() != null ? z.tier() : DEFAULT_TIER));
-                    created.put(zoneId, z);
-                    if (z.kind().equals("SEATED")) {
-                        seatsByZone.put(zoneId, insertSeats(zoneId, z.size(), z.perRow()));
-                    }
-                }
-
-                if(s.coupleFirst>=0) {
-                    var seats=seatsByZone.get(created.keySet().iterator().next());
-                    makeCouple(seats.get(s.coupleFirst),seats.get(s.coupleFirst+1));
-                }
-                if (s.omitLayoutSvg) {
-                    jdbc.sql("DELETE FROM seat_layout_svg WHERE seat_layout_id = :id")
-                            .param("id", layoutId).update();
-                } else if (s.layoutSvg != null) {
-                    jdbc.sql("UPDATE seat_layout_svg SET svg_content = :svg WHERE seat_layout_id = :id")
-                            .param("svg", s.layoutSvg).param("id", layoutId).update();
-                }
-                if (s.publishLayout) {
-                    VenueSchemaFixture.publish(jdbc, layoutId);
-                }
-                UUID showtimeId=insertShowtime(eventId,layoutId,s);
+                UUID showtimeId = insertShowtime(eventId, layoutId, s);
                 showtimeIds.add(showtimeId);
 
-                // Vé đã bán: ghế ngồi trước, rồi tới khu đứng. Đơn PAID chỉ để thoả ràng buộc order_id của ghế SOLD.
                 int remainingSold = s.sold;
                 UUID order = null;
                 if (remainingSold > 0) {
-                    if (buyer == null) {
-                        buyer = insertBuyer();
-                    }
                     order = insertPaidOrder(buyer, showtimeId);
                 }
-                for (var entry : created.entrySet()) {
+                for (var entry : createdZones.entrySet()) {
                     if (!entry.getValue().kind().equals("SEATED")) {
                         continue;
                     }
                     for (UUID seatId : seatsByZone.get(entry.getKey())) {
                         boolean sell = remainingSold > 0;
-                        insertShowtimeSeat(showtimeId, seatId, sell ? order : null);
+                        insertShowtimeSeat(showtimeId, layoutId, entry.getKey(), seatId, sell ? order : null);
                         if (sell) {
                             remainingSold--;
                         }
                     }
                 }
-                for (var entry : created.entrySet()) {
+                for (var entry : createdZones.entrySet()) {
                     if (!entry.getValue().kind().equals("STANDING")) {
                         continue;
                     }
                     int capacity = entry.getValue().size();
                     int soldHere = Math.min(remainingSold, capacity);
-                    insertStock(showtimeId, entry.getKey(), capacity, soldHere);
+                    insertStock(showtimeId, layoutId, entry.getKey(), capacity, soldHere);
                     remainingSold -= soldHere;
                 }
                 if (remainingSold > 0) {
@@ -375,36 +353,39 @@ public final class CatalogFixtures {
 
         // ---------------------------------------------------------------- SQL
 
-        private UUID insertEvent() {
+        private UUID insertEvent(UUID venueId, UUID layoutId) {
             return jdbc.sql("""
-                            INSERT INTO event (title, description, category, poster_url, status, published_at)
-                            VALUES (:title, :description, :category, :poster, :status,
-                                    CASE WHEN :status = 'PUBLISHED' THEN :now END)
+                            INSERT INTO event (seat_map_id, title, description, category, poster_desktop_url, status)
+                            VALUES (:layout, :title, :description, :category, :poster, :status::event_status)
                             RETURNING id
                             """)
+                    .param("layout", layoutId)
                     .param("title", title)
                     .param("description", description)
                     .param("category", category)
                     .param("poster", posterUrl)
                     .param("status", status)
-                    .param("now", utc(clock.instant()))
                     .query(UUID.class).single();
         }
 
-        private UUID insertTier(UUID eventId, String name, long price) {
-            return jdbc.sql("INSERT INTO price_tier (event_id, name, price) VALUES (:e, :n, :p) RETURNING id")
-                    .param("e", eventId).param("n", name).param("p", price)
+        private UUID insertTier(UUID eventId, String name, long price, UUID createdBy) {
+            UUID skuId = jdbc.sql("INSERT INTO sku (event_id, name, color) VALUES (:e, :n, '#336699') RETURNING id")
+                    .param("e", eventId).param("n", name)
                     .query(UUID.class).single();
+            jdbc.sql("INSERT INTO sku_price (sku_id, price, effective_from, created_by) VALUES (:s, :p, :now, :u)")
+                    .param("s", skuId).param("p", price).param("now", utc(clock.instant()).minusDays(30))
+                    .param("u", createdBy)
+                    .update();
+            return skuId;
         }
     }
-
 
     // ------------------------------------------------------------------ Chỉnh dữ liệu sau khi tạo
 
     /** Id các khu của suất theo {@code name} (cùng thứ tự API trả). */
     public List<UUID> zoneIds(UUID showtimeId) {
         return jdbc.sql("""
-                        SELECT z.id FROM zone z JOIN showtime s ON s.seat_layout_id = z.seat_layout_id
+                        SELECT z.id FROM zone z JOIN showtime s ON s.seat_map_id = z.seat_map_id
                         WHERE s.id = :s ORDER BY z.name, z.id
                         """)
                 .param("s", showtimeId).query(UUID.class).list();
@@ -420,7 +401,7 @@ public final class CatalogFixtures {
     public void holdSeat(UUID showtimeId, UUID seatId, Instant heldUntil) {
         UUID order = insertOrder(showtimeId, "PENDING", heldUntil);
         jdbc.sql("""
-                        UPDATE showtime_seat SET status = 'HELD', order_id = :o, held_until = :until
+                        UPDATE seat_inventory SET status = 'HELD', order_id = :o, held_until = :until
                         WHERE showtime_id = :s AND seat_id = :seat
                         """)
                 .param("o", order).param("until", utc(heldUntil)).param("s", showtimeId).param("seat", seatId)
@@ -428,51 +409,45 @@ public final class CatalogFixtures {
     }
 
     public void blockSeat(UUID showtimeId, UUID seatId) {
-        jdbc.sql("UPDATE showtime_seat SET status = 'BLOCKED', order_id = NULL, held_until = NULL "
+        jdbc.sql("UPDATE seat_inventory SET status = 'BLOCKED', order_id = NULL, held_until = NULL "
                         + "WHERE showtime_id = :s AND seat_id = :seat")
                 .param("s", showtimeId).param("seat", seatId).update();
     }
 
     public void sellSeat(UUID showtimeId, UUID seatId) {
         UUID order = insertOrder(showtimeId, "PAID", clock.instant());
-        jdbc.sql("UPDATE showtime_seat SET status = 'SOLD', order_id = :o, held_until = NULL "
+        jdbc.sql("UPDATE seat_inventory SET status = 'SOLD', order_id = :o, held_until = NULL "
                         + "WHERE showtime_id = :s AND seat_id = :seat")
                 .param("o", order).param("s", showtimeId).param("seat", seatId).update();
     }
 
-    /** Xoá dòng showtime_seat của ghế, mô phỏng suất chưa được khởi tạo tồn kho. */
+    /** Xoá dòng seat_inventory của ghế, mô phỏng suất chưa được khởi tạo tồn kho. */
     public void deleteShowtimeSeat(UUID showtimeId, UUID seatId) {
-        jdbc.sql("DELETE FROM showtime_seat WHERE showtime_id = :s AND seat_id = :seat")
+        jdbc.sql("DELETE FROM seat_inventory WHERE showtime_id = :s AND seat_id = :seat")
                 .param("s", showtimeId).param("seat", seatId).update();
     }
 
     public void deleteZoneStock(UUID showtimeId, UUID zoneId) {
-        jdbc.sql("DELETE FROM showtime_zone_stock WHERE showtime_id = :s AND zone_id = :z")
+        jdbc.sql("DELETE FROM standing_inventory WHERE showtime_id = :s AND zone_id = :z")
                 .param("s", showtimeId).param("z", zoneId).update();
     }
 
     /** Đặt số đã bán và đang giữ của khu đứng. */
     public void setZoneStock(UUID showtimeId, UUID zoneId, int sold, int held) {
-        jdbc.sql("UPDATE showtime_zone_stock SET sold = :sold, held = :held WHERE showtime_id = :s AND zone_id = :z")
+        jdbc.sql("UPDATE standing_inventory SET sold = :sold, held = :held WHERE showtime_id = :s AND zone_id = :z")
                 .param("sold", sold).param("held", held).param("s", showtimeId).param("z", zoneId).update();
-    }
-
-    /** Biến hai ghế thành một cặp ghế đôi (loại COUPLE, ghi vào seat_pair theo thứ tự id). */
-    public void makeCouple(UUID seatA, UUID seatB) {
-        jdbc.sql("UPDATE seat SET seat_type_id = (SELECT id FROM seat_type WHERE code = 'COUPLE') "
-                        + "WHERE id IN (:a, :b)")
-                .param("a", seatA).param("b", seatB).update();
-        UUID low = seatA.compareTo(seatB) < 0 ? seatA : seatB;
-        UUID high = low.equals(seatA) ? seatB : seatA;
-        jdbc.sql("INSERT INTO seat_pair (seat_a_id, seat_b_id) VALUES (:a, :b)")
-                .param("a", low).param("b", high).update();
     }
 
     private UUID insertOrder(UUID showtimeId, String status, Instant expiresAt) {
         UUID buyer = insertBuyer();
         return jdbc.sql("""
-                        INSERT INTO orders (code, user_id, showtime_id, status, total_amount, expires_at, paid_at)
-                        VALUES (:code, :u, :s, :status, 0, :exp, CASE WHEN :status = 'PAID' THEN :exp END) RETURNING id
+                        INSERT INTO ticket_order (code, user_id, showtime_id, status, total_amount, expires_at,
+                                                  buyer_name, buyer_email, buyer_phone, paid_at)
+                        VALUES (:code, :u, :s, :status::order_status, 0, :exp,
+                                CASE WHEN :status = 'PAID' THEN 'Test Buyer' END,
+                                CASE WHEN :status = 'PAID' THEN 'buyer@vingo.test' END,
+                                CASE WHEN :status = 'PAID' THEN '+84901234567' END,
+                                CASE WHEN :status = 'PAID' THEN :exp END) RETURNING id
                         """)
                 .param("code", UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase())
                 .param("u", buyer).param("s", showtimeId).param("status", status).param("exp", utc(expiresAt))
@@ -482,7 +457,7 @@ public final class CatalogFixtures {
     // ------------------------------------------------------------------ SQL dùng chung
 
     private UUID insertVenue(String name, String city) {
-        return jdbc.sql("INSERT INTO venue (name, type, city) VALUES (:n, 'STADIUM', :c) RETURNING id")
+        return jdbc.sql("INSERT INTO venue (name, city) VALUES (:n, :c) RETURNING id")
                 .param("n", name).param("c", city).query(UUID.class).single();
     }
 
@@ -491,70 +466,73 @@ public final class CatalogFixtures {
         Instant opens = s.saleOpensAt != null ? s.saleOpensAt : s.startsAt.minus(Duration.ofDays(30));
         Instant closes = s.saleClosesAt != null ? s.saleClosesAt : s.startsAt;
         return jdbc.sql("""
-                        INSERT INTO showtime (event_id, seat_layout_id, starts_at, ends_at,
-                                              sale_opens_at, sale_closes_at, status)
-                        VALUES (:e, :l, :starts, :ends, :opens, :closes, :status) RETURNING id
+                        INSERT INTO showtime (event_id, seat_map_id, starts_at, ends_at,
+                                              sale_opens_at, sale_closes_at, cancelled_at)
+                        VALUES (:e, :l, :starts, :ends, :opens, :closes,
+                                CASE WHEN :status = 'CANCELLED' THEN :now END) RETURNING id
                         """)
                 .param("e", eventId).param("l", layoutId)
                 .param("starts", utc(s.startsAt)).param("ends", utc(endsAt))
                 .param("opens", utc(opens)).param("closes", utc(closes))
                 .param("status", s.status)
+                .param("now", utc(clock.instant()))
                 .query(UUID.class).single();
     }
 
-    private UUID insertZone(UUID layoutId, ZoneSpec z) {
+    private UUID insertZone(UUID layoutId, String code, ZoneSpec z) {
+        Integer capacity = "STANDING".equals(z.kind()) ? z.size() : null;
         return jdbc.sql("""
-                        INSERT INTO zone (seat_layout_id, name, kind, capacity) VALUES (:l, :n, :k, :c) RETURNING id
+                        INSERT INTO zone (seat_map_id, code, name, kind, capacity)
+                        VALUES (:l, :code, :n, :k::zone_kind, :c) RETURNING id
                         """)
-                .param("l", layoutId).param("n", z.name()).param("k", z.kind()).param("c", z.size())
+                .param("l", layoutId).param("code", code).param("n", z.name()).param("k", z.kind()).param("c", capacity)
                 .query(UUID.class).single();
     }
 
-    private void insertZonePrice(UUID eventId, UUID zoneId, UUID tierId) {
-        jdbc.sql("INSERT INTO zone_price (event_id, zone_id, price_tier_id) VALUES (:e, :z, :t)")
-                .param("e", eventId).param("z", zoneId).param("t", tierId).update();
+    private void insertZonePrice(UUID eventId, UUID layoutId, UUID zoneId, UUID skuId) {
+        jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id) VALUES (:e, :l, :z, :t)")
+                .param("e", eventId).param("l", layoutId).param("z", zoneId).param("t", skuId).update();
     }
 
-    private List<UUID> insertSeats(UUID zoneId, int count, int perRow) {
+    private List<UUID> insertSeats(UUID layoutId, UUID zoneId, int count, int perRow) {
         List<UUID> ids = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            // perRow = 0: một hàng A duy nhất. Ngược lại hàng A, B, C... mỗi hàng perRow ghế.
             String row = perRow == 0 ? "A" : String.valueOf((char) ('A' + i / perRow));
             int number = perRow == 0 ? i + 1 : i % perRow + 1;
-            int y = perRow == 0 ? 0 : i / perRow;
             ids.add(jdbc.sql("""
-                            INSERT INTO seat (zone_id, seat_type_id, row_label, number, x, y)
-                            VALUES (:z, (SELECT id FROM seat_type WHERE code = 'STANDARD'), :row, :n, :n, :y) RETURNING id
+                            INSERT INTO seat (seat_map_id, zone_id, zone_kind, row_label, number)
+                            VALUES (:l, :z, 'SEATED', :row, :n) RETURNING id
                             """)
-                    .param("z", zoneId).param("row", row).param("n", number).param("y", y)
+                    .param("l", layoutId).param("z", zoneId).param("row", row).param("n", number)
                     .query(UUID.class).single());
         }
         return ids;
     }
 
-    private void insertShowtimeSeat(UUID showtimeId, UUID seatId, UUID soldOrder) {
+    private void insertShowtimeSeat(UUID showtimeId, UUID layoutId, UUID zoneId, UUID seatId, UUID soldOrder) {
         jdbc.sql("""
-                        INSERT INTO showtime_seat (showtime_id, seat_id, status, order_id)
-                        VALUES (:s, :seat, :status, :o)
+                        INSERT INTO seat_inventory (showtime_id, seat_map_id, seat_id, zone_id, status, order_id)
+                        VALUES (:s, :l, :seat, :z, :status::seat_status, :o)
                         """)
-                .param("s", showtimeId).param("seat", seatId)
+                .param("s", showtimeId).param("l", layoutId).param("seat", seatId).param("z", zoneId)
                 .param("status", soldOrder != null ? "SOLD" : "AVAILABLE")
                 .param("o", soldOrder)
                 .update();
     }
 
-    private void insertStock(UUID showtimeId, UUID zoneId, int capacity, int sold) {
+    private void insertStock(UUID showtimeId, UUID layoutId, UUID zoneId, int capacity, int sold) {
         jdbc.sql("""
-                        INSERT INTO showtime_zone_stock (showtime_id, zone_id, capacity, sold, held)
-                        VALUES (:s, :z, :c, :sold, 0)
+                        INSERT INTO standing_inventory (showtime_id, seat_map_id, zone_id, zone_kind, capacity, sold, held)
+                        VALUES (:s, :l, :z, 'STANDING', :c, :sold, 0)
                         """)
-                .param("s", showtimeId).param("z", zoneId).param("c", capacity).param("sold", sold).update();
+                .param("s", showtimeId).param("l", layoutId).param("z", zoneId).param("c", capacity).param("sold", sold)
+                .update();
     }
 
     private UUID insertBuyer() {
         return jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
-                        VALUES (:email, 'Người mua test', 'x', 'BUYER', 'ACTIVE', :phone, :now) RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone, phone_verified_at)
+                        VALUES (:email, 'Người mua test', 'x', 'BUYER', :now, :phone, :now) RETURNING id
                         """)
                 .param("phone", CatalogFixture.uniquePhone()).param("now", utc(clock.instant()))
                 .param("email", UUID.randomUUID() + "@test.vingo").query(UUID.class).single();
@@ -563,8 +541,9 @@ public final class CatalogFixtures {
     private UUID insertPaidOrder(UUID buyerId, UUID showtimeId) {
         Instant now = clock.instant();
         return jdbc.sql("""
-                        INSERT INTO orders (code, user_id, showtime_id, status, total_amount, expires_at, paid_at)
-                        VALUES (:code, :u, :s, 'PAID', 0, :now, :now) RETURNING id
+                        INSERT INTO ticket_order (code, user_id, showtime_id, status, total_amount, expires_at,
+                                                  buyer_name, buyer_email, buyer_phone, paid_at)
+                        VALUES (:code, :u, :s, 'PAID', 0, :now, 'Người mua test', 'buyer@vingo.test', '+84901234567', :now) RETURNING id
                         """)
                 .param("code", UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase())
                 .param("u", buyerId).param("s", showtimeId).param("now", utc(now))

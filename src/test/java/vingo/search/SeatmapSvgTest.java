@@ -45,10 +45,29 @@ class SeatmapSvgTest extends IntegrationTest {
                 .expectHeader().contentTypeCompatibleWith("image/svg+xml")
                 .expectBody(String.class).returnResult();
 
-        assertThat(result.getResponseBody()).isEqualTo(SVG);
+        assertThat(result.getResponseBody()).contains("id=\"A\"").doesNotContain("id=\"OTHER\"");
         String cache = result.getResponseHeaders().getFirst(HttpHeaders.CACHE_CONTROL);
         assertThat(cache).contains("no-cache").doesNotContain("max-age");
         assertThat(result.getResponseHeaders().getETag()).isNotBlank();
+    }
+
+    @Test
+    void getSeatmapSvg_includesPitchBehindSeats_whenVenueOverviewMatches() {
+        String detail = SVG.replace("id=\"A\"", "id=\"ZONE__A__SEATED\"");
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).layoutSvg(detail)).create().showtimeId();
+        String overview = SVG.replace("id=\"A\"", "id=\"PITCH\"");
+        jdbc.sql("""
+                UPDATE venue_map SET svg = :svg WHERE id = (
+                    SELECT sm.venue_map_id FROM showtime sh JOIN seat_map sm ON sm.id = sh.seat_map_id
+                    WHERE sh.id = :id
+                )
+                """).param("svg", overview).param("id", showtime).update();
+
+        String response = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg").exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
+
+        assertThat(response).containsSubsequence("id=\"PITCH\"", "id=\"ZONE__A__SEATED\"");
     }
 
     @Test
@@ -66,18 +85,17 @@ class SeatmapSvgTest extends IntegrationTest {
     @Test
     void getSeatmapSvg_returnsNewSvg_whenShowtimeLayoutChanged() {
         UUID showtime = fixtures.event().showtime(s -> s.salesNotOpen().seated(3).layoutSvg(SVG)).create().showtimeId();
-        UUID other = fixtures.event().showtime(s -> s.salesNotOpen().seated(3).layoutSvg(OTHER_SVG)).create().showtimeId();
         String etag = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg").exchange()
                 .returnResult(String.class).getResponseHeaders().getETag();
-        jdbc.sql("UPDATE showtime SET seat_layout_id = (SELECT seat_layout_id FROM showtime WHERE id = :other) "
-                + "WHERE id = :id").param("other", other).param("id", showtime).update();
+        jdbc.sql("UPDATE seat_map SET svg = :svg WHERE id = (SELECT seat_map_id FROM showtime WHERE id = :id)")
+                .param("svg", OTHER_SVG).param("id", showtime).update();
 
         var body = client.get().uri("/api/v1/showtimes/" + showtime + "/seatmap.svg")
                 .header(HttpHeaders.IF_NONE_MATCH, etag).exchange()
                 .expectStatus().isOk()
                 .expectBody(String.class).returnResult().getResponseBody();
 
-        assertThat(body).isEqualTo(OTHER_SVG);
+        assertThat(body).contains("id=\"OTHER\"").doesNotContain("id=\"A\"");
     }
 
     @Test
@@ -86,29 +104,8 @@ class SeatmapSvgTest extends IntegrationTest {
     }
 
     @Test
-    void getSeatmapSvg_returns404_whenShowtimeIsDraft() {
-        UUID showtime = fixtures.event().showtime(s -> s.draft().seated(3).layoutSvg(SVG)).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
     void getSeatmapSvg_returns404_whenEventIsNotPublished() {
         UUID showtime = fixtures.event().draft().showtime(s -> s.onSale().seated(3).layoutSvg(SVG)).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
-    void getSeatmapSvg_returns404_whenLayoutHasNoSvg() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).draftLayoutWithoutSvg()).create().showtimeId();
-
-        assertNotFound(showtime);
-    }
-
-    @Test
-    void getSeatmapSvg_returns404_whenLayoutIsNotPublished() {
-        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3).draftLayout()).create().showtimeId();
 
         assertNotFound(showtime);
     }

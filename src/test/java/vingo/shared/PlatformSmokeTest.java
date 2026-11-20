@@ -19,7 +19,7 @@ class PlatformSmokeTest extends IntegrationTest {
                 .query(Integer.class).single();
         Integer tables = jdbc.sql("""
                         SELECT count(*) FROM information_schema.tables
-                        WHERE table_schema = 'public' AND table_name IN ('orders', 'showtime_seat', 'ticket', 'realtime_event')
+                        WHERE table_schema = 'public' AND table_name IN ('ticket_order', 'seat_inventory', 'ticket', 'realtime_event')
                         """)
                 .query(Integer.class).single();
         assertThat(failed).isZero();

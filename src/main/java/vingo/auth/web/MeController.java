@@ -8,11 +8,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.MeApi;
-import vingo.api.model.BuyerProfile;
 import vingo.api.model.OtpSession;
 import vingo.api.model.PhoneOtpRequest;
 import vingo.api.model.PhoneVerifyRequest;
-import vingo.auth.BuyerProfileService;
 import vingo.api.model.UpdateMeRequest;
 import vingo.api.model.User;
 import vingo.auth.AuthService;
@@ -27,15 +25,12 @@ class MeController implements MeApi {
     private final AuthService auth;
     private final CurrentUser currentUser;
     private final AuthCookies cookies;
-    private final BuyerProfileService profiles;
     private final HttpServletRequest request;
 
-    MeController(AuthService auth, CurrentUser currentUser, AuthCookies cookies, BuyerProfileService profiles,
-                 HttpServletRequest request) {
+    MeController(AuthService auth, CurrentUser currentUser, AuthCookies cookies, HttpServletRequest request) {
         this.auth = auth;
         this.currentUser = currentUser;
         this.cookies = cookies;
-        this.profiles = profiles;
         this.request = request;
     }
 
@@ -47,7 +42,7 @@ class MeController implements MeApi {
         // Chỉ có khi chạy SMS_PROVIDER=demo: trả mã để web demo hiện lên màn hình.
         DemoSmsSender.takeCode().ifPresent(code -> response.header(DemoSmsSender.HEADER, code));
         return response.body(new OtpSession()
-                .otpSessionId(session.otpSessionId()).expiresAt(session.expiresAt())
+                .otpSessionId(session.otpId()).expiresAt(session.expiresAt())
                 .channel(OtpSession.ChannelEnum.fromValue(session.channel())));
     }
 
@@ -56,16 +51,6 @@ class MeController implements MeApi {
     public ResponseEntity<User> verifyPhoneOtp(PhoneVerifyRequest body) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(toUser(
                 auth.verifyPhone(currentUser.require().id(), body.getOtpSessionId(), body.getOtp())));
-    }
-
-    @Override
-    public ResponseEntity<BuyerProfile> getBuyerProfile() {
-        return ResponseEntity.ok(profiles.get());
-    }
-
-    @Override
-    public ResponseEntity<BuyerProfile> putBuyerProfile(BuyerProfile body) {
-        return ResponseEntity.ok(profiles.put(body));
     }
 
     @Override
@@ -93,6 +78,6 @@ class MeController implements MeApi {
                 .phoneVerified(account.phoneVerified())
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name()))
-                .status(User.StatusEnum.fromValue(account.status()));
+                .emailVerified(!"UNVERIFIED".equals(account.status()));
     }
 }

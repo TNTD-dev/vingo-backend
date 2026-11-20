@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.ShowtimeStatus;
+import vingo.catalog.VenueService;
 import vingo.search.AvailabilityResult;
 import vingo.search.EventDetailResult;
 import vingo.search.EventSearchCriteria;
@@ -100,7 +101,7 @@ class PgSearchService implements SearchService {
         Set<UUID> soldOut = rows.isEmpty() ? Set.of() : details.findSoldOutShowtimeIds(eventId, now);
         return new EventDetailResult(
                 event.id(), event.title(), event.description(), event.category(), event.status(), event.posterUrl(),
-                event.attributes(), event.maxTicketsPerOrder(),
+                event.homeTeam(), event.awayTeam(), event.league(), event.round(), event.maxTicketsPerOrder(),
                 featured.map(ShowtimeRow::venue),
                 core.priceTiers(),
                 rows.stream().map(r -> toShowtime(r, now, soldOut.contains(r.id()))).toList());
@@ -118,7 +119,7 @@ class PgSearchService implements SearchService {
     public SeatmapResult getSeatmap(UUID showtimeId, UUID zoneId) {
         ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
         OffsetDateTime now = OffsetDateTime.now(clock);
-        // Layout (khu, ghế, toạ độ, hạng giá) lấy từ cache; trạng thái ghế và chỗ đứng còn đọc DB mỗi lần.
+        // Layout (khu, ghế, hạng giá) lấy từ cache; trạng thái ghế và chỗ đứng còn đọc DB mỗi lần.
         List<LayoutZone> zones = reads.layout(showtime).zones().stream()
                 .filter(z -> zoneId == null || z.id().equals(zoneId))
                 .toList();
@@ -135,12 +136,11 @@ class PgSearchService implements SearchService {
             for (LayoutSeat s : z.seats()) {
                 SeatState state = states.get(s.id());
                 if (state == null) {
-                    // Thiếu dòng showtime_seat: báo BLOCKED, không cho đặt.
+                    // Thiếu dòng seat_inventory: báo BLOCKED, không cho đặt.
                     missingSeats++;
                     state = SeatState.BLOCKED;
                 }
-                seats.add(new SeatResult(s.id(), s.row(), s.number(), s.seatType(),
-                        Optional.ofNullable(s.pairSeatId()), state, s.x(), s.y()));
+                seats.add(new SeatResult(s.id(), s.row(), s.number(), state));
             }
             StandingStock standing = z.kind() == ZoneKind.STANDING ? stock.get(z.id()) : null;
             if (standing != null && standing.missing()) {
@@ -157,6 +157,7 @@ class PgSearchService implements SearchService {
     public String getSeatmapSvg(UUID showtimeId) {
         ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
         return seatmaps.findPublishedSvg(showtime.seatLayoutId())
+                .map(layers -> VenueService.renderSeatmap(layers.overview(), layers.detail()))
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Sơ đồ của suất chưa có SVG"));
     }
 
@@ -183,7 +184,7 @@ class PgSearchService implements SearchService {
     }
 
     static ShowtimeStatus statusOf(ShowtimeRef s, OffsetDateTime now) {
-        return ShowtimeStatus.of(s.storedStatus(), s.saleOpensAt(), s.saleClosesAt(), s.endsAt(), now);
+        return ShowtimeStatus.of(s.eventStatus(), s.cancelledAt(), s.saleOpensAt(), s.saleClosesAt(), s.endsAt(), now);
     }
 
     private static DomainException showtimeNotFound() {
@@ -191,7 +192,8 @@ class PgSearchService implements SearchService {
     }
 
     private static ShowtimeResult toShowtime(ShowtimeRow r, OffsetDateTime now, boolean soldOut) {
-        ShowtimeStatus status = ShowtimeStatus.of(r.storedStatus(), r.saleOpensAt(), r.saleClosesAt(), r.endsAt(), now);
+        ShowtimeStatus status = ShowtimeStatus.of(
+                r.eventStatus(), r.cancelledAt(), r.saleOpensAt(), r.saleClosesAt(), r.endsAt(), now);
         return new ShowtimeResult(r.id(), r.eventId(), r.seatLayoutId(), r.startsAt(), r.endsAt(),
                 r.saleOpensAt(), r.saleClosesAt(), status, soldOut, r.venue());
     }

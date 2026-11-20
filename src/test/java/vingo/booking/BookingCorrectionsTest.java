@@ -50,7 +50,7 @@ class BookingCorrectionsTest extends BookingTestSupport {
         String token = buyerToken(buyer);
         String key = UUID.randomUUID().toString();
         UUID first = orderId(holdOk(token, showtime.id(), key, seats(showtime.event().seat(1))));
-        assertThat(jdbc.sql("SELECT created_at FROM idempotency_key WHERE user_id = :user AND key = :key")
+        assertThat(jdbc.sql("SELECT created_at FROM idempotency_record WHERE user_id = :user AND key = :key")
                 .param("user", buyer).param("key", key).query(OffsetDateTime.class).single())
                 .isEqualTo(catalog.now());
 
@@ -61,7 +61,7 @@ class BookingCorrectionsTest extends BookingTestSupport {
         assertThat(orderStatus(first)).isEqualTo("EXPIRED");
         assertThat(strings(result, "$.items[*].seat_id")).containsExactly(showtime.event().seat(2).toString());
         assertAvailable(showtime, showtime.event().seat(1));
-        assertThat(jdbc.sql("SELECT created_at FROM idempotency_key WHERE user_id = :user AND key = :key")
+        assertThat(jdbc.sql("SELECT created_at FROM idempotency_record WHERE user_id = :user AND key = :key")
                 .param("user", buyer).param("key", key).query(OffsetDateTime.class).single())
                 .isEqualTo(catalog.now());
     }
@@ -119,12 +119,12 @@ class BookingCorrectionsTest extends BookingTestSupport {
         clock.set(Instant.parse("2030-01-01T00:00:00Z"));
         var showtime = catalog.onSaleShowtime();
         var event = showtime.event();
-        for (String status : List.of("DRAFT", "CANCELLED")) {
+        for (String status : List.of("CANCELLED")) {
             catalog.showtime(event, new Window(status, Duration.ofDays(-1), Duration.ofDays(1),
                     Duration.ofDays(1), Duration.ofDays(1).plusHours(2)));
         }
         catalog.showtime(event, Window.finished());
-        jdbc.sql("INSERT INTO price_tier (event_id, name, price) VALUES (:event, 'Unassigned', 1)")
+        jdbc.sql("INSERT INTO sku (event_id, name, color) VALUES (:event, 'Unassigned', '#0000FF')")
                 .param("event", event.id()).update();
         String token = buyerToken(catalog.buyer());
         UUID id = orderId(holdOk(token, showtime.id(), seats(event.seat(1))));

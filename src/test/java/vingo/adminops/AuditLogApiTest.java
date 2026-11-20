@@ -54,15 +54,15 @@ class AuditLogApiTest extends AdminOpsTestSupport {
         assertThat(data.getFirst().get("after"))
                 .isEqualTo(object(audits(target).getFirst().afterJson()));
         assertThat(data.getLast()).containsEntry("action", "REISSUE_QR").containsEntry("reason", REASON)
-                .containsEntry("before", Map.of("status", "ISSUED"))
-                .containsEntry("after", Map.of("status", "ISSUED"));
+                .containsEntry("before", Map.of("status", "ISSUED", "qr_version", 1))
+                .containsEntry("after", Map.of("status", "ISSUED", "qr_version", 2));
         assertLastPage(json);
 
         String wrongEntity = body(get(adminToken,
-                "/api/v1/admin/audit-logs?entity=order&entity_id={id}", target), 200);
+                "/api/v1/admin/audit-logs?entity=ticket_order&entity_id={id}", target), 200);
         assertThat(rows(wrongEntity)).isEmpty();
         String orderPage = body(get(adminToken,
-                "/api/v1/admin/audit-logs?entity=order&entity_id={id}", order), 200);
+                "/api/v1/admin/audit-logs?entity=ticket_order&entity_id={id}", order), 200);
         assertThat(rows(orderPage)).hasSize(1);
         assertThat(rows(orderPage).getFirst()).containsEntry("action", "RESOLVE_REVIEW")
                 .containsEntry("before", Map.of("status", "NEEDS_REVIEW"))

@@ -201,22 +201,19 @@ class SearchEventsTest extends IntegrationTest {
     void searchEvents_venueMatch_combinesWithCityAndDateFilters() {
         Instant hnShow = NOW.plus(Duration.ofDays(3));
         Instant hcmShow = NOW.plus(Duration.ofDays(20));
-        UUID tour = fixtures.event().title("Tour Xuyên Việt")
-                .showtime(s -> s.city("HN").venue("Sân Mỹ Đình").startsAt(hnShow).seated(5))
-                .showtime(s -> s.city("HCM").venue("Sân Phú Thọ").startsAt(hcmShow).seated(5))
-                .create().id();
+        UUID hnEarly = fixtures.event().title("Tour Miền Bắc").city("HN").venue("Sân Mỹ Đình")
+                .showtime(s -> s.startsAt(hnShow).seated(5)).create().id();
+        UUID hcmShowEvent = fixtures.event().title("Tour Miền Nam").city("HCM").venue("Sân Phú Thọ")
+                .showtime(s -> s.startsAt(hcmShow).seated(5)).create().id();
         UUID hnOnly = fixtures.event().title("Đại nhạc hội").city("HN").venue("Sân Mỹ Đình")
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(40))).seated(5)).create().id();
 
-        assertThat(ids(search("q", "my dinh"))).containsExactlyInAnyOrder(tour, hnOnly);
-        // Lọc city=HCM: suất ở Mỹ Đình (HN) không tính, nên không ra.
+        assertThat(ids(search("q", "my dinh"))).containsExactlyInAnyOrder(hnEarly, hnOnly);
         assertThat(search("q", "my dinh", "city", "HCM").path("data")).isEmpty();
-        assertThat(ids(search("q", "phu tho", "city", "HCM"))).containsExactly(tour);
-        // Lọc ngày: suất Mỹ Đình của tour nằm ngoài khoảng.
+        assertThat(ids(search("q", "phu tho", "city", "HCM"))).containsExactly(hcmShowEvent);
         assertThat(ids(search("q", "my dinh", "from", at(10), "to", at(30)))).isEmpty();
         assertThat(ids(search("q", "my dinh", "from", at(35)))).containsExactly(hnOnly);
-        assertThat(ids(search("q", "ha noi", "to", at(10)))).containsExactly(tour);
-        // Thẻ hiện đúng sân vừa tìm, không phải suất sớm nhất ở nơi khác.
+        assertThat(ids(search("q", "ha noi", "to", at(10)))).containsExactly(hnEarly);
         JsonNode phuTho = search("q", "phu tho").path("data");
         assertThat(phuTho.get(0).path("venue_name").asString()).isEqualTo("Sân Phú Thọ");
         assertThat(phuTho.get(0).path("city").asString()).isEqualTo("HCM");
@@ -227,10 +224,9 @@ class SearchEventsTest extends IntegrationTest {
         UUID visible = fixtures.event().title("Show A").city("HN").venue("Sân Mỹ Đình").create().id();
         fixtures.event().title("Show B").city("HN").venue("Sân Mỹ Đình").draft().create();
         fixtures.event().title("Show C").city("HN").venue("Sân Mỹ Đình").status("CANCELLED").create();
-        // Sự kiện có suất CANCELLED ở Mỹ Đình và suất hợp lệ ở nơi khác: không được lọt qua suất đã huỷ.
-        fixtures.event().title("Show D")
-                .showtime(s -> s.city("HN").venue("Sân Mỹ Đình").cancelled().seated(5))
-                .showtime(s -> s.city("HCM").venue("Sân Phú Thọ").seated(5)).create();
+        // Sự kiện chỉ có suất CANCELLED ở Mỹ Đình: không được hiện.
+        fixtures.event().title("Show D").city("HN").venue("Sân Mỹ Đình")
+                .showtime(s -> s.cancelled().seated(5)).create();
         // Sân đã ngừng dùng.
         fixtures.event().title("Show E").city("DN").venue("Sân Mỹ Đình Cũ").create();
         jdbc.sql("UPDATE venue SET deleted_at = now() WHERE name = 'Sân Mỹ Đình Cũ'").update();
@@ -248,10 +244,8 @@ class SearchEventsTest extends IntegrationTest {
         UUID visible = fixtures.event().title("Visible show").create().id();
         fixtures.event().title("Draft show").draft().create();
         fixtures.event().title("Cancelled show").status("CANCELLED").create();
-        fixtures.event().title("Ended show").status("ENDED").create();
         fixtures.event().title("Past show")
                 .showtime(s -> s.startsAt(NOW.minus(Duration.ofDays(1))).seated(5)).create();
-        fixtures.event().title("Draft showtime show").showtime(s -> s.draft().seated(5)).create();
         fixtures.event().title("Cancelled showtime show").showtime(s -> s.cancelled().seated(5)).create();
 
         assertThat(ids(search())).containsExactly(visible);
@@ -268,54 +262,53 @@ class SearchEventsTest extends IntegrationTest {
         UUID hcmFootball = fixtures.event().title("HCM football").city("HCM").category("FOOTBALL")
                 .defaultPrice(900_000)
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(20))).seated(5)).create().id();
-        UUID dnTheater = fixtures.event().title("DN theater").city("DN").category("THEATER")
+        UUID dnConcert = fixtures.event().title("DN concert").city("DN").category("CONCERT")
                 .defaultPrice(1_500_000)
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(40))).seated(5)).create().id();
 
         assertThat(ids(search("city", "HN"))).containsExactly(hnConcert);
         assertThat(ids(search("category", "FOOTBALL"))).containsExactly(hcmFootball);
         assertThat(ids(search("from", at(10), "to", at(30)))).containsExactly(hcmFootball);
-        assertThat(ids(search("from", at(10)))).containsExactly(hcmFootball, dnTheater);
+        assertThat(ids(search("from", at(10)))).containsExactly(hcmFootball, dnConcert);
         assertThat(ids(search("to", at(10)))).containsExactly(hnConcert);
         assertThat(ids(search("price_min", "500000", "price_max", "1000000"))).containsExactly(hcmFootball);
-        assertThat(ids(search("price_min", "1000000"))).containsExactly(dnTheater);
+        assertThat(ids(search("price_min", "1000000"))).containsExactly(dnConcert);
         assertThat(ids(search("price_max", "300000"))).containsExactly(hnConcert);
         assertThat(ids(search("city", "HN", "category", "FOOTBALL"))).isEmpty();
     }
 
     @Test
-    void searchEvents_showsVenueMatchingCityFilter_forTouringEvent() {
+    void searchEvents_filtersEventsByCity() {
         Instant hnShow = NOW.plus(Duration.ofDays(3));
-        Instant hcmShow = NOW.plus(Duration.ofDays(10));
-        UUID tour = fixtures.event().title("Sơn Tùng M-TP Sky Tour")
-                .showtime(s -> s.city("HN").venue("Sân Mỹ Đình").startsAt(hnShow).seated(5))
-                .showtime(s -> s.city("HCM").venue("Sân Phú Thọ").startsAt(hcmShow).seated(5))
-                .create().id();
-
-        JsonNode all = search().path("data");
-        assertThat(all).hasSize(1);
-        assertThat(all.get(0).path("venue_name").asString()).isEqualTo("Sân Mỹ Đình");
-        assertThat(all.get(0).path("city").asString()).isEqualTo("HN");
-        assertThat(all.get(0).path("city_name").asString()).isEqualTo("Hà Nội");
-        assertThat(Instant.parse(all.get(0).path("first_starts_at").asString())).isEqualTo(hnShow);
+        Instant hcmShow = NOW.plus(Duration.ofDays(20));
+        fixtures.event().title("Show HN").city("HN").venue("Sân Mỹ Đình")
+                .showtime(s -> s.startsAt(hnShow).seated(5)).create();
+        UUID hcmId = fixtures.event().title("Show HCM").city("HCM").venue("Sân Phú Thọ")
+                .showtime(s -> s.startsAt(hcmShow).seated(5)).create().id();
 
         JsonNode hcm = search("city", "HCM").path("data");
         assertThat(hcm).hasSize(1);
-        assertThat(hcm.get(0).path("id").asString()).isEqualTo(tour.toString());
+        assertThat(hcm.get(0).path("id").asString()).isEqualTo(hcmId.toString());
         assertThat(hcm.get(0).path("venue_name").asString()).isEqualTo("Sân Phú Thọ");
         assertThat(hcm.get(0).path("city").asString()).isEqualTo("HCM");
         assertThat(hcm.get(0).path("city_name").asString()).isEqualTo("TP. Hồ Chí Minh");
         assertThat(Instant.parse(hcm.get(0).path("first_starts_at").asString())).isEqualTo(hcmShow);
+    }
 
-        // Lọc theo ngày cũng đổi suất đại diện: chỉ còn suất HCM.
-        JsonNode later = search("from", at(5)).path("data");
-        assertThat(later.get(0).path("venue_name").asString()).isEqualTo("Sân Phú Thọ");
+    @Test
+    void searchEvents_matchesCityNamesAndLegacyCodesInSameFilter() {
+        UUID legacy = fixtures.event().title("Sân cũ").city("HN").create().id();
+        UUID mapped = fixtures.event().title("Sân mới").city("Thành phố Hà Nội").create().id();
+        fixtures.event().title("Sân khác").city("Hải Phòng").create();
+
+        assertThat(ids(search("city", "HN"))).containsExactlyInAnyOrder(legacy, mapped);
+        assertThat(ids(search("city", "Hà Nội"))).containsExactlyInAnyOrder(legacy, mapped);
     }
 
     @Test
     void searchEvents_returnsEventWithoutCity_whenVenueCityIsNull() {
         fixtures.event().title("Không có thành phố").create();
-        jdbc.sql("UPDATE venue SET city = NULL").update();
+        jdbc.sql("UPDATE venue SET city=NULL").update();
 
         JsonNode data = search().path("data");
 
@@ -382,7 +375,7 @@ class SearchEventsTest extends IntegrationTest {
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(2))).seated(5).standing(10).sold(7)).create().id();
         UUID noPrice = fixtures.event().title("Chưa có giá").tier("Chưa gán", 1)
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(10))).seated(5, null)).create().id();
-        jdbc.sql("DELETE FROM zone_price WHERE event_id = :e").param("e", noPrice).update();
+        jdbc.sql("DELETE FROM event_zone WHERE event_id = :e").param("e", noPrice).update();
 
         assertThat(ids(search())).containsExactly(soon, noPrice, late);
         assertThat(ids(search("sort", "price"))).containsExactly(late, soon, noPrice); // không giá xếp cuối
@@ -489,13 +482,24 @@ class SearchEventsTest extends IntegrationTest {
                 .isEqualTo("VALIDATION_ERROR");
         assertThat(searchError("price_min", "-1").path("code").asString()).isEqualTo("VALIDATION_ERROR");
         assertThat(searchError("sort", "random").path("code").asString()).isEqualTo("VALIDATION_ERROR");
-        assertThat(searchError("city", "SGN").path("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(searchError("city", "X".repeat(101)).path("code").asString()).isEqualTo("VALIDATION_ERROR");
+    }
+
+    @Test
+    void searchEvents_acceptsOpenCity_fromFlatVenueFields() {
+        String city = "PROVINCE-" + UUID.randomUUID();
+        UUID target = fixtures.event().title("Sự kiện ở địa phương mới").city(city).create().id();
+
+        JsonNode result = search("city", city);
+        assertThat(ids(result)).containsExactly(target);
+        assertThat(result.path("data").get(0).path("city").asString()).isEqualTo(city);
+        assertThat(ids(search("city", "UNKNOWN-" + UUID.randomUUID()))).isEmpty();
     }
 
     @Test
     void searchEvents_omitsPoster_whenPosterUrlInvalid() {
         UUID id = fixtures.event().title("Poster hỏng").create().id();
-        jdbc.sql("UPDATE event SET poster_url = 'http://bad url' WHERE id = :id").param("id", id).update();
+        jdbc.sql("UPDATE event SET poster_desktop_url = 'http://bad url', poster_mobile_url = NULL WHERE id = :id").param("id", id).update();
 
         JsonNode data = search("q", "poster hong").path("data");
 

@@ -1,5 +1,6 @@
 package vingo.catalog.internal;
 
+import java.awt.BasicStroke;
 import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
 import java.nio.charset.StandardCharsets;
@@ -15,11 +16,15 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import vingo.shared.error.DomainException;
+import vingo.shared.error.ErrorCode;
 import vingo.catalog.internal.SeatLayoutSvgParser.*;
 
 /** Hai lớp SVG dùng cùng hệ tọa độ; không suy đoán phép ghép từ tên file. */
 @Component
 public class VenueSvgProcessor {
+    private static final double SEAT_ZONE_OUTSIDE_AREA_LIMIT = 0.025;
+    private static final double SEAT_ZONE_OUTSIDE_RATIO_LIMIT = 0.01;
+    private static final double ZONE_PATH_JOIN_RADIUS = 0.005;
     private final SeatLayoutSvgParser parser;
     public VenueSvgProcessor(SeatLayoutSvgParser parser) { this.parser = parser; }
     public record Marker(String code, String svgId, String direction, String labelId) {}
@@ -66,6 +71,42 @@ public class VenueSvgProcessor {
                 : List.of(Map.of("reason", ex.code().name(), "message", ex.getMessage()));
     }
 
+    /** Ghép hai lớp đã lưu để hiển thị, giữ nguyên hệ tọa độ và ID nghiệp vụ. */
+    public static String renderSeatmap(String overview, String detail) {
+        try {
+            Document base = SeatLayoutSvgParser.parseXml(bytes(overview));
+            Document seats = SeatLayoutSvgParser.parseXml(bytes(detail));
+            var baseRoot = base.getDocumentElement();
+            var seatRoot = seats.getDocumentElement();
+            if (!same(SeatLayoutSvgParser.readViewBox(baseRoot), SeatLayoutSvgParser.readViewBox(seatRoot))) {
+                return detail;
+            }
+            var baseIds = SeatLayoutSvgParser.validateElements(baseRoot).keySet();
+            var seatIds = SeatLayoutSvgParser.validateElements(seatRoot).keySet();
+            if (seatIds.stream().anyMatch(baseIds::contains)) {
+                return detail;
+            }
+            var group = detailGroup(base, seatRoot);
+            if (!group.hasAttribute("fill")) {
+                group.setAttribute("fill", "black");
+            }
+            baseRoot.appendChild(group);
+            return SeatLayoutSvgParser.serialize(base);
+        } catch (DomainException invalidSvg) {
+            // Các bản ghi cũ có thể chưa qua bước kiểm tra hai lớp của wizard.
+            return detail;
+        }
+    }
+
+    private static Element detailGroup(Document target, Element source) {
+        var group = (Element) target.renameNode(target.importNode(source, true), source.getNamespaceURI(), "g");
+        for (String name : List.of("viewBox", "width", "height", "x", "y", "preserveAspectRatio",
+                "data-schema-version", "data-document-kind")) {
+            group.removeAttribute(name);
+        }
+        return group;
+    }
+
     public Bundle combine(String overviewSvg, List<String> detailFiles, Map<String, String> requested) {
         try {return combineChecked(overviewSvg,detailFiles,requested);}
         catch(IllegalArgumentException ex) {throw SeatLayoutSvgParser.invalid(null,"UNSUPPORTED_COLLISION_GEOMETRY","Không phân giải được hình học hữu hạn của bộ SVG.");}
@@ -97,11 +138,8 @@ public class VenueSvgProcessor {
                 if (business(id)) { if (baseElements.containsKey(id)||!businessIds.add(id)) fail(id, "DUPLICATE_ID", "ID nghiệp vụ trùng giữa các file."); }
                 else renamed.put(id,prefix+id);
             }
-            Element group = (Element) merged.importNode(detail.getDocumentElement(), true);
             // Giữ style/transform của root từng file bằng g, không tạo svg lồng nhau.
-            group = (Element) merged.renameNode(group, "http://www.w3.org/2000/svg", "g");
-            group.removeAttribute("viewBox"); group.removeAttribute("width"); group.removeAttribute("height");
-            group.removeAttribute("data-schema-version"); group.removeAttribute("data-document-kind");
+            Element group = detailGroup(merged, detail.getDocumentElement());
             rewrite(group, renamed);
             var children = group.getElementsByTagName("*");
             for (int n=0;n<children.getLength();n++) rewrite((Element) children.item(n), renamed);
@@ -134,11 +172,16 @@ public class VenueSvgProcessor {
         }
         if (requested != null && !zones.keySet().containsAll(requested.keySet())) fail(null,"UNKNOWN_ZONE_MAPPING","Mapping chứa zone không tồn tại.");
         List<SeatShape> seats = new ArrayList<>();
-        for (var zone : parsed.zones()) for (var seat : zone.seats()) {
-            Area shape = geometry.seatArea(detailElements.get(seat.svgId()));
-            contained(shape, canvas, seat.svgId(), "SEAT_OUTSIDE_VIEW_BOX");
-            contained(shape, zones.get(zone.code()), seat.svgId(), "SEAT_OUTSIDE_ZONE");
-            seats.add(new SeatShape(seat.svgId(),shape,shape.getBounds2D()));
+        for (var zone : parsed.zones()) {
+            if (zone.seats().isEmpty()) continue;
+            Area zoneFill = zones.get(zone.code());
+            Area joinedZone = joinZonePaths(zoneFill);
+            for (var seat : zone.seats()) {
+                Area shape = geometry.seatArea(detailElements.get(seat.svgId()));
+                contained(shape, canvas, seat.svgId(), "SEAT_OUTSIDE_VIEW_BOX");
+                containedSeat(shape, zoneFill, joinedZone, seat, zone.svgId());
+                seats.add(new SeatShape(seat.svgId(),shape,shape.getBounds2D()));
+            }
         }
         seats.sort(Comparator.comparingDouble(s -> s.bounds().getMinX()));
         List<SeatShape> active=new ArrayList<>();
@@ -152,6 +195,35 @@ public class VenueSvgProcessor {
         return new Bundle(overviewSvg,new ParsedLayout(2,detailSvg,box,parsed.zones()),markers(baseElements,"GATE__"),areas,Map.copyOf(mappings));
     }
     private record SeatShape(String id, Area shape, Rectangle2D bounds) {}
+    private static void containedSeat(Area shape, Area zone, Area joinedZone, ParsedSeat seat, String zoneId) {
+        Area outside = new Area(shape);
+        outside.subtract(zone);
+        if (outside.isEmpty()) return;
+        double outsideArea = SeatLayoutAreaMeasure.area(outside);
+        // Giới hạn theo cả diện tích tuyệt đối lẫn tỷ lệ để ghế nhỏ không bị bỏ qua lỗi lớn.
+        double tolerance = Math.min(SEAT_ZONE_OUTSIDE_AREA_LIMIT,
+                SeatLayoutAreaMeasure.area(shape) * SEAT_ZONE_OUTSIDE_RATIO_LIMIT);
+        boolean centerInside = joinedZone.contains(seat.x().doubleValue(), seat.y().doubleValue());
+        if (centerInside && outsideArea <= tolerance) return;
+        throw new DomainException(ErrorCode.INVALID_SEAT_LAYOUT, "Sơ đồ sân không hợp lệ.", Map.of("issues", List.of(Map.of(
+                "reason", "SEAT_OUTSIDE_ZONE", "layer_id", seat.svgId(), "zone_id", zoneId,
+                "intersection_area", outsideArea, "tolerance", tolerance,
+                "message", centerInside
+                        ? "Phần ghế ngoài zone vượt sai số cho phép (tối đa 0,025 đơn vị SVG² và 1% diện tích ghế)."
+                        : "Tâm ghế phải nằm trong vùng zone hợp nhất; chỉ khép khe giữa các path với bán kính 0,005 đơn vị SVG."))));
+    }
+    private static Area joinZonePaths(Area zone) {
+        // Fill đã là hợp của mọi path/use sau transform, winding và mask.
+        // Giãn rồi co cùng bán kính để khép khe làm tròn, không dùng bounding box/convex hull.
+        BasicStroke edge = new BasicStroke((float) (2 * ZONE_PATH_JOIN_RADIUS),
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+        Area expanded = new Area(zone);
+        expanded.add(new Area(edge.createStrokedShape(zone)));
+        Area joined = new Area(expanded);
+        joined.subtract(new Area(edge.createStrokedShape(expanded)));
+        joined.add(zone);
+        return joined;
+    }
     private static Map<String,Element> overview(Document doc) {
         var root=doc.getDocumentElement(); var box=SeatLayoutSvgParser.readViewBox(root); origin(box);
         var ids=SeatLayoutSvgParser.validateElements(root); rejectDefinitionMarkers(ids); var geom=new SeatLayoutSvgGeometry(ids);

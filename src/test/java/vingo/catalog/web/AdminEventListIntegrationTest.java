@@ -26,19 +26,19 @@ class AdminEventListIntegrationTest extends IntegrationTest {
     void listAdminEvents_returnsAllStatusesAndSeparatePosters() {
         String prefix = uniquePrefix();
         var expected = new ArrayList<String>();
-        for (String status : List.of("DRAFT", "PUBLISHED", "ENDED", "CANCELLED")) {
+        for (String status : List.of("DRAFT", "PUBLISHED", "CANCELLED")) {
             expected.add(insertEvent(prefix + status, status, "FOOTBALL", CREATED).toString());
         }
         String response = getPage(Map.of("q", prefix, "limit", 100));
         assertThat(ids(response)).containsExactlyInAnyOrderElementsOf(expected);
         assertThat(JsonPath.<List<String>>read(response, "$.data[*].status"))
-                .containsExactlyInAnyOrder("DRAFT", "PUBLISHED", "ENDED", "CANCELLED");
+                .containsExactlyInAnyOrder("DRAFT", "PUBLISHED", "CANCELLED");
         assertThat(JsonPath.<List<String>>read(response, "$.data[*].poster_mobile_url"))
-                .hasSize(4).allMatch("https://example.com/mobile.jpg"::equals);
+                .hasSize(3).allMatch("https://example.com/mobile.jpg"::equals);
         assertThat(JsonPath.<List<String>>read(response, "$.data[*].poster_desktop_url"))
-                .hasSize(4).allMatch("https://example.com/desktop.jpg"::equals);
-        assertThat(JsonPath.<List<String>>read(response, "$.data[*].created_at")).hasSize(4);
-        assertThat(JsonPath.<List<String>>read(response, "$.data[*].updated_at")).hasSize(4);
+                .hasSize(3).allMatch("https://example.com/desktop.jpg"::equals);
+        assertThat(JsonPath.<List<String>>read(response, "$.data[*].created_at")).hasSize(3);
+        assertThat(JsonPath.<List<String>>read(response, "$.data[*].updated_at")).hasSize(3);
         assertThat(JsonPath.<String>read(response, "$.next_cursor")).isNull();
     }
 
@@ -58,8 +58,8 @@ class AdminEventListIntegrationTest extends IntegrationTest {
     @Test
     void listAdminEvents_treatsWildcardCharactersLiterally() {
         String prefix = uniquePrefix();
-        UUID expected = insertEvent(prefix + "%_ticket", "DRAFT", "OTHER", CREATED);
-        insertEvent(prefix + "ABticket", "DRAFT", "OTHER", CREATED);
+        UUID expected = insertEvent(prefix + "%_ticket", "DRAFT", "CONCERT", CREATED);
+        insertEvent(prefix + "ABticket", "DRAFT", "CONCERT", CREATED);
         assertThat(ids(getPage(Map.of("q", prefix + "%_")))).containsExactly(expected.toString());
     }
 
@@ -98,12 +98,12 @@ class AdminEventListIntegrationTest extends IntegrationTest {
         String prefix = uniquePrefix();
         var expected = new ArrayList<String>();
         for (int i = 0; i < 3; i++) {
-            expected.add(insertEvent(prefix + i, "DRAFT", "OTHER", CREATED.plusHours(i)).toString());
+            expected.add(insertEvent(prefix + i, "DRAFT", "CONCERT", CREATED.plusHours(i)).toString());
         }
         String first = getPage(Map.of("q", prefix, "limit", 2));
         String cursor = JsonPath.read(first, "$.next_cursor");
         assertThat(cursor).isNotBlank();
-        insertEvent(prefix + "inserted-between-pages", "DRAFT", "OTHER", CREATED.plusDays(1));
+        insertEvent(prefix + "inserted-between-pages", "DRAFT", "CONCERT", CREATED.plusDays(1));
         String second = getPage(Map.of("q", prefix, "limit", 2, "cursor", cursor));
         assertThat(ids(second)).hasSize(1);
         var actual = new ArrayList<>(ids(first));
@@ -116,7 +116,7 @@ class AdminEventListIntegrationTest extends IntegrationTest {
     void listAdminEvents_defaultsToTwentyAndReturnsEmptyPageWithNullCursor() {
         String prefix = uniquePrefix();
         for (int i = 0; i < 21; i++) {
-            insertEvent(prefix + i, "DRAFT", "OTHER", CREATED);
+            insertEvent(prefix + i, "DRAFT", "CONCERT", CREATED);
         }
         String response = getPage(Map.of("q", prefix));
         assertThat(ids(response)).hasSize(20);
@@ -156,16 +156,21 @@ class AdminEventListIntegrationTest extends IntegrationTest {
                 .exchange().expectStatus().isOk().expectBody(String.class).returnResult().getResponseBody();
     }
 
+    private UUID seatMapId;
+
     private UUID insertEvent(String title, String status, String category, OffsetDateTime createdAt) {
+        if (seatMapId == null) {
+            seatMapId = catalog.event().layoutId();
+        }
         return jdbc.sql("""
-                INSERT INTO event (title, status, category, poster_mobile_url, poster_desktop_url,
-                                   created_at, updated_at, published_at)
-                VALUES (:title, :status, :category, 'https://example.com/mobile.jpg',
-                        'https://example.com/desktop.jpg', :createdAt, :createdAt,
-                        CASE WHEN :status = 'PUBLISHED' THEN :createdAt ELSE NULL END)
+                INSERT INTO event (seat_map_id, title, status, category, poster_mobile_url, poster_desktop_url,
+                                   created_at, updated_at)
+                VALUES (:seatMapId, :title, CAST(:status AS event_status), :category,
+                        'https://example.com/mobile.jpg', 'https://example.com/desktop.jpg',
+                        :createdAt, :createdAt)
                 RETURNING id
-                """).param("title", title).param("status", status).param("category", category)
-                .param("createdAt", createdAt).query(UUID.class).single();
+                """).param("seatMapId", seatMapId).param("title", title).param("status", status)
+                .param("category", category).param("createdAt", createdAt).query(UUID.class).single();
     }
 
     private static List<String> ids(String body) {

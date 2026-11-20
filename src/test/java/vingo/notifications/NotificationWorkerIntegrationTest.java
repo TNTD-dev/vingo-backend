@@ -63,7 +63,7 @@ class NotificationWorkerIntegrationTest extends vingo.support.IntegrationTest {
         UUID id = new TransactionTemplate(manager).execute(status -> notifications.enqueueTickets(
                 "buyer@example.test", java.util.List.of(NotificationsIntegrationTest.TICKET)));
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertThat(jdbc.sql("SELECT status FROM outbox_message WHERE id=:id").param("id", id)
+                assertThat(jdbc.sql("SELECT status FROM notification_outbox WHERE id=:id").param("id", id)
                         .query(String.class).single()).isEqualTo("SENT"));
         // DB dùng chung cho cả lượt test: outbox có thể còn tin của test khác, worker gửi luôn các tin đó.
         // Chỉ kiểm tin của test này được gửi đúng một lần.

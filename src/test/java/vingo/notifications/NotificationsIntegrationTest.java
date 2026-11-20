@@ -58,12 +58,12 @@ class NotificationsIntegrationTest extends IntegrationTest {
         tx=new TransactionTemplate(manager);
         new ResourceDatabasePopulator(new ClassPathResource("vingo/reporting-fixture.sql")).execute(dataSource);
         // Chỉ DB Testcontainers của class này, không DB ứng dụng.
-        jdbc.sql("DELETE FROM outbox_message").update();
+        jdbc.sql("DELETE FROM notification_outbox").update();
         sender.calls.set(0); sender.payloads.clear(); sender.ids.clear(); sender.failure=null;
     }
     @Test
     void schema_containsOnlyTeamColumns_andNoReportingViews() {
-        assertThat(jdbc.sql("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_message'")
+        assertThat(jdbc.sql("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='notification_outbox'")
                 .query(String.class).list()).containsExactlyInAnyOrder("id","channel","recipient","template","payload","status",
                         "attempts","send_after","last_error","created_at","sent_at");
         assertThat(jdbc.sql("SELECT count(*) FROM pg_views WHERE schemaname='public' AND viewname LIKE 'reporting_%'")
@@ -74,7 +74,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         assertThatThrownBy(() -> notifications.enqueueTickets("buyer@example.test",List.of(TICKET)))
                 .isInstanceOf(IllegalTransactionStateException.class);
         tx.executeWithoutResult(status -> { notifications.enqueueTickets("buyer@example.test",List.of(TICKET)); status.setRollbackOnly(); });
-        assertThat(jdbc.sql("SELECT count(*) FROM outbox_message").query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox").query(Integer.class).single()).isZero();
         assertThat(sender.calls.get()).isZero();
     }
     @Test
@@ -82,7 +82,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID first=enqueue(),second=enqueue();
         assertThat(first.version()).isEqualTo(7);
         assertThat(second).isNotEqualTo(first);
-        assertThat(jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",first).query(String.class).single())
+        assertThat(jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",first).query(String.class).single())
                 .contains("ticket_ids").doesNotContain("ciphertext","version","expiry","lease","hash","dedup");
     }
     @Test
@@ -105,7 +105,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue(); sender.failure=new DeliveryException(true,"EMAIL_HTTP_429",7200);
         dispatcher.dispatchOne();
         assertThat(attempts(id)).isEqualTo(1);
-        assertThat(jdbc.sql("SELECT send_after>=now()+interval '7195 seconds' FROM outbox_message WHERE id=:id")
+        assertThat(jdbc.sql("SELECT send_after>=now()+interval '7195 seconds' FROM notification_outbox WHERE id=:id")
                 .param("id",id).query(Boolean.class).single()).isTrue();
         assertThat(dispatcher.dispatchOne()).isFalse();
         sender.failure=new DeliveryException(true,"EMAIL_HTTP_503",0);
@@ -125,7 +125,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(attempts(id)).isEqualTo(1);
         String prepared=content(id);
-        assertThat(jdbc.sql("SELECT send_after>=now()+interval '55 seconds' FROM outbox_message WHERE id=:id")
+        assertThat(jdbc.sql("SELECT send_after>=now()+interval '55 seconds' FROM notification_outbox WHERE id=:id")
                 .param("id",id).query(Boolean.class).single()).isTrue();
         assertThat(worker.dispatchOne()).isFalse();
         sender.failure=null;
@@ -140,7 +140,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
     @Test
     void permanentError_keepsPayload_andNoInventedExpiryDropsDelayedMail() {
         UUID id=enqueue(); String original=content(id);
-        jdbc.sql("UPDATE outbox_message SET created_at=now()-interval '3 days' WHERE id=:id").param("id",id).update();
+        jdbc.sql("UPDATE notification_outbox SET created_at=now()-interval '3 days' WHERE id=:id").param("id",id).update();
         sender.failure=new DeliveryException(false,"EMAIL_HTTP_422",0); dispatcher.dispatchOne();
         assertThat(state(id)).isEqualTo("FAILED"); assertThat(content(id)).isEqualTo(original);
         assertThat(sender.calls.get()).isEqualTo(1);
@@ -181,7 +181,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
     }
     @Test
     void invalidPayloadOrUnavailableTicket_isRetainedForReview() {
-        UUID id=enqueue(); jdbc.sql("UPDATE outbox_message SET payload='{}'::jsonb WHERE id=:id").param("id",id).update();
+        UUID id=enqueue(); jdbc.sql("UPDATE notification_outbox SET payload='{}'::jsonb WHERE id=:id").param("id",id).update();
         dispatcher.dispatchOne(); assertThat(state(id)).isEqualTo("PENDING"); assertThat(attempts(id)).isZero();
         UUID missing=tx.execute(status -> notifications.enqueueTickets("buyer@example.test",List.of(UUID.randomUUID())));
         dispatcher.dispatchOne(); assertThat(state(missing)).isEqualTo("PENDING"); assertThat(content(missing)).contains("ticket_ids");
@@ -222,7 +222,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         String original = content(id);
         sender.failure = new DeliveryException(true, "EMAIL_HTTP_429", 172800);
         dispatcher.dispatchOne();
-        assertThat(jdbc.sql("SELECT send_after>=now()+interval '172795 seconds' FROM outbox_message WHERE id=:id")
+        assertThat(jdbc.sql("SELECT send_after>=now()+interval '172795 seconds' FROM notification_outbox WHERE id=:id")
                 .param("id", id).query(Boolean.class).single()).isTrue();
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(content(id)).isEqualTo(original);
@@ -236,7 +236,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         dispatcher.dispatchOne();
         assertThat(state(id)).isEqualTo("FAILED");
         assertThat(content(id)).isEqualTo(original);
-        assertThat(jdbc.sql("SELECT last_error FROM outbox_message WHERE id=:id")
+        assertThat(jdbc.sql("SELECT last_error FROM notification_outbox WHERE id=:id")
                 .param("id", id).query(String.class).single()).isEqualTo("EMAIL_IDEMPOTENCY_CONFLICT");
         due(id);
         sender.failure = null;
@@ -255,7 +255,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
     void otp_isNotStored_untilHashOnlyDeliveryIsApproved() {
         assertThatThrownBy(() -> tx.execute(status -> notifications.enqueueOtp("test","buyer@example.test","654321",
                 OffsetDateTime.ofInstant(clock.instant().plusSeconds(300),ZoneOffset.UTC)))).isInstanceOf(IllegalStateException.class);
-        assertThat(jdbc.sql("SELECT count(*) FROM outbox_message").query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox").query(Integer.class).single()).isZero();
     }
     /** Hai facade dùng lỗi chung cho recipient; mọi dạng danh sách vé sai đều không ghi/gửi thư. */
     @Test
@@ -270,7 +270,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         for(List<UUID> ids:invalidIds) {
             assertValidation(() -> notifications.enqueueTickets("buyer@example.test",ids));
         }
-        assertThat(jdbc.sql("SELECT count(*) FROM outbox_message").query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox").query(Integer.class).single()).isZero();
         assertThat(sender.calls.get()).isZero();
     }
     /** OTP sai hình dạng/thời hạn là lỗi đầu vào, tách khỏi nhánh thiết kế OTP chưa hỗ trợ. */
@@ -283,7 +283,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         for(OffsetDateTime expiresAt:new OffsetDateTime[]{null,now.minusSeconds(1),now}) {
             assertValidation(() -> notifications.enqueueOtp("test","buyer@example.test","654321",expiresAt));
         }
-        assertThat(jdbc.sql("SELECT count(*) FROM outbox_message").query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox").query(Integer.class).single()).isZero();
         assertThat(sender.calls.get()).isZero();
     }
     /** Gọi service qua transaction thực và kiểm cả loại lỗi, code cùng HTTP status đã định nghĩa. */
@@ -301,7 +301,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         EmailSender crashing=(key,payload) -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
-            assertThat(jdbc.sql("SELECT jsonb_exists(payload,'delivery_started_at') FROM outbox_message WHERE id=:id")
+            assertThat(jdbc.sql("SELECT jsonb_exists(payload,'delivery_started_at') FROM notification_outbox WHERE id=:id")
                     .param("id",key).query(Boolean.class).single()).isTrue();
             sender.send(key,payload);
             throw new SimulatedWorkerCrash();
@@ -310,14 +310,14 @@ class NotificationsIntegrationTest extends IntegrationTest {
         assertThatThrownBy(firstWorker::dispatchOne).isExactlyInstanceOf(SimulatedWorkerCrash.class);
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(attempts(id)).isZero();
-        String started=jdbc.sql("SELECT payload->>'delivery_started_at' FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single();
+        String started=jdbc.sql("SELECT payload->>'delivery_started_at' FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single();
         var restartedReader=new OutboxRepository(jdbc,new PayloadCipher(new NotificationSettings("","","","")),renderer);
         var restartedWorker=new OutboxDispatcher(restartedReader,sender,delivery,new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         due(id); restartedWorker.dispatchOne();
         assertThat(sender.ids).containsExactly(id,id);
         assertThat(sender.payloads).hasSize(2);
         assertThat(sender.payloads.get(0)).isEqualTo(sender.payloads.get(1));
-        assertThat(jdbc.sql("SELECT payload->>'delivery_started_at' FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(started);
+        assertThat(jdbc.sql("SELECT payload->>'delivery_started_at' FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(started);
         assertThat(state(id)).isEqualTo("SENT");
         assertThat(content(id)).contains("ticket_ids");
     }
@@ -366,7 +366,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         var pending=tx.execute(status -> outbox.claim().orElseThrow());
         var first=delivery.prepare(pending,outbox.decode(pending)).orElseThrow();
-        String stored=jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single();
+        String stored=jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single();
         var retry=tx.execute(status -> {
             jdbc.sql("UPDATE event SET title='Changed after first send' WHERE id='0197f100-0000-7000-8000-000000000201'").update();
             var restarted=new OutboxRepository(jdbc,new PayloadCipher(new NotificationSettings("","","","")),renderer);
@@ -377,7 +377,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
         assertThat(pending.id()).isEqualTo(id);
         assertThat(retry).isEqualTo(first);
         assertThat(retry.sender()).isNotBlank().isNotEqualTo("changed@example.test");
-        assertThat(jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(stored);
+        assertThat(jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(stored);
         assertThat(content(id)).contains("ticket_ids");
     }
     /** Stale claim không được chốt nội dung hoặc gửi HTTP sau khi worker khác nhận row. */
@@ -402,17 +402,17 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         sender.failure=new DeliveryException(true,"EMAIL_TRANSPORT_ERROR",0);
         dispatcher.dispatchOne();
-        jdbc.sql("UPDATE outbox_message SET payload=jsonb_set(payload,'{delivery_started_at}',to_jsonb(now()-make_interval(secs=>:age))) WHERE id=:id")
+        jdbc.sql("UPDATE notification_outbox SET payload=jsonb_set(payload,'{delivery_started_at}',to_jsonb(now()-make_interval(secs=>:age))) WHERE id=:id")
                 .param("id",id).param("age",age).update();
-        String before=jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single();
+        String before=jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single();
         sender.failure=null;
         due(id);
         dispatcher.dispatchOne();
         assertThat(state(id)).isEqualTo("FAILED");
         assertThat(sender.calls.get()).isEqualTo(previousCalls+1);
-        assertThat(jdbc.sql("SELECT last_error FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single())
+        assertThat(jdbc.sql("SELECT last_error FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single())
                 .isEqualTo("EMAIL_RECONCILIATION_REQUIRED");
-        assertThat(jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(before);
+        assertThat(jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(before);
         }
     }
     /** Lỗi 401 chắc chắn từ chối không tạo hạn 24 giờ cho thư chờ sửa cấu hình. */
@@ -421,8 +421,8 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         sender.failure=new DeliveryException(false,"EMAIL_HTTP_401",0);
         dispatcher.dispatchOne();
-        assertThat(jdbc.sql("SELECT jsonb_exists(payload,'delivery_started_at') FROM outbox_message WHERE id=:id").param("id",id).query(Boolean.class).single()).isFalse();
-        jdbc.sql("UPDATE outbox_message SET created_at=now()-interval '3 days' WHERE id=:id").param("id",id).update();
+        assertThat(jdbc.sql("SELECT jsonb_exists(payload,'delivery_started_at') FROM notification_outbox WHERE id=:id").param("id",id).query(Boolean.class).single()).isFalse();
+        jdbc.sql("UPDATE notification_outbox SET created_at=now()-interval '3 days' WHERE id=:id").param("id",id).update();
         sender.failure=null;
         due(id);
         dispatcher.dispatchOne();
@@ -434,11 +434,11 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         sender.failure=new DeliveryException(true,"EMAIL_TRANSPORT_ERROR",0);
         dispatcher.dispatchOne();
-        String started=jdbc.sql("SELECT payload->>'delivery_started_at' FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single();
+        String started=jdbc.sql("SELECT payload->>'delivery_started_at' FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single();
         sender.failure=new DeliveryException(false,"EMAIL_HTTP_401",0);
         due(id);
         dispatcher.dispatchOne();
-        assertThat(jdbc.sql("SELECT payload->>'delivery_started_at' FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(started);
+        assertThat(jdbc.sql("SELECT payload->>'delivery_started_at' FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(started);
     }
     /** Phản hồi provider hỏng phải dừng sau năm lỗi và giữ nguyên snapshot cho đối soát. */
     @Test
@@ -446,12 +446,12 @@ class NotificationsIntegrationTest extends IntegrationTest {
         UUID id=enqueue();
         sender.failure=new DeliveryException(true,"INVALID_PROVIDER_RESPONSE",0);
         dispatcher.dispatchOne();
-        String frozen=jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single();
+        String frozen=jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single();
         for(int attempt=1;attempt<5;attempt++) { due(id); dispatcher.dispatchOne(); }
         assertThat(state(id)).isEqualTo("FAILED");
         assertThat(attempts(id)).isEqualTo(5);
         assertThat(sender.calls.get()).isEqualTo(5);
-        assertThat(jdbc.sql("SELECT payload::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(frozen);
+        assertThat(jdbc.sql("SELECT payload::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single()).isEqualTo(frozen);
         due(id);
         assertThat(dispatcher.dispatchOne()).isFalse();
     }
@@ -488,7 +488,7 @@ class NotificationsIntegrationTest extends IntegrationTest {
     void startSend_renewsExpiredClaim_andFencesPreviousCompletion() {
         UUID id=enqueue();
         var original=delivery.claim().orElseThrow();
-        var expiredAt=jdbc.sql("UPDATE outbox_message SET send_after=now()-interval '1 second' WHERE id=:id RETURNING send_after")
+        var expiredAt=jdbc.sql("UPDATE notification_outbox SET send_after=now()-interval '1 second' WHERE id=:id RETURNING send_after")
                 .param("id",id).query(OffsetDateTime.class).single();
         var expired=new OutboxRepository.Pending(original.id(),original.recipient(),original.template(),original.payload(),original.attempts(),expiredAt);
         var renewed=delivery.startSend(expired).orElseThrow();
@@ -500,15 +500,15 @@ class NotificationsIntegrationTest extends IntegrationTest {
     private UUID legacy() {
         var json=JsonMapper.builder().build();
         var payload=new EmailPayload("buyer@example.test","Legacy ticket","<p>Existing mail</p>",List.of());
-        return jdbc.sql("INSERT INTO outbox_message(channel,recipient,template,payload) VALUES ('EMAIL','legacy-recipient','TICKETS',CAST(:payload AS jsonb)) RETURNING id")
+        return jdbc.sql("INSERT INTO notification_outbox(channel,recipient,template,payload) VALUES ('EMAIL','legacy-recipient','TICKETS',CAST(:payload AS jsonb)) RETURNING id")
                 .param("payload",json.writeValueAsString(Map.of("version",1,"ciphertext",LegacyPayloadFixture.encrypt(json.writeValueAsString(payload)))))
                 .query(UUID.class).single();
     }
     /** So sánh dữ liệu gốc không mất; snapshot bổ sung được kiểm riêng về tính bất biến. */
-    private String content(UUID id) { return jdbc.sql("SELECT recipient || (payload-'delivery'-'delivery_sender'-'delivery_started_at')::text FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single(); }
-    private String state(UUID id) { return jdbc.sql("SELECT status FROM outbox_message WHERE id=:id").param("id",id).query(String.class).single(); }
-    private int attempts(UUID id) { return jdbc.sql("SELECT attempts FROM outbox_message WHERE id=:id").param("id",id).query(Integer.class).single(); }
-    private void due(UUID id) { jdbc.sql("UPDATE outbox_message SET send_after=now()-interval '1 second' WHERE id=:id").param("id",id).update(); }
+    private String content(UUID id) { return jdbc.sql("SELECT recipient || (payload-'delivery'-'delivery_sender'-'delivery_started_at')::text FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single(); }
+    private String state(UUID id) { return jdbc.sql("SELECT status FROM notification_outbox WHERE id=:id").param("id",id).query(String.class).single(); }
+    private int attempts(UUID id) { return jdbc.sql("SELECT attempts FROM notification_outbox WHERE id=:id").param("id",id).query(Integer.class).single(); }
+    private void due(UUID id) { jdbc.sql("UPDATE notification_outbox SET send_after=now()-interval '1 second' WHERE id=:id").param("id",id).update(); }
     @TestConfiguration(proxyBeanMethods=false)
     static class MailTestConfig { @Bean @Primary TestSender testSender() { return new TestSender(); } }
     static class TestSender implements EmailSender {

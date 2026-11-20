@@ -71,6 +71,71 @@ class VenueSvgProcessorTest {
         String detail=svg("<rect id='ZONE__A__SEATED' width='20' height='20'/><g id='CONTENT__A'><circle id='SEAT__A__R__1' cx='19.9' cy='5' r='1'/><path id='PITCH_SIDE__A' d='M0 0H20'/></g>");
         reason(()->processor.combine(base(),List.of(detail),Map.of()),"SEAT_OUTSIDE_ZONE");
     }
+    @Test void acceptsSmallSeatOverflowWithoutChangingSeatCoordinatesOrCount() {
+        var bundle = processor.combine(base(), List.of(seatedDetail("19.02", "1")), Map.of());
+        assertThat(bundle.layout().zones().getFirst().seats()).singleElement()
+                .satisfies(seat -> assertThat(seat.x()).isEqualByComparingTo("19.02"));
+    }
+    @Test void includesEveryPathOfACompoundZone() {
+        String detail = svg("<g id='ZONE__A__SEATED'>"
+                + "<path d='M0 0H8V20H0Z'/><path d='M12 0H20V20H12Z'/></g>"
+                + "<g id='CONTENT__A'><circle id='SEAT__A__R__1' cx='15' cy='10' r='1'/>"
+                + "<path id='PITCH_SIDE__A' d='M0 0H20'/></g>");
+        assertThat(processor.combine(base(), List.of(detail), Map.of()).layout().zones().getFirst().seats())
+                .singleElement().satisfies(seat -> assertThat(seat.x()).isEqualByComparingTo("15"));
+    }
+    @Test void acceptsFootballSeatAtRoundingSeamBetweenZonePaths() {
+        String detail = svg("<g id='ZONE__A-T5-Z02__SEATED'>"
+                + "<path d='M897.295 1782.58L887.437 1780.03L874.439 1776.66L868.68 1775.05"
+                + "L850.442 1769.96L850.14 1769.87L831.797 1764.39L826.644 1762.86L813.557 1758.7"
+                + "L803.047 1755.36L797.002 1753.29L878.486 1551.93L953.625 1582.33L897.295 1782.58Z'/>"
+                + "<path d='M940.434 1679.46L910.535 1785.76L906.155 1784.72L898.736 1782.95"
+                + "L897.295 1782.58L927.34 1675.78L940.434 1679.46Z'/></g>"
+                + "<g id='CONTENT__A-T5-Z02'><circle id='SEAT__A-T5-Z02__R28__23' cx='922.917' cy='1691.5' r='1.75'/>"
+                + "<path id='PITCH_SIDE__A-T5-Z02' d='M897.295 1782.58L953.625 1582.33'/></g>")
+                .replace("100 100", "2500 2000");
+        var bundle = processor.combine(base().replace("100 100", "2500 2000"), List.of(detail), Map.of());
+        assertThat(bundle.layout().zones().getFirst().seats()).singleElement().satisfies(seat -> {
+            assertThat(seat.svgId()).isEqualTo("SEAT__A-T5-Z02__R28__23");
+            assertThat(seat.x()).isEqualByComparingTo("922.917");
+            assertThat(seat.y()).isEqualByComparingTo("1691.5");
+        });
+    }
+    @Test void preservesZoneCutoutWiderThanRoundingJoinEvenBelowAreaLimit() {
+        String detail = svg("<g id='ZONE__A__SEATED'>"
+                + "<path d='M0 0H9.994V20H0Z'/><path d='M10.006 0H20V20H10.006Z'/></g>"
+                + "<g id='CONTENT__A'><circle id='SEAT__A__R__1' cx='10' cy='10' r='1'/>"
+                + "<path id='PITCH_SIDE__A' d='M0 0H20'/></g>");
+        DomainException ex = catchThrowableOfType(DomainException.class,
+                () -> processor.combine(base(), List.of(detail), Map.of()));
+        assertThat(ex).isNotNull();
+        var issue = VenueSvgProcessor.issues(ex).getFirst();
+        assertThat(issue).containsEntry("reason", "SEAT_OUTSIDE_ZONE");
+        assertThat(issue.get("message").toString()).contains("Tâm ghế");
+        assertThat(((Number) issue.get("intersection_area")).doubleValue())
+                .isLessThan(((Number) issue.get("tolerance")).doubleValue());
+    }
+    @Test void rejectsSeatOverflowAboveAbsoluteLimitEvenWhenBelowOnePercent() {
+        assertSeatOverflow(seatedDetail("10.04", "10"));
+    }
+    @Test void rejectsSeatOverflowAboveRelativeLimitEvenWhenBelowAbsoluteLimit() {
+        assertSeatOverflow(seatedDetail("19.92", "0.1"));
+    }
+    private void assertSeatOverflow(String detail) {
+        DomainException ex = catchThrowableOfType(DomainException.class,
+                () -> processor.combine(base(), List.of(detail), Map.of()));
+        assertThat(ex).isNotNull();
+        var issue = VenueSvgProcessor.issues(ex).getFirst();
+        assertThat(issue).containsEntry("reason", "SEAT_OUTSIDE_ZONE")
+                .containsEntry("layer_id", "SEAT__A__R__1").containsEntry("zone_id", "ZONE__A__SEATED");
+        assertThat(((Number) issue.get("intersection_area")).doubleValue())
+                .isGreaterThan(((Number) issue.get("tolerance")).doubleValue());
+    }
+    private static String seatedDetail(String x, String radius) {
+        return svg("<rect id='ZONE__A__SEATED' width='20' height='20'/>"
+                + "<g id='CONTENT__A'><circle id='SEAT__A__R__1' cx='" + x + "' cy='10' r='" + radius + "'/>"
+                + "<path id='PITCH_SIDE__A' d='M0 0H20'/></g>");
+    }
     @Test void inspectsActualThienTruongAndMeasuresSplitInsteadOfAssumingValidity() throws Exception {
         String svg=Files.readString(Path.of("sources/LAYOUT__THIEN-TRUONG.svg"));
         assertThat(processor.inspect(svg.getBytes(StandardCharsets.UTF_8)).role()).isEqualTo("COMBINED_V1");

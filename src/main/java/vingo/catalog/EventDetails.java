@@ -19,17 +19,27 @@ public record EventDetails(
             EventService.CreateEvent data
     ) {}
 
+    public record SkuPriceRow(
+            UUID id,
+            UUID skuId,
+            long price,
+            OffsetDateTime effectiveFrom,
+            UUID createdBy,
+            String reason,
+            OffsetDateTime createdAt
+    ) {}
+
     public record Tier(
             UUID id,
             String name,
             long price,
-            String color
+            String color,
+            List<SkuPriceRow> prices
     ) {}
 
     public record VenueInfo(
             UUID id,
             String name,
-            String type,
             String address,
             String city
     ) {}
@@ -38,7 +48,8 @@ public record EventDetails(
             UUID id,
             UUID eventId,
             UUID seatLayoutId,
-            String storedStatus,
+            String eventStatus,
+            OffsetDateTime cancelledAt,
             OffsetDateTime startsAt,
             OffsetDateTime endsAt,
             OffsetDateTime saleOpensAt,

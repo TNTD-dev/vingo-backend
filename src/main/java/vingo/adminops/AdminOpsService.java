@@ -102,7 +102,7 @@ public class AdminOpsService {
                 ticketing.issueForOrder(orderId);
                 booking.publishOrderPaid(orderId);
             }
-            auditLogs.insert(adminId, "RESOLVE_REVIEW", "order", orderId, request.getReason(), now,
+            auditLogs.insert(adminId, "RESOLVE_REVIEW", "ticket_order", orderId, request.getReason(), now,
                     Map.of("status", "NEEDS_REVIEW"), Map.of("status", order.getStatus().getValue()));
             logAction("RESOLVE_REVIEW", LogKeys.ORDER_ID, orderId, adminId);
             return order;
@@ -121,16 +121,17 @@ public class AdminOpsService {
         return ticket;
     }
 
-    /** Cấp lại QR cho vé ISSUED, audit chỉ lưu trạng thái để không lộ token. */
+    /** Cấp lại QR cho vé ISSUED, audit lưu phiên bản để không lộ token. */
     @Transactional
     public Ticket reissueTicketQr(UUID ticketId, CancelEventRequest request) {
         UUID adminId = requireAdmin();
         OffsetDateTime now = now();
-        Ticket ticket = ticketing.reissueTicketQr(ticketId);
+        var result = ticketing.reissueTicketQr(ticketId);
         auditLogs.insert(adminId, "REISSUE_QR", "ticket", ticketId, request.getReason(), now,
-                Map.of("status", "ISSUED"), Map.of("status", "ISSUED"));
+                Map.of("status", "ISSUED", "qr_version", result.version() - 1),
+                Map.of("status", "ISSUED", "qr_version", result.version()));
         logAction("REISSUE_QR", "ticket_id", ticketId, adminId);
-        return ticket;
+        return result.ticket();
     }
 
     /** Ghi outbox cho một vé ISSUED và audit bằng outbox_id, không áp rate limit của buyer. */
@@ -150,6 +151,16 @@ public class AdminOpsService {
     /** Liệt kê audit theo bộ lọc và keyset at/id giảm dần, chỉ dành cho admin. */
     @Transactional(readOnly = true)
     public ListAuditLogs200Response listAuditLogs(String entity, UUID entityId, String cursor, Integer limit) {
+        return listAuditLogs(entity,entityId,cursor,limit,null,null,null,null,null,false);
+    }
+
+    @Transactional(readOnly = true)
+    public ListAuditLogs200Response listAuditLogs(String entity, UUID entityId, String cursor, Integer limit,
+            UUID actor, String action, OffsetDateTime from, OffsetDateTime to, String outcome, Boolean activityOnly) {
+        if(from!=null && to!=null && !from.isBefore(to))
+            throw new DomainException(ErrorCode.VALIDATION_ERROR,"from phải trước to");
+        if(action!=null && action.length()>100 || outcome!=null && !List.of("STARTED","SUCCEEDED","FAILED").contains(outcome))
+            throw new DomainException(ErrorCode.VALIDATION_ERROR,"Bộ lọc audit không hợp lệ");
         requireAdmin();
         int size = limit == null ? 20 : limit;
         if (size < 1 || size > 100) {
@@ -157,7 +168,7 @@ public class AdminOpsService {
         }
         Cursor after = cursor == null ? null : decodeCursor(cursor);
         var logs = auditLogs.find(entity, entityId, after == null ? null : after.at(),
-                after == null ? null : after.id(), size + 1);
+                after == null ? null : after.id(), size + 1, actor, action, from, to, outcome, Boolean.TRUE.equals(activityOnly));
         var page = logs.subList(0, Math.min(size, logs.size()));
         var result = new ListAuditLogs200Response().data(page);
         if (logs.size() > size) {

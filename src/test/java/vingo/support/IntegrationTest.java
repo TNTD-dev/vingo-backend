@@ -99,8 +99,8 @@ public abstract class IntegrationTest {
     /** Tạo user trong DB và trả access token hợp lệ của user đó. */
     protected String tokenFor(Role role) {
         UUID userId = jdbc.sql("""
-                        INSERT INTO users (email, full_name, password_hash, role, status, phone, phone_verified_at)
-                        VALUES (:email, 'Test User', 'x', :role, 'ACTIVE', :phone, :now) RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone, phone_verified_at)
+                        VALUES (:email, 'Test User', 'x', :role::user_role, :now, :phone, :now) RETURNING id
                         """)
                 .param("email", UUID.randomUUID() + "@test.vingo")
                 .param("role", role.name())

@@ -58,4 +58,21 @@ public enum ShowtimeStatus {
         }
         return FINISHED;
     }
+
+    /**
+     * Tính trạng thái suất theo schema v2 (không lưu {@code showtime.status}).
+     * {@code CANCELLED} nếu {@code cancelledAt != null} hoặc {@code eventStatus == CANCELLED};
+     * {@code DRAFT} nếu {@code eventStatus == DRAFT}; còn lại tính theo các mốc thời gian.
+     */
+    public static ShowtimeStatus of(String eventStatus, OffsetDateTime cancelledAt,
+            OffsetDateTime saleOpensAt, OffsetDateTime saleClosesAt,
+            OffsetDateTime endsAt, OffsetDateTime now) {
+        if (cancelledAt != null || "CANCELLED".equals(eventStatus)) {
+            return CANCELLED;
+        }
+        if ("DRAFT".equals(eventStatus)) {
+            return DRAFT;
+        }
+        return of("SCHEDULED", saleOpensAt, saleClosesAt, endsAt, now);
+    }
 }

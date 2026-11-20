@@ -47,17 +47,25 @@ public class TicketEmailRenderer {
             throw new PayloadUnavailableException();
         }
         var rows=jdbc.sql("""
-                SELECT t.code,t.status,o.code AS order_code,e.title,s.starts_at,v.name AS venue,
-                    COALESCE(i.zone_name_snapshot,z.name) AS zone,
+                SELECT t.code, t.status::text AS status, o.code AS order_code, e.title, s.starts_at, v.name AS venue,
+                    COALESCE(ez.display_name, z.name) AS zone,
                     CASE WHEN se.id IS NULL THEN 'Khu đứng' ELSE se.row_label || se.number::text END AS seat,
-                    COALESCE(i.tier_name_snapshot,pt.name) AS tier
-                FROM ticket t JOIN order_item i ON i.id=t.order_item_id JOIN orders o ON o.id=i.order_id
-                JOIN showtime s ON s.id=t.showtime_id JOIN event e ON e.id=s.event_id
-                JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
-                JOIN zone z ON z.id=t.zone_id JOIN price_tier pt ON pt.id=i.price_tier_id
-                LEFT JOIN seat se ON se.id=t.seat_id
+                    sk.name AS tier
+                FROM ticket t
+                JOIN ticket_order o ON o.id = t.order_id
+                JOIN showtime s ON s.id = t.showtime_id
+                JOIN event e ON e.id = s.event_id
+                JOIN seat_map m ON m.id = s.seat_map_id
+                JOIN venue v ON v.id = m.venue_id
+                LEFT JOIN seat se ON se.id = t.seat_id
+                JOIN zone z ON z.id = COALESCE(t.zone_id, se.zone_id)
+                LEFT JOIN order_seat os ON os.order_id = t.order_id AND os.seat_id = t.seat_id
+                LEFT JOIN order_standing ost ON ost.order_id = t.order_id AND ost.zone_id = t.zone_id
+                JOIN sku_price sp ON sp.id = COALESCE(os.sku_price_id, ost.sku_price_id)
+                JOIN sku sk ON sk.id = sp.sku_id
+                LEFT JOIN event_zone ez ON ez.event_id = e.id AND ez.zone_id = z.id
                 WHERE t.id IN (:ids) AND t.status IN ('ISSUED','USED') AND o.status='PAID'
-                ORDER BY s.starts_at,t.code
+                ORDER BY s.starts_at, t.code
                 """).param("ids",ticketIds).query((rs,row) -> new Details(rs.getString("code"),rs.getString("status"),
                         rs.getString("order_code"),rs.getString("title"),rs.getObject("starts_at",OffsetDateTime.class),
                         rs.getString("venue"),rs.getString("zone"),rs.getString("seat"),rs.getString("tier"))).list();

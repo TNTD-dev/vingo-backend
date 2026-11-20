@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventDetail;
 import vingo.api.model.EventStatus;
@@ -67,10 +66,10 @@ class SearchApiMapper {
         }
         String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {
-            summary.city(CityCode.fromValue(r.city())).cityName(cityName);
+            summary.city(r.city()).cityName(cityName);
         } else if (r.city() != null) {
             // Mã chưa có trong danh sách tạm: không ép vào enum, trả nguyên giá trị làm tên hiển thị.
-            summary.cityName(r.city());
+            summary.city(r.city()).cityName(r.city());
         }
         return summary;
     }
@@ -82,13 +81,15 @@ class SearchApiMapper {
                 .description(r.description())
                 .category(EventCategory.fromValue(r.category()))
                 .status(EventStatus.fromValue(r.status()))
-                .attributes(r.attributes())
+                .homeTeam(r.homeTeam())
+                .awayTeam(r.awayTeam())
+                .league(r.league())
+                .round(r.round())
                 .maxTicketsPerOrder(r.maxTicketsPerOrder())
                 .priceTiers(r.priceTiers().stream().map(this::toPriceTier).toList())
                 .showtimes(r.showtimes().stream().map(this::toShowtime).toList());
         URI poster = r.posterUrl() == null ? null : parsePoster(r.posterUrl(), r.id());
         if (poster != null) {
-            // Catalog chỉ lưu một poster_url: dùng cho cả bản mobile và desktop.
             detail.posterMobileUrl(poster).posterDesktopUrl(poster);
         }
         r.venue().ifPresent(v -> detail.venue(toVenue(v)));
@@ -143,11 +144,7 @@ class SearchApiMapper {
                 .seatId(s.seatId())
                 .row(s.row())
                 .number(s.number())
-                .seatType(SeatMapZonesInnerSeatsInner.SeatTypeEnum.fromValue(s.seatType()))
-                .pairSeatId(s.pairSeatId().orElse(null))
-                .status(SeatStatus.fromValue(s.status().name()))
-                .x(BigDecimal.valueOf(s.x()))
-                .y(BigDecimal.valueOf(s.y()));
+                .status(SeatStatus.fromValue(s.status().name()));
     }
 
     private GetAvailability200ResponseZonesInner toZoneAvailability(ZoneAvailabilityResult z) {
@@ -178,13 +175,12 @@ class SearchApiMapper {
         Venue venue = new Venue()
                 .id(r.id())
                 .name(r.name())
-                .type(Venue.TypeEnum.fromValue(r.type()))
                 .address(r.address());
         String cityName = r.city() == null ? null : CITY_NAMES.get(r.city());
         if (cityName != null) {
-            venue.city(CityCode.fromValue(r.city())).cityName(cityName);
+            venue.city(r.city()).cityName(cityName);
         } else if (r.city() != null) {
-            venue.cityName(r.city());
+            venue.city(r.city()).cityName(r.city());
         }
         return venue;
     }

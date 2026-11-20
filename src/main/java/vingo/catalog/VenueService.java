@@ -15,6 +15,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import vingo.catalog.internal.VenueRepository;
+import vingo.catalog.internal.VenueSvgProcessor;
 import vingo.catalog.internal.VenueRepository.VenueData;
 import vingo.catalog.internal.VenueRepository.VenuePosition;
 import vingo.catalog.internal.VenueRepository.VenueRow;
@@ -35,7 +36,16 @@ public class VenueService {
         this.events = events;
     }
 
+    public static String renderSeatmap(String overview, String detail) {
+        return VenueSvgProcessor.renderSeatmap(overview, detail);
+    }
+
     public record VenuePage(List<VenueRow> data, String nextCursor) {}
+
+    @Transactional(readOnly = true)
+    public VenueRow get(UUID venueId) {
+        return repository.findActiveById(venueId).orElseThrow(VenueService::notFound);
+    }
 
     @Transactional
     public VenueRow create(VenueData input) {
@@ -54,7 +64,7 @@ public class VenueService {
 
         String query = q == null || q.isBlank() ? null : q.strip();
         VenuePosition after = cursor == null ? null : decodeCursor(cursor);
-        List<VenueRow> rows = repository.findActive(query, city, after, pageSize + 1);
+        List<VenueRow> rows = repository.findActive(query, VenueRepository.canonicalCity(city), after, pageSize + 1);
 
         if (rows.size() <= pageSize) {
             return new VenuePage(rows, null);
@@ -77,13 +87,12 @@ public class VenueService {
 
         var merged = new VenueData(
                 keepIfAbsent(patch.name(), current.name()),
-                keepIfAbsent(patch.type(), current.type()),
                 keepIfAbsent(patch.address(), current.address()),
                 keepIfAbsent(patch.city(), current.city()),
                 keepIfAbsent(patch.district(), current.district()),
                 keepIfAbsent(patch.lat(), current.lat()),
                 keepIfAbsent(patch.lng(), current.lng()),
-                keepIfAbsent(patch.infoJson(), current.infoJson())
+                keepIfAbsent(patch.rules(), current.rules())
         );
 
         validateCoordinates(merged);

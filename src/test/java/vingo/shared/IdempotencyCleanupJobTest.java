@@ -23,13 +23,13 @@ class IdempotencyCleanupJobTest extends IntegrationTest {
         clock.set(Instant.parse("2030-01-01T00:00:00Z"));
         UUID user = catalog.buyer();
         jdbc.sql("""
-                        INSERT INTO idempotency_key (user_id, endpoint, key, request_hash, created_at)
+                        INSERT INTO idempotency_record (user_id, endpoint, key, request_hash, created_at)
                         SELECT :user, 'cleanup-test', n::text, 'hash', :old
                         FROM generate_series(1, 1001) n
                         """)
                 .param("user", user).param("old", catalog.now().minusHours(25)).update();
         jdbc.sql("""
-                        INSERT INTO idempotency_key (user_id, endpoint, key, request_hash, created_at)
+                        INSERT INTO idempotency_record (user_id, endpoint, key, request_hash, created_at)
                         VALUES (:user, 'cleanup-test', 'boundary', 'hash', :boundary),
                                (:user, 'cleanup-test', 'fresh', 'hash', :now)
                         """)
@@ -39,12 +39,12 @@ class IdempotencyCleanupJobTest extends IntegrationTest {
 
         job.cleanup();
 
-        assertThat(jdbc.sql("SELECT key FROM idempotency_key WHERE user_id = :user ORDER BY key")
+        assertThat(jdbc.sql("SELECT key FROM idempotency_record WHERE user_id = :user ORDER BY key")
                 .param("user", user).query(String.class).list()).containsExactly("boundary", "fresh");
 
         job.cleanup();
 
-        assertThat(jdbc.sql("SELECT key FROM idempotency_key WHERE user_id = :user ORDER BY key")
+        assertThat(jdbc.sql("SELECT key FROM idempotency_record WHERE user_id = :user ORDER BY key")
                 .param("user", user).query(String.class).list()).containsExactly("boundary", "fresh");
     }
 }

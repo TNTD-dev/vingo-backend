@@ -33,15 +33,15 @@ class AdminOrderDetailApiTest extends AdminOpsTestSupport {
     @Test
     void adminGetOrder_returnsItemsBuyerAndChronologicalHistoryWithActorEmailsAndSystem() {
         UUID orderId = reviewSeats(showtime.event().seat(1), showtime.event().seat(2));
-        jdbc.sql("UPDATE orders SET buyer_name = 'Người mua test', buyer_phone = '0901234567' WHERE id = :id")
+        jdbc.sql("UPDATE ticket_order SET buyer_name = 'Người mua test', buyer_phone = '+84901234567' WHERE id = :id")
                 .param("id", orderId).update();
         clock.advance(Duration.ofSeconds(1));
         body(resolve(orderId, "ISSUE_TICKETS"), 200);
-        String adminEmail = jdbc.sql("SELECT email FROM users WHERE id = :id").param("id", admin).query(String.class).single();
-        String ownerEmail = jdbc.sql("SELECT email FROM users WHERE id = :id").param("id", buyer).query(String.class).single();
+        String adminEmail = jdbc.sql("SELECT email FROM user_account WHERE id = :id").param("id", admin).query(String.class).single();
+        String ownerEmail = jdbc.sql("SELECT email FROM user_account WHERE id = :id").param("id", buyer).query(String.class).single();
         var expectedHistory = jdbc.sql("""
                         SELECT h.to_status, h.at, COALESCE(u.email, 'SYSTEM') AS actor
-                        FROM order_status_history h LEFT JOIN users u ON u.id = h.actor_id
+                        FROM order_status_history h LEFT JOIN user_account u ON u.id = h.actor_id
                         WHERE h.order_id = :id ORDER BY h.at, h.id
                         """)
                 .param("id", orderId).query((rs, row) -> new ReadHistory(rs.getString("to_status"),
@@ -52,7 +52,7 @@ class AdminOrderDetailApiTest extends AdminOpsTestSupport {
         assertThat(text(json, "$.id")).isEqualTo(orderId.toString());
         assertThat(text(json, "$.status")).isEqualTo("PAID");
         assertThat(text(json, "$.buyer.email")).isEqualTo(buyerEmail);
-        var expectedBuyer = jdbc.sql("SELECT buyer_name, buyer_phone FROM orders WHERE id = :id")
+        var expectedBuyer = jdbc.sql("SELECT buyer_name, buyer_phone FROM ticket_order WHERE id = :id")
                 .param("id", orderId).query().singleRow();
         Map<String, Object> actualBuyer = JsonPath.read(json, "$.buyer");
         assertThat(actualBuyer.get("full_name")).isEqualTo(expectedBuyer.get("buyer_name"));
@@ -75,7 +75,7 @@ class AdminOrderDetailApiTest extends AdminOpsTestSupport {
 
     @Test
     void adminGetOrder_ordersHistoryByAtThenIdRegardlessOfInsertionOrder() {
-        UUID orderId = readOrderFixture(buyer, showtime, "PAID", buyerEmail, "0901234567", catalog.now());
+        UUID orderId = readOrderFixture(buyer, showtime, "PAID", buyerEmail, "+84901234567", catalog.now());
         UUID first = UUID.fromString("10000000-" + UUID.randomUUID().toString().substring(9));
         UUID second = UUID.fromString("20000000-" + UUID.randomUUID().toString().substring(9));
         UUID last = UUID.fromString("00000000-" + UUID.randomUUID().toString().substring(9));
@@ -107,13 +107,17 @@ class AdminOrderDetailApiTest extends AdminOpsTestSupport {
 
         String json = detail(orderId);
 
+        var orderRow = jdbc.sql("SELECT total_amount, expires_at FROM ticket_order WHERE id = :id")
+                .param("id", orderId).query().singleRow();
+        long orderAmount = ((Number) orderRow.get("total_amount")).longValue();
+        OffsetDateTime orderExpires = ((java.sql.Timestamp) orderRow.get("expires_at")).toInstant().atOffset(java.time.ZoneOffset.UTC);
         List<Map<String, Object>> payments = JsonPath.read(json, "$.payments");
         assertThat(payments).hasSize(2);
-        assertPayment(payments.getFirst(), orderId, failed, "FAILED", 450_000, failedExpiry, "11");
-        assertPayment(payments.getLast(), orderId, succeeded, "SUCCEEDED", 500_000, succeededExpiry, "00");
+        assertPayment(payments.getFirst(), orderId, failed, "FAILED", orderAmount, orderExpires, "11");
+        assertPayment(payments.getLast(), orderId, succeeded, "SUCCEEDED", orderAmount, orderExpires, "00");
         assertThat(payments).allSatisfy(payment -> assertThat(payment.get("payment_url")).isNull());
         assertThat(json).doesNotContain(failedUrl, succeededUrl);
-        assertThat(jdbc.sql("SELECT payment_url FROM payment_intent WHERE order_id = :id ORDER BY created_at, id")
+        assertThat(jdbc.sql("SELECT payment_url FROM payment WHERE order_id = :id ORDER BY created_at, id")
                 .param("id", orderId).query(String.class).list()).containsExactly(failedUrl, succeededUrl);
     }
 
@@ -170,25 +174,27 @@ class AdminOrderDetailApiTest extends AdminOpsTestSupport {
     }
 
     private void insertHistory(UUID orderId, UUID id, String status, OffsetDateTime at) {
-        jdbc.sql("INSERT INTO order_status_history (id, order_id, to_status, at) VALUES (:id, :order, :status, :at)")
-                .param("id", id).param("order", orderId).param("status", status).param("at", at).update();
+        jdbc.sql("INSERT INTO order_status_history (id, order_id, to_status, reason, at) VALUES (:id, :order, CAST(:status AS order_status), :reason, :at)")
+                .param("id", id).param("order", orderId).param("status", status)
+                .param("reason", "NEEDS_REVIEW".equals(status) || "REJECTED".equals(status) ? "test" : null, java.sql.Types.VARCHAR)
+                .param("at", at).update();
     }
 
     private String insertIntent(UUID orderId, UUID id, String status, long amount, OffsetDateTime created, OffsetDateTime expires) {
         String url = "https://pay.vingo.test/private/" + id;
         jdbc.sql("""
-                        INSERT INTO payment_intent (id, order_id, txn_ref, amount, status, payment_url, created_at, expires_at)
-                        VALUES (:id, :order, :ref, :amount, :status, :url, :created, :expires)
+                        INSERT INTO payment (id, order_id, txn_ref, status, payment_url, created_at, updated_at)
+                        VALUES (:id, :order, :ref, CAST(:status AS payment_status), :url, :created, :created)
                         """)
-                .param("id", id).param("order", orderId).param("ref", "read-" + id).param("amount", amount)
-                .param("status", status).param("url", url).param("created", created).param("expires", expires).update();
+                .param("id", id).param("order", orderId).param("ref", "read-" + id)
+                .param("status", status).param("url", url).param("created", created).update();
         return url;
     }
 
     private void insertTransaction(UUID intent, String result, String code, OffsetDateTime receivedAt) {
         jdbc.sql("""
-                        INSERT INTO payment_transaction (payment_intent_id, source, result, response_code, raw, received_at)
-                        VALUES (:intent, 'IPN', :result, :code, '{}'::jsonb, :received)
+                        INSERT INTO payment_gateway_log (payment_id, source, result, response_code, raw, received_at)
+                        VALUES (:intent, 'IPN'::payment_source, CAST(:result AS payment_result), :code, '{}'::jsonb, :received)
                         """)
                 .param("intent", intent).param("result", result).param("code", code).param("received", receivedAt).update();
     }

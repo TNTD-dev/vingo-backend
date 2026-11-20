@@ -29,7 +29,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
                 .exchange().expectStatus().isCreated().expectBody(String.class).returnResult().getResponseBody();
         UUID event=UUID.fromString(json(created).path("id").asString());
         assertThat(json(created).path("status").asString()).isEqualTo("DRAFT");
-        assertThat(jdbc.sql("SELECT poster_url FROM event WHERE id=:id").param("id",event).query(String.class).single())
+        assertThat(jdbc.sql("SELECT poster_desktop_url FROM event WHERE id=:id").param("id",event).query(String.class).single())
                 .isEqualTo("https://example.com/desktop.jpg");
         publish(event).expectStatus().isEqualTo(422);
         String session=client.post().uri("/api/v1/admin/events/{id}/showtimes",event).headers(h->h.setBearerAuth(token))
@@ -42,7 +42,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         client.put().uri("/api/v1/admin/events/{id}/price-tiers",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(List.of(Map.of("name","Admission","price",100000)))
                 .exchange().expectStatus().isOk();
-        UUID tier=jdbc.sql("SELECT id FROM price_tier WHERE event_id=:id").param("id",event).query(UUID.class).single();
+        UUID tier=jdbc.sql("SELECT id FROM sku WHERE event_id=:id").param("id",event).query(UUID.class).single();
         client.put().uri("/api/v1/admin/events/{id}/zone-prices",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(List.of(
                         Map.of("zone_id",layout.seatedZoneId(),"price_tier_id",tier),
@@ -52,12 +52,12 @@ class AdminEventAcceptanceTest extends IntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_ids",List.of(layout.seat(1)),"reason","Maintenance"))
                 .exchange().expectStatus().isOk();
         // Rebuild a missing row while preserving existing BLOCKED inventory.
-        jdbc.sql("DELETE FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat").param("id",showtime).param("seat",layout.seat(2)).update();
+        jdbc.sql("DELETE FROM seat_inventory WHERE showtime_id=:id AND seat_id=:seat").param("id",showtime).param("seat",layout.seat(2)).update();
         publish(event).expectStatus().isOk().expectBody().jsonPath("$.status").isEqualTo("PUBLISHED");
         publish(event).expectStatus().isOk();
-        assertThat(jdbc.sql("SELECT status FROM showtime WHERE id=:id").param("id",showtime).query(String.class).single()).isEqualTo("SCHEDULED");
-        assertThat(jdbc.sql("SELECT status FROM showtime_seat WHERE showtime_id=:id AND seat_id=:seat").param("id",showtime).param("seat",layout.seat(1)).query(String.class).single()).isEqualTo("BLOCKED");
-        assertThat(jdbc.sql("SELECT count(*) FROM showtime_seat WHERE showtime_id=:id").param("id",showtime).query(Long.class).single()).isEqualTo(10);
+        assertThat(jdbc.sql("SELECT cancelled_at FROM showtime WHERE id=:id").param("id",showtime).query(java.time.OffsetDateTime.class).optional()).isEmpty();
+        assertThat(jdbc.sql("SELECT status FROM seat_inventory WHERE showtime_id=:id AND seat_id=:seat").param("id",showtime).param("seat",layout.seat(1)).query(String.class).single()).isEqualTo("BLOCKED");
+        assertThat(jdbc.sql("SELECT count(*) FROM seat_inventory WHERE showtime_id=:id").param("id",showtime).query(Long.class).single()).isEqualTo(10);
         client.get().uri("/api/v1/events/{id}",event).exchange().expectStatus().isOk();
         client.get().uri("/api/v1/showtimes/{id}/seatmap",showtime).exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.status").isEqualTo("SCHEDULED");
@@ -67,15 +67,15 @@ class AdminEventAcceptanceTest extends IntegrationTest {
     }
     @Test void incompletePricing_rollsBackEventAndShowtimeStates() {
         var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
-        var s=catalog.showtime(e,Window.draft());
-        jdbc.sql("DELETE FROM zone_price WHERE event_id=:id").param("id",e.id()).update();
+        var s=catalog.showtime(e,Window.notOpenYet());
+        jdbc.sql("DELETE FROM event_zone WHERE event_id=:id").param("id",e.id()).update();
         publish(e.id()).expectStatus().isEqualTo(422).expectBody().jsonPath("$.code").isEqualTo("EVENT_INCOMPLETE");
         assertThat(jdbc.sql("SELECT status FROM event WHERE id=:id").param("id",e.id()).query(String.class).single()).isEqualTo("DRAFT");
-        assertThat(jdbc.sql("SELECT status FROM showtime WHERE id=:id").param("id",s.id()).query(String.class).single()).isEqualTo("DRAFT");
+        assertThat(jdbc.sql("SELECT cancelled_at FROM showtime WHERE id=:id").param("id",s.id()).query(java.time.OffsetDateTime.class).optional()).isEmpty();
     }
     @Test void publish_returns422_whenShowtimeSalesAlreadyClosed() {
         var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus("DRAFT"));
-        var s=catalog.showtime(e,Window.draft());
+        var s=catalog.showtime(e,Window.notOpenYet());
         // Suất chưa kết thúc nhưng đã đóng bán nên sự kiện chưa đủ điều kiện công bố.
         jdbc.sql("UPDATE showtime SET sale_opens_at=:opens, sale_closes_at=:closes WHERE id=:id")
                 .param("opens",java.time.OffsetDateTime.parse("2026-11-10T09:00:00Z"))
@@ -88,7 +88,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         client.post().uri("/api/v1/admin/events/{id}/publish",id).exchange().expectStatus().isUnauthorized();
         client.post().uri("/api/v1/admin/events/{id}/publish",id).headers(h->h.setBearerAuth(tokenFor(Role.BUYER))).exchange().expectStatus().isForbidden();
         publish(id).expectStatus().isNotFound();
-        for(String state:List.of("ENDED","CANCELLED")) {
+        for(String state:List.of("CANCELLED")) {
             var e=catalog.event(EventSpec.defaults().withCity("HN").withStatus(state));
             publish(e.id()).expectStatus().isEqualTo(409).expectBody().jsonPath("$.code").isEqualTo("EVENT_LOCKED");
         }
