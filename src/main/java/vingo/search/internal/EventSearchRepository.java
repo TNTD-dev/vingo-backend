@@ -41,7 +41,7 @@ class EventSearchRepository {
     /** Tài liệu tìm kiếm của sân (tên sân + tên thành phố), giống hệt biểu thức của venue_search_fts_idx. */
     private static String venueDoc(String v) {
         return "to_tsvector('simple', immutable_unaccent(coalesce(" + v + ".name, '') || ' ' || immutable_city_text("
-                + v + ".city)))";
+                + "venue_location_city(" + v + ".location))))";
     }
 
     private static String venueMatch(String v) {
@@ -69,7 +69,7 @@ class EventSearchRepository {
         // Điều kiện lọc suất: áp cho suất đại diện của thẻ (venue_name, city, first_starts_at).
         StringBuilder showtimeFilter = new StringBuilder();
         if (c.city() != null) {
-            showtimeFilter.append(" AND v.city = :city");
+            showtimeFilter.append(" AND venue_location_city(v.location) = :city");
             params.put("city", c.city());
         }
         if (c.from() != null) {
@@ -158,10 +158,10 @@ class EventSearchRepository {
                            %s AS sort_key
                     FROM event e
                     JOIN LATERAL (
-                        SELECT v.name AS venue_name, v.city, s.starts_at AS first_starts_at
+                        SELECT v.name AS venue_name, venue_location_city(v.location) AS city, s.starts_at AS first_starts_at
                         FROM showtime s
                         CROSS JOIN LATERAL (
-                            SELECT v0.name, v0.city, %s AS matched
+                            SELECT v0.name, v0.location, %s AS matched
                             FROM seat_layout sl JOIN venue v0 ON v0.id = sl.venue_id
                             WHERE sl.id = s.seat_layout_id
                             OFFSET 0

@@ -315,7 +315,7 @@ class SearchEventsTest extends IntegrationTest {
     @Test
     void searchEvents_returnsEventWithoutCity_whenVenueCityIsNull() {
         fixtures.event().title("Không có thành phố").create();
-        jdbc.sql("UPDATE venue SET city = NULL").update();
+        jdbc.sql("UPDATE venue SET location=location-'city_code'").update();
 
         JsonNode data = search().path("data");
 
@@ -489,7 +489,18 @@ class SearchEventsTest extends IntegrationTest {
                 .isEqualTo("VALIDATION_ERROR");
         assertThat(searchError("price_min", "-1").path("code").asString()).isEqualTo("VALIDATION_ERROR");
         assertThat(searchError("sort", "random").path("code").asString()).isEqualTo("VALIDATION_ERROR");
-        assertThat(searchError("city", "SGN").path("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(searchError("city", "X".repeat(101)).path("code").asString()).isEqualTo("VALIDATION_ERROR");
+    }
+
+    @Test
+    void searchEvents_acceptsOpenCityCode_fromVenueLocation() {
+        String city = "PROVINCE-" + UUID.randomUUID();
+        UUID target = fixtures.event().title("Sự kiện ở địa phương mới").city(city).create().id();
+
+        JsonNode result = search("city", city);
+        assertThat(ids(result)).containsExactly(target);
+        assertThat(result.path("data").get(0).path("city").asString()).isEqualTo(city);
+        assertThat(ids(search("city", "UNKNOWN-" + UUID.randomUUID()))).isEmpty();
     }
 
     @Test

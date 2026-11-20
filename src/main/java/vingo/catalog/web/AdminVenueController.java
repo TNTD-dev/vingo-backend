@@ -25,7 +25,6 @@ import tools.jackson.databind.json.JsonMapper;
 import vingo.api.AdminCatalogApi;
 import vingo.api.model.AdminEventPage;
 import vingo.api.model.AdminEventSummary;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventCreateInput;
 import vingo.api.model.EventDetail;
@@ -113,15 +112,16 @@ class AdminVenueController implements AdminCatalogApi {
 
     @Override
     public ResponseEntity<Venue> createVenue(VenueCreateInput input) {
+        normalizeLocation(input);
         VenueRow created = venues.create(new VenueData(
                 input.getName(),
                 input.getType().getValue(),
                 input.getAddress(),
-                input.getCity().getValue(),
+                input.getCity(),
                 input.getDistrict(),
                 input.getLat(),
                 input.getLng(),
-                toJson(input.getInfo())
+                toJson(input.getInfo()), toJson(input.getLocation())
         ));
 
         return ResponseEntity.status(HttpStatus.CREATED).body(toApi(created));
@@ -162,15 +162,16 @@ class AdminVenueController implements AdminCatalogApi {
 
     @Override
     public ResponseEntity<Venue> updateVenue(UUID venueId, VenueInput input) {
+        normalizeLocation(input);
         VenueRow updated = venues.update(venueId, new VenueData(
                 input.getName(),
                 input.getType() == null ? null : input.getType().getValue(),
                 input.getAddress(),
-                input.getCity() == null ? null : input.getCity().getValue(),
+                input.getCity(),
                 input.getDistrict(),
                 input.getLat(),
                 input.getLng(),
-                toJson(input.getInfo())
+                toJson(input.getInfo()), toJson(input.getLocation())
         ));
 
         return ResponseEntity.ok(toApi(updated));
@@ -180,6 +181,11 @@ class AdminVenueController implements AdminCatalogApi {
     public ResponseEntity<Void> deleteVenue(UUID venueId) {
         venues.delete(venueId);
         return ResponseEntity.noContent().build();
+    }
+
+    @Override
+    public ResponseEntity<Venue> getAdminVenue(UUID venueId) {
+        return ResponseEntity.ok(toApi(venues.get(venueId)));
     }
 
     @Override
@@ -200,32 +206,58 @@ class AdminVenueController implements AdminCatalogApi {
                 .body(content);
     }
 
+    private static void normalizeLocation(VenueCreateInput input) {
+        var location = input.getLocation();
+        if (location == null) return;
+        vingo.catalog.internal.VenueSetupClients.coordinates(location.getLatitude(), location.getLongitude());
+        input.address(location.getDisplayAddress()).lat(location.getLatitude()).lng(location.getLongitude())
+                .city(location.getCityCode());
+        if (location.getAdministrativeArea() != null) location.getAdministrativeArea().stream()
+                .filter(a -> a.getLevel() == vingo.api.model.AdministrativeArea.LevelEnum.DISTRICT)
+                .findFirst().ifPresent(a -> input.district(a.getName()));
+    }
+
+    private static void normalizeLocation(VenueInput input) {
+        var location = input.getLocation();
+        if (location == null) return;
+        vingo.catalog.internal.VenueSetupClients.coordinates(location.getLatitude(), location.getLongitude());
+        input.address(location.getDisplayAddress()).lat(location.getLatitude()).lng(location.getLongitude())
+                .city(location.getCityCode());
+        if (location.getAdministrativeArea() != null) location.getAdministrativeArea().stream()
+                .filter(a -> a.getLevel() == vingo.api.model.AdministrativeArea.LevelEnum.DISTRICT)
+                .findFirst().ifPresent(a -> input.district(a.getName()));
+    }
+
     private String toJson(Object value) {
         return value == null ? null : json.writeValueAsString(value);
     }
 
-    private static CityCode toCityCode(String storedCity) {
-        for (CityCode code : CityCode.values()) {
-            if (code.getValue().equals(storedCity)) {
-                return code;
-            }
-        }
-        return null;
-    }
+
 
     private Venue toApi(VenueRow row) {
         VenueData data = row.data();
-        CityCode city = toCityCode(data.city());
-        // Tên hiển thị theo CityCode trong contract hiện hành; danh mục còn chờ catalog chốt.
+        String city = data.city();
+        // Giữ tên cho mã cũ; dữ liệu bản đồ mới ưu tiên tên địa phương từ location.
         String cityName = city == null ? data.city() : switch (city) {
-            case HCM ->
+            case "HCM" ->
                 "TP. Hồ Chí Minh";
-            case HN ->
+            case "HN" ->
                 "Hà Nội";
-            case DN ->
+            case "DN" ->
                 "Đà Nẵng";
+            default -> city;
         };
 
+        var location = data.locationJson() == null ? null
+                : json.readValue(data.locationJson(), vingo.api.model.VenueLocationInput.class);
+        if (location != null && location.getAdministrativeArea() != null) {
+            cityName = location.getAdministrativeArea().stream()
+                    .filter(a -> a.getLevel() == vingo.api.model.AdministrativeArea.LevelEnum.PROVINCE
+                            || a.getLevel() == vingo.api.model.AdministrativeArea.LevelEnum.CITY)
+                    .sorted(java.util.Comparator.comparingInt(a ->
+                            a.getLevel() == vingo.api.model.AdministrativeArea.LevelEnum.PROVINCE ? 0 : 1))
+                    .map(a -> a.getName()).findFirst().orElse(cityName);
+        }
         return new Venue()
                 .id(row.id())
                 .name(data.name())
@@ -236,6 +268,9 @@ class AdminVenueController implements AdminCatalogApi {
                 .district(data.district())
                 .lat(data.lat())
                 .lng(data.lng())
+                .location(location)
+                .createdAt(row.createdAt()).updatedAt(row.updatedAt()).updatedBy(row.updatedBy()).updatedByName(row.updatedByName())
+                .layoutCount(row.layoutCount()).publishedLayoutCount(row.publishedLayoutCount()).draftLayoutCount(row.draftLayoutCount())
                 .info(json.readValue(data.infoJson(), VenueInfo.class));
     }
 
@@ -463,20 +498,18 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     private Venue toAdminEventVenue(EventDetails.VenueInfo source) {
-        CityCode city = Arrays.stream(CityCode.values())
-                .filter(code -> code.getValue().equals(source.city()))
-                .findFirst()
-                .orElse(null);
+        String city = source.city();
 
         String cityName = city == null
                 ? source.city()
                 : switch (city) {
-            case HCM ->
+            case "HCM" ->
                 "TP. Hồ Chí Minh";
-            case HN ->
+            case "HN" ->
                 "Hà Nội";
-            case DN ->
+            case "DN" ->
                 "Đà Nẵng";
+            default -> city;
         };
 
         return new Venue()

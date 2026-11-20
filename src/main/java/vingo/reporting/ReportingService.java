@@ -24,7 +24,7 @@ import vingo.shared.error.ErrorCode;
 @Service
 public class ReportingService {
     private static final Logger log = LoggerFactory.getLogger(ReportingService.class);
-    private static final Set<String> GROUPS = Set.of("none", "day", "hour", "tier", "zone");
+    private static final Set<String> GROUPS = Set.of("none", "day", "hour", "month", "tier", "zone");
     private final MetricReadModel readModel;
     private final Clock clock;
 
@@ -35,7 +35,7 @@ public class ReportingService {
 
     /**
      * Tính một trong bốn metric cho ADMIN trên cùng snapshot dữ liệu chỉ đọc.
-     * Khoảng thời gian là [from,to); nhóm theo UTC. Trả value khi không chia
+     * Khoảng thời gian là [from,to); nhóm theo Asia/Ho_Chi_Minh. Trả value khi không chia
      * nhóm hoặc series khi chia nhóm, kèm bộ lọc/công thức để giải thích kết quả.
      * Contract chỉ công bố bốn metric theo kế hoạch dự án đã chốt.
      */
@@ -47,7 +47,7 @@ public class ReportingService {
         if (definition == null || !GROUPS.contains(group)) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR,
                     "Supported metrics: revenue, tickets_sold, fill_rate, checkins. "
-                            + "group_by must be none/day/hour/tier/zone");
+                            + "group_by must be none/day/hour/month/tier/zone");
         }
         if (query.from() != null && query.to() != null && !query.from().isBefore(query.to())) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "from must be earlier than to");
@@ -62,7 +62,7 @@ public class ReportingService {
         var points = readModel.read(definition, query, group);
         var result = new MetricResult().metric(query.metric()).unit(MetricResult.UnitEnum.fromValue(definition.unit()))
                 .computedAt(OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)).filters(filters)
-                .definition(definition.formula() + "; bounds [from,to), groups UTC; current-state data");
+                .definition(definition.formula() + "; bounds [from,to), groups Asia/Ho_Chi_Minh; current-state data");
         if (group.equals("none")) {
             result.value(points.getFirst().value());
         } else {

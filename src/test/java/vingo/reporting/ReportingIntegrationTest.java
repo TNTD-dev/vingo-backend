@@ -46,7 +46,7 @@ class ReportingIntegrationTest extends IntegrationTest {
     @Test
     void groups_returnContractSeries_andWeightedRatesRatherThanAveragePercentages() {
         assertRevenueGroups("day", "2026-11-01", "2026-11-02");
-        assertRevenueGroups("hour", "2026-11-01T10:00:00Z", "2026-11-02T12:00:00Z");
+        assertRevenueGroups("hour", "2026-11-01T17:00:00+07:00", "2026-11-02T19:00:00+07:00");
         assertRevenueGroups("tier", "0197f100-0000-7000-8000-000000000301", "0197f100-0000-7000-8000-000000000302");
         assertRevenueGroups("zone", "0197f100-0000-7000-8000-000000000131", "0197f100-0000-7000-8000-000000000132");
         var rate = metric("fill_rate", "zone");

@@ -153,10 +153,10 @@ public class VenueImportService {
             metadata(locked);
             if(venue==null) {
                 var v=locked.draft().getVenue();
-                venue=venues.create(new VenueData(v.getName(),"STADIUM",v.getAddress(),v.getCity()==null?null:v.getCity().getValue(),v.getDistrict(),v.getLat(),v.getLng(),
+                venue=venues.create(new VenueData(v.getName(),"STADIUM",v.getAddress(),v.getCity(),v.getDistrict(),v.getLat(),v.getLng(),
                         v.getInfo()==null?"{}":json.writeValueAsString(v.getInfo()))).id();
             }
-            repository.persistSetup(id,venue,locked.draft());
+            repository.persistSetup(id,venue,locked.draft(),now());
             UUID overview=locked.draft().getOverviewId();
             if(overview!=null) {
                 var base=repository.overview(overview,true).orElseThrow(VenueImportService::missing);

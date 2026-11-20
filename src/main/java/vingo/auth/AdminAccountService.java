@@ -33,6 +33,18 @@ public class AdminAccountService {
 
     @Transactional(readOnly = true)
     public AdminAccountPage list(String q, String role, String status, String cursor, Integer limit) {
+        return list(q,role,status,cursor,limit,"newest");
+    }
+
+    @Transactional(readOnly = true)
+    public AdminAccountPage list(String q, String role, String status, String cursor, Integer limit, String sort) {
+        sort = sort == null ? "newest" : sort;
+        if (!List.of("newest","oldest","name").contains(sort)) throw invalid("Thứ tự không hợp lệ");
+        if (cursor != null && cursor.contains(":")) {
+            var parts=cursor.split(":",2);
+            if (!parts[0].equals(sort)) throw invalid("Cursor không khớp thứ tự");
+            cursor=parts[1];
+        } else if (cursor != null && !"newest".equals(sort)) throw invalid("Cursor không khớp thứ tự");
         int size = limit == null ? 20 : limit;
         if (size < 1 || size > 100 || (q != null && q.length() > 200)
                 || (role != null && !List.of("BUYER", "ADMIN").contains(role))
@@ -42,10 +54,10 @@ public class AdminAccountService {
         UUID after;
         try { after = cursor == null ? null : UUID.fromString(cursor); }
         catch (IllegalArgumentException ex) { throw invalid("Cursor không hợp lệ"); }
-        var rows = accounts.list(q == null || q.isBlank() ? null : q.strip(), role, status, after, size + 1);
+        var rows = accounts.listSorted(q == null || q.isBlank() ? null : q.strip(), role, status, after, size + 1, sort);
         boolean more = rows.size() > size;
         var data = more ? rows.subList(0, size) : rows;
-        return new AdminAccountPage().data(data).nextCursor(more ? data.getLast().getId().toString() : null);
+        return new AdminAccountPage().data(data).nextCursor(more ? ("newest".equals(sort) ? "" : sort+":") + data.getLast().getId() : null);
     }
 
     @Transactional(readOnly = true)
@@ -86,6 +98,45 @@ public class AdminAccountService {
         log.atInfo().addKeyValue("actor_id", actor).addKeyValue("user_id", id)
                 .addKeyValue("role", role).addKeyValue("status", status).log("Updated account access");
         return after;
+    }
+
+    @Transactional(readOnly = true)
+    public vingo.api.model.AdminUserStatistics statistics() { return accounts.statistics(); }
+
+    @Transactional(readOnly = true)
+    public vingo.api.model.AdminLoginHistory loginHistory(UUID user, String cursor, Integer limit) {
+        get(user);
+        int size=limit==null?20:limit;
+        if(size<1||size>100) throw invalid("limit từ 1 đến 100");
+        UUID after;
+        try { after=cursor==null?null:UUID.fromString(cursor); }
+        catch(IllegalArgumentException ex) { throw invalid("Cursor không hợp lệ"); }
+        var rows=accounts.loginHistory(user,after,size+1);
+        boolean more=rows.size()>size;
+        var page=more?rows.subList(0,size):rows;
+        return new vingo.api.model.AdminLoginHistory().data(page)
+                .nextCursor(more?page.getLast().getId().toString():null);
+    }
+
+    @Transactional(readOnly = true)
+    public String export(String q, String role, String status) {
+        // Dùng cùng validation/bộ lọc danh sách trước khi đọc dữ liệu xuất.
+        list(q,role,status,null,1);
+        var rows=accounts.listSorted(q==null||q.isBlank()?null:q.strip(),role,status,null,10001,"newest");
+        if(rows.size()>10000) throw new DomainException(ErrorCode.PAYLOAD_TOO_LARGE,"Thu hẹp bộ lọc để xuất tối đa 10000 tài khoản");
+        var csv=new StringBuilder("\uFEFFid,full_name,email,phone,role,status,created_at\r\n");
+        for(var row:rows) {
+            csv.append(java.util.stream.Stream.of(row.getId(),row.getFullName(),row.getEmail(),row.getPhone(),
+                    row.getRole().getValue(),row.getStatus().getValue(),row.getCreatedAt())
+                    .map(AdminAccountService::csvCell).collect(java.util.stream.Collectors.joining(","))).append("\r\n");
+        }
+        return csv.toString();
+    }
+
+    private static String csvCell(Object value) {
+        String text=value==null?"":value.toString();
+        if(!text.isEmpty() && "=+-@\t\r\n".indexOf(text.charAt(0))>=0) text="'"+text;
+        return "\""+text.replace("\"","\"\"")+"\"";
     }
 
     private static DomainException invalid(String message) { return new DomainException(ErrorCode.VALIDATION_ERROR, message); }

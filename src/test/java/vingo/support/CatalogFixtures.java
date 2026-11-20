@@ -482,7 +482,7 @@ public final class CatalogFixtures {
     // ------------------------------------------------------------------ SQL dùng chung
 
     private UUID insertVenue(String name, String city) {
-        return jdbc.sql("INSERT INTO venue (name, type, city) VALUES (:n, 'STADIUM', :c) RETURNING id")
+        return jdbc.sql("INSERT INTO venue (name, type, location) VALUES (:n, 'STADIUM', jsonb_build_object('city_code',CAST(:c AS text),'source','LEGACY')) RETURNING id")
                 .param("n", name).param("c", city).query(UUID.class).single();
     }
 

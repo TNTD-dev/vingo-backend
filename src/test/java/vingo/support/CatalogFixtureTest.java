@@ -42,7 +42,7 @@ class CatalogFixtureTest extends IntegrationTest {
         assertThat(jdbc.sql("""
                         SELECT l.status = 'PUBLISHED' AND l.published_at IS NOT NULL
                           AND e.status = 'PUBLISHED' AND e.max_tickets_per_order = 10
-                          AND v.city LIKE 'City-%'
+                          AND venue_location_city(v.location) LIKE 'City-%'
                         FROM showtime s JOIN event e ON e.id = s.event_id
                         JOIN seat_layout l ON l.id = s.seat_layout_id
                         JOIN seat_layout vl ON vl.id=s.seat_layout_id JOIN venue v ON v.id=vl.venue_id
@@ -71,7 +71,8 @@ class CatalogFixtureTest extends IntegrationTest {
                         first.seatedZoneId(), first.standingZoneId(), first.vipPriceTierId(), first.gaPriceTierId()));
         assertThat(second.seats()).hasSize(10).doesNotContainAnyElementsOf(first.seats());
         assertThat(jdbc.sql("""
-                        SELECT e.title, e.category, e.status, e.max_tickets_per_order, v.city, stock.capacity
+                        SELECT e.title, e.category, e.status, e.max_tickets_per_order,
+                               venue_location_city(v.location) AS city, stock.capacity
                         FROM showtime s JOIN event e ON e.id = s.event_id
                         JOIN seat_layout vl ON vl.id=s.seat_layout_id JOIN venue v ON v.id=vl.venue_id
                         JOIN showtime_zone_stock stock ON stock.showtime_id = s.id

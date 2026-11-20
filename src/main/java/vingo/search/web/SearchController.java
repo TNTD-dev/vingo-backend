@@ -13,7 +13,6 @@ import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.SearchApi;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventDetail;
 import vingo.api.model.GetAvailability200Response;
@@ -44,12 +43,12 @@ class SearchController implements SearchApi {
 
     @Override
     public ResponseEntity<SearchEvents200Response> searchEvents(
-            String q, EventCategory category, CityCode city, OffsetDateTime from, OffsetDateTime to,
+            String q, EventCategory category, String city, OffsetDateTime from, OffsetDateTime to,
             Long priceMin, Long priceMax, String sort, String cursor, Integer limit) {
         EventSearchCriteria criteria = new EventSearchCriteria(
                 q,
                 category == null ? null : category.getValue(),
-                city == null ? null : city.getValue(),
+                city,
                 from,
                 to,
                 priceMin,

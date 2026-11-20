@@ -16,7 +16,6 @@ import tools.jackson.databind.json.JsonMapper;
 import vingo.api.model.AdminGetOrder200Response;
 import vingo.api.model.AdminGetOrder200ResponseAllOfHistoryInner;
 import vingo.api.model.BuyerProfile;
-import vingo.api.model.CityCode;
 import vingo.api.model.EventCategory;
 import vingo.api.model.EventSummary;
 import vingo.api.model.Order;
@@ -73,7 +72,7 @@ public class OrderReader {
                         SELECT o.*, s.event_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at,
                                s.status AS stored_showtime_status,
-                               e.title, e.category, e.poster_url, v.name AS venue_name, v.city,
+                               e.title, e.category, e.poster_url, v.name AS venue_name, venue_location_city(v.location) AS city,
                                (SELECT min(pt.price) FROM zone_price zp
                                 JOIN price_tier pt ON pt.id = zp.price_tier_id
                                 WHERE zp.event_id = e.id) AS price_from,
@@ -99,12 +98,7 @@ public class OrderReader {
                             .firstStartsAt(rs.getObject("first_starts_at", OffsetDateTime.class))
                             .onSale(rs.getBoolean("on_sale"));
                     // shortcut: venue.city là text tự do, catalog chốt mã thành phố thì đổi.
-                    for (CityCode code : CityCode.values()) {
-                        if (code.getValue().equals(city)) {
-                            event.city(code);
-                            break;
-                        }
-                    }
+                    event.city(city);
                     String poster = rs.getString("poster_url");
                     if (poster != null) {
                         event.posterUrl(URI.create(poster));

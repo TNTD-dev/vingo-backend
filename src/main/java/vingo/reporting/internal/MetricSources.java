@@ -16,12 +16,14 @@ SELECT s.event_id, s.id AS showtime_id, se.zone_id, zp.price_tier_id, s.starts_a
        count(*) FILTER (WHERE ss.status = 'SOLD')::bigint AS sold
 FROM showtime_seat ss JOIN showtime s ON s.id = ss.showtime_id
 JOIN seat se ON se.id = ss.seat_id
-JOIN zone_price zp ON zp.event_id = s.event_id AND zp.zone_id = se.zone_id
+LEFT JOIN zone_price zp ON zp.event_id = s.event_id AND zp.zone_id = se.zone_id
+WHERE s.status = 'SCHEDULED'
 GROUP BY s.event_id, s.id, se.zone_id, zp.price_tier_id, s.starts_at
 UNION ALL
 SELECT s.event_id, s.id, z.zone_id, zp.price_tier_id, s.starts_at, z.capacity::bigint, z.sold::bigint
 FROM showtime_zone_stock z JOIN showtime s ON s.id = z.showtime_id
-JOIN zone_price zp ON zp.event_id = s.event_id AND zp.zone_id = z.zone_id
+LEFT JOIN zone_price zp ON zp.event_id = s.event_id AND zp.zone_id = z.zone_id
+WHERE s.status = 'SCHEDULED'
             """;
     static final String CHECKINS = """
 SELECT t.id AS ticket_id, s.event_id, o.showtime_id, i.zone_id, i.price_tier_id,

@@ -74,7 +74,8 @@ public class AdminOpsController implements AdminOperationsApi {
     /** Trả trang nhật ký theo entity, entity_id và cursor. */
     @Override
     public ResponseEntity<ListAuditLogs200Response> listAuditLogs(
-            String entity, UUID entityId, String cursor, Integer limit) {
-        return ResponseEntity.ok(adminOps.listAuditLogs(entity, entityId, cursor, limit));
+            String entity, UUID entityId, String cursor, Integer limit, UUID actorId, String action,
+            java.time.OffsetDateTime from, java.time.OffsetDateTime to, String outcome, Boolean activityOnly) {
+        return ResponseEntity.ok(adminOps.listAuditLogs(entity, entityId, cursor, limit, actorId, action, from, to, outcome, activityOnly));
     }
 }

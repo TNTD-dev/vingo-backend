@@ -83,7 +83,7 @@ class EventDetailRepository {
                         SELECT s.id, s.event_id, s.seat_layout_id, s.starts_at, s.ends_at,
                                s.sale_opens_at, s.sale_closes_at, s.status,
                                v.id AS venue_id, v.name AS venue_name, v.type AS venue_type,
-                               v.address AS venue_address, v.city AS venue_city
+                               v.location->>'display_address' AS venue_address, venue_location_city(v.location) AS venue_city
                         FROM showtime s
                         JOIN seat_layout vl ON vl.id = s.seat_layout_id JOIN venue v ON v.id = vl.venue_id
                         WHERE s.event_id = :id AND s.status <> 'DRAFT'

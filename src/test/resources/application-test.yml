@@ -31,6 +31,10 @@ vingo:
     api-url: http://vnpay.invalid/querydr
     return-url: http://localhost:8080/api/v1/payments/vnpay/return
     frontend-return-url: http://localhost:5173/payment/result
+server:
+  tomcat:
+    # Test tranh chấp gửi đồng thời 1.000 request; hàng đợi phải chứa đủ đợt kết nối.
+    accept-count: 2048
 spring:
   flyway:
     locations: classpath:db/migration

@@ -78,10 +78,8 @@ public class VenueSetupClients {
             if(!name.isBlank())areas.add(new AdministrativeArea().name(name).level(AdministrativeArea.LevelEnum.fromValue(field[1])));
         }
         r.administrativeArea(areas);
-        String city=(p.path("city").asText("")+" "+p.path("state").asText("")).toLowerCase(Locale.ROOT);
-        if(city.contains("hà nội")||city.contains("hanoi")||city.contains("ha noi"))r.cityCode(CityCode.HN);
-        else if(city.contains("hồ chí minh")||city.contains("ho chi minh"))r.cityCode(CityCode.HCM);
-        else if(city.contains("đà nẵng")||city.contains("da nang"))r.cityCode(CityCode.DN);
+        String code=p.path("state_code").asText(null);
+        if(code!=null && !code.isBlank()) r.cityCode(code);
         return r;
     }
     public void route(VenueLocationInput venue,ParkingSetupDraft parking) {

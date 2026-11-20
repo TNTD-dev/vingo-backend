@@ -225,8 +225,8 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         String token = tokenFor(Role.ADMIN);
 
         UUID venueId = jdbc.sql("""
-                INSERT INTO venue (name, type, address, city)
-                VALUES ('Sân Thiên Trường', 'STADIUM', 'Nam Định', 'HN')
+                INSERT INTO venue (name, type, location)
+                VALUES ('Sân Thiên Trường', 'STADIUM', jsonb_build_object('display_address','Nam Định','city_code','HN','source','LEGACY'))
                 RETURNING id
                 """).query(UUID.class).single();
         UUID hallId = venueId;
