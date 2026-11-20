@@ -127,7 +127,7 @@ Quy tắc:
 | 413 | PAYLOAD_TOO_LARGE | File/request/phiên nhập vượt giới hạn |
 | 415 | UNSUPPORTED_MEDIA_TYPE | Tệp tải lên có định dạng không được hỗ trợ |
 | 422 | INVALID_SEAT_LAYOUT | SVG không đọc được, vi phạm quy ước nhập sơ đồ sân, hoặc sơ đồ chưa được publish hay không thuộc sân/nền đã chọn |
-| 422 | PROFILE_REQUIRED | Chưa có hồ sơ người mua |
+| 422 | PROFILE_REQUIRED | Đơn chưa có thông tin người mua (họ tên, email, SĐT) khi tạo thanh toán |
 | 422 | PHONE_VERIFICATION_REQUIRED | Chưa xác minh số điện thoại để giữ ghế |
 | 422 | MAX_TICKETS_EXCEEDED | Vượt số vé tối đa mỗi đơn |
 | 423 | ACCOUNT_LOCKED | Sai mật khẩu quá số lần |
