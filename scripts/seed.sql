@@ -224,6 +224,39 @@ SELECT pg_temp.add_seats(pg_temp.sid(142), ARRAY['F', 'G'], 12);
 SELECT pg_temp.add_seats(pg_temp.sid(151), ARRAY['A', 'B'], 10);
 SELECT pg_temp.add_seats(pg_temp.sid(161), ARRAY['A', 'B', 'C', 'D'], 10);
 
+-- SVG mẫu dùng đúng mã khu/hàng/ghế để có thể chọn vé trên web.
+WITH placed_zones AS (
+    SELECT z.*,
+           40 + ((row_number() OVER (PARTITION BY seat_map_id ORDER BY id) - 1) % 2) * 480 AS x,
+           35 + ((row_number() OVER (PARTITION BY seat_map_id ORDER BY id) - 1) / 2) * 285 AS y
+    FROM zone z
+), placed_seats AS (
+    SELECT s.*,
+           dense_rank() OVER (PARTITION BY zone_id ORDER BY row_label) AS row_number
+    FROM seat s
+), shapes AS (
+    SELECT z.seat_map_id, z.id,
+           format('<rect id="ZONE__%s__%s%s" x="%s" y="%s" width="440" height="245" rx="10" fill="#dbeafe"/>',
+                  z.code, z.kind, CASE WHEN z.kind = 'STANDING' THEN '__' || z.capacity ELSE '' END, z.x, z.y)
+           || CASE WHEN z.kind = 'SEATED' THEN
+               format('<g id="CONTENT__%s">%s<path id="PITCH_SIDE__%s" d="M%s %s h420" stroke="#64748b"/></g>',
+                      z.code,
+                      coalesce((SELECT string_agg(format(
+                          '<circle id="SEAT__%s__%s__%s" cx="%s" cy="%s" r="7" fill="#6366f1"/>',
+                          z.code, s.row_label, s.number, z.x + 18 + s.number * 30, z.y + 18 + s.row_number * 32
+                      ), '' ORDER BY s.row_label, s.number) FROM placed_seats s WHERE s.zone_id = z.id), ''),
+                      z.code, z.x + 10, z.y + 230)
+              ELSE '' END
+           || format('<text x="%s" y="%s" fill="#0f172a">%s</text>', z.x + 10, z.y + 20, z.code) AS svg
+    FROM placed_zones z
+), rendered AS (
+    SELECT seat_map_id,
+           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600">'
+           || string_agg(svg, '' ORDER BY id) || '</svg>' AS svg
+    FROM shapes GROUP BY seat_map_id
+)
+UPDATE seat_map m SET svg = r.svg FROM rendered r WHERE r.seat_map_id = m.id;
+
 -- ------------------------------------------------------------------ Sự kiện, SKU, giá, event_zone
 
 INSERT INTO event (id, title, description, category, home_team, away_team, league, round, poster_mobile_url, poster_desktop_url, max_tickets_per_order, seat_map_id, status) VALUES
