@@ -1,8 +1,26 @@
 -- Xoá schema cũ (v1) để dựng schema v2. Dữ liệu cũ trên máy local được bỏ, không chuyển dữ liệu.
 -- Giữ nguyên flyway_schema_history; extension (unaccent, pg_trgm) để nguyên, chỉ xoá đối tượng do migration tạo.
 DO $$
-DECLARE r record;
+DECLARE
+    r record;
+    has_rows boolean;
 BEGIN
+    IF lower('${allowDestructiveReset}') <> 'true' THEN
+        FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+                 AND tablename NOT IN ('flyway_schema_history', 'shedlock') ORDER BY tablename LOOP
+            EXECUTE format('LOCK TABLE public.%I IN SHARE MODE', r.tablename);
+            IF r.tablename = 'seat_type' THEN
+                -- Ba loại ghế có sẵn do Flyway v1 tự tạo trên DB trống.
+                SELECT EXISTS (SELECT FROM public.seat_type WHERE (code, name) NOT IN
+                    (('STANDARD', 'Ghế thường'), ('COUPLE', 'Ghế đôi'), ('WHEELCHAIR', 'Chỗ xe lăn'))) INTO has_rows;
+            ELSE
+                EXECUTE format('SELECT EXISTS (SELECT FROM public.%I LIMIT 1)', r.tablename) INTO has_rows;
+            END IF;
+            IF has_rows THEN
+                RAISE EXCEPTION 'Dừng reset schema v2: bảng % còn dữ liệu. Dùng DB v2 riêng; chỉ bật allowDestructiveReset cho DB được phép xoá.', r.tablename;
+            END IF;
+        END LOOP;
+    END IF;
     FOR r IN SELECT viewname FROM pg_views WHERE schemaname = 'public' LOOP
         EXECUTE format('DROP VIEW IF EXISTS public.%I CASCADE', r.viewname);
     END LOOP;
@@ -114,7 +132,7 @@ CREATE INDEX login_session_user_idx    ON login_session (user_id);
 CREATE INDEX login_session_expires_idx ON login_session (expires_at);
 
 -- Mỗi lần gửi OTP (email hoặc SMS) = một dòng, kể cả gửi lại và gửi lỗi; không ghi đè.
--- Mã hiệu lực = dòng mới nhất của (user_id, purpose), chưa dùng, chưa hết hạn.
+-- Mã hiệu lực = dòng đã gửi thành công mới nhất của (user_id, purpose), chưa dùng, chưa hết hạn.
 -- Giới hạn tần suất = đếm dòng trong cửa sổ thời gian (theo user / máy / số nhận), không phụ thuộc Redis.
 -- Job dọn các dòng quá cửa sổ đếm.
 CREATE TABLE otp_verification (
@@ -124,6 +142,7 @@ CREATE TABLE otp_verification (
     phone       text        CHECK (phone ~ '^\+[1-9][0-9]{8,14}$'),   -- chỉ PHONE: số đang xác minh
     client_key  uuid        NOT NULL,                                -- khoá ẩn danh suy từ IP
     code_hash   text        NOT NULL,
+    delivered   boolean NOT NULL DEFAULT true,
     attempts    smallint    NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     sent_at     timestamptz NOT NULL DEFAULT now(),
     expires_at  timestamptz NOT NULL,
@@ -180,6 +199,7 @@ CREATE TABLE venue_map (
 CREATE TABLE seat_map (
     id           uuid        PRIMARY KEY DEFAULT uuidv7(),
     venue_id     uuid        NOT NULL,
+    view_box     numeric[]   CHECK (array_length(view_box, 1) = 4),
     venue_map_id uuid        NOT NULL,
     version      int         NOT NULL CHECK (version > 0),
     name         text        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
@@ -236,7 +256,7 @@ CREATE TABLE event (
     created_at            timestamptz  NOT NULL DEFAULT now(),
     updated_at            timestamptz  NOT NULL DEFAULT now(),
     UNIQUE (id, seat_map_id),
-    CHECK (status = 'DRAFT' OR seat_map_id IS NOT NULL),
+    CHECK (status <> 'PUBLISHED' OR seat_map_id IS NOT NULL),
     CHECK (category = 'FOOTBALL' OR num_nonnulls(home_team, away_team, league, round) = 0)
 );
 CREATE INDEX event_fts_idx ON event
@@ -247,7 +267,7 @@ CREATE INDEX event_title_trgm_idx ON event USING gin (immutable_unaccent(lower(t
 CREATE TABLE sku (
     id       uuid   PRIMARY KEY DEFAULT uuidv7(),
     event_id uuid   NOT NULL REFERENCES event,
-    name     text   NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 100),
+    name     text   NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
     color    text   NOT NULL CHECK (color ~ '^#[0-9A-Fa-f]{6}$'),
     UNIQUE (event_id, name),
     UNIQUE (id, event_id)
@@ -334,9 +354,10 @@ CREATE TABLE seat_inventory (
     zone_id     uuid        NOT NULL,
     seat_map_id uuid        NOT NULL,
     status      seat_status NOT NULL DEFAULT 'AVAILABLE',
-    order_id    uuid        REFERENCES ticket_order,
+    order_id    uuid,
     held_until  timestamptz,
     PRIMARY KEY (showtime_id, seat_id),
+    FOREIGN KEY (order_id, showtime_id) REFERENCES ticket_order (id, showtime_id),
     FOREIGN KEY (showtime_id, seat_map_id) REFERENCES showtime (id, seat_map_id),
     FOREIGN KEY (seat_id, zone_id, seat_map_id) REFERENCES seat (id, zone_id, seat_map_id),
     CHECK ((status IN ('HELD', 'SOLD')) = (order_id IS NOT NULL)),
@@ -542,15 +563,18 @@ CREATE TABLE shedlock (
 );
 
 -- ============================ NHẬP SƠ ĐỒ (wizard admin) ============================
--- Phiên còn tồn tại = đang nháp. Hoàn tất (tạo venue_map/seat_map/zone/seat) hoặc huỷ đều XOÁ phiên;
--- ai nhập sơ đồ nào ghi ở audit_log. Job dọn phiên bỏ dở: updated_at < now() - 30 ngày.
+-- Lưu kết quả phiên đã đóng cho đến khi job dọn để client có thể gửi lại yêu cầu.
 CREATE TABLE venue_import_session (
     id         uuid        PRIMARY KEY DEFAULT uuidv7(),
     owner_id   uuid        NOT NULL REFERENCES user_account,
     venue_id   uuid        REFERENCES venue,                  -- NULL = tạo sân mới
+    status     text        NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'COMPLETED', 'CANCELLED')),
+    result     jsonb,
+    revision   bigint      NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    CHECK ((status = 'COMPLETED') = (result IS NOT NULL)),
     draft      jsonb       NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(draft) = 'object'),
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()             -- optimistic lock + mốc dọn
+    updated_at timestamptz NOT NULL DEFAULT now()             -- mốc dọn
 );
 CREATE INDEX venue_import_session_owner_idx   ON venue_import_session (owner_id, updated_at DESC);
 CREATE INDEX venue_import_session_updated_idx ON venue_import_session (updated_at);
@@ -597,7 +621,7 @@ COMMENT ON COLUMN login_session.token_hash IS 'SHA-256 của refresh token hiệ
 COMMENT ON COLUMN login_session.expires_at IS 'Hạn tuyệt đối của phiên; job dọn xoá phiên quá hạn';
 COMMENT ON COLUMN login_session.created_at IS 'Thời điểm đăng nhập';
 
-COMMENT ON TABLE otp_verification IS 'Mỗi lần gửi OTP = một dòng (kể cả gửi lại, gửi lỗi). Mã hiệu lực = dòng mới nhất của (user, mục đích); đếm dòng để giới hạn tần suất. Chỉ lưu hash.';
+COMMENT ON TABLE otp_verification IS 'Mỗi lần gửi OTP = một dòng (kể cả gửi lại, gửi lỗi). Mã hiệu lực = dòng đã gửi thành công mới nhất của (user, mục đích); đếm dòng để giới hạn tần suất. Chỉ lưu hash.';
 COMMENT ON COLUMN otp_verification.id IS 'Khoá chính; trả cho client làm mã phiên OTP';
 COMMENT ON COLUMN otp_verification.user_id IS 'User đang xác minh';
 COMMENT ON COLUMN otp_verification.purpose IS 'VERIFY (email tài khoản) | RESET (đặt lại mật khẩu) — gửi email; PHONE (xác minh SĐT) — gửi SMS';
@@ -864,13 +888,13 @@ COMMENT ON COLUMN shedlock.locked_at IS 'Thời điểm lấy khoá';
 COMMENT ON COLUMN shedlock.locked_by IS 'Instance đang giữ khoá';
 
 -- ============================ NHẬP SƠ ĐỒ ============================
-COMMENT ON TABLE venue_import_session IS 'Nháp wizard nhập sân/sơ đồ. Tồn tại = đang nháp; hoàn tất hoặc huỷ thì xoá phiên.';
+COMMENT ON TABLE venue_import_session IS 'Nháp wizard nhập sân/sơ đồ. Phiên đã đóng giữ kết quả để retry.';
 COMMENT ON COLUMN venue_import_session.id IS 'Khoá chính';
 COMMENT ON COLUMN venue_import_session.owner_id IS 'Admin tạo phiên';
 COMMENT ON COLUMN venue_import_session.venue_id IS 'Sân nhập version mới; NULL = tạo sân mới';
 COMMENT ON COLUMN venue_import_session.draft IS 'Dữ liệu wizard: thông tin sân, tên sơ đồ, layout_type…';
 COMMENT ON COLUMN venue_import_session.created_at IS 'Thời điểm tạo';
-COMMENT ON COLUMN venue_import_session.updated_at IS 'Lần lưu gần nhất; lưu nháp kèm WHERE updated_at = giá trị cũ để chống ghi đè; job dọn phiên quá 30 ngày';
+COMMENT ON COLUMN venue_import_session.updated_at IS 'Lần lưu gần nhất; dọn nháp sau 30 ngày và phiên đóng sau 7 ngày';
 
 COMMENT ON TABLE venue_import_file IS 'File SVG tải lên trong phiên, đã làm sạch. Xoá theo phiên.';
 COMMENT ON COLUMN venue_import_file.id IS 'Khoá chính';

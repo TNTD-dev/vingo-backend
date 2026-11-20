@@ -187,13 +187,13 @@ SELECT pg_temp.sid(110 + n), pg_temp.sid(100 + n), 1,
        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"><rect id="BACKGROUND" width="1000" height="600"/></svg>'
 FROM generate_series(1, 5) n;
 
-INSERT INTO seat_map (id, venue_id, venue_map_id, version, name, layout_type, svg) VALUES
-    (pg_temp.sid(121), pg_temp.sid(101), pg_temp.sid(111), 1, 'Sơ đồ Mỹ Đình',   'FOOTBALL', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>'),
-    (pg_temp.sid(122), pg_temp.sid(102), pg_temp.sid(112), 1, 'Sơ đồ Nhà hát Lớn', 'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>'),
-    (pg_temp.sid(123), pg_temp.sid(103), pg_temp.sid(113), 1, 'Sơ đồ Quân khu 7', 'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>'),
-    (pg_temp.sid(124), pg_temp.sid(104), pg_temp.sid(114), 1, 'Sơ đồ Hòa Bình',   'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>'),
-    (pg_temp.sid(125), pg_temp.sid(105), pg_temp.sid(115), 1, 'Sơ đồ Biển Đông',  'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>'),
-    (pg_temp.sid(126), pg_temp.sid(105), pg_temp.sid(115), 2, 'Sơ đồ Biển Đông Bóng đá', 'FOOTBALL', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>');
+INSERT INTO seat_map (id, venue_id, venue_map_id, version, name, layout_type, svg, view_box) VALUES
+    (pg_temp.sid(121), pg_temp.sid(101), pg_temp.sid(111), 1, 'Sơ đồ Mỹ Đình',   'FOOTBALL', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]),
+    (pg_temp.sid(122), pg_temp.sid(102), pg_temp.sid(112), 1, 'Sơ đồ Nhà hát Lớn', 'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]),
+    (pg_temp.sid(123), pg_temp.sid(103), pg_temp.sid(113), 1, 'Sơ đồ Quân khu 7', 'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]),
+    (pg_temp.sid(124), pg_temp.sid(104), pg_temp.sid(114), 1, 'Sơ đồ Hòa Bình',   'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]),
+    (pg_temp.sid(125), pg_temp.sid(105), pg_temp.sid(115), 1, 'Sơ đồ Biển Đông',  'CONCERT',  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]),
+    (pg_temp.sid(126), pg_temp.sid(105), pg_temp.sid(115), 2, 'Sơ đồ Biển Đông Bóng đá', 'FOOTBALL', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"/>', ARRAY[0,0,1000,600]);
 
 INSERT INTO zone (id, seat_map_id, code, name, kind, capacity) VALUES
     -- L1 Mỹ Đình (121)
@@ -506,6 +506,7 @@ COMMIT;
 \echo '== Kịch bản test (id đầy đủ = 01970000-0000-7000-8000-00000000NNNN) =='
 SELECT 'showtime' AS loai, right(s.id::text, 4) AS nnnn, s.id, e.title,
        CASE WHEN s.cancelled_at IS NOT NULL OR e.status = 'CANCELLED' THEN 'CANCELLED'
+            WHEN e.status = 'DRAFT' THEN 'DRAFT'
             WHEN now() >= s.ends_at THEN 'FINISHED'
             WHEN now() < s.sale_opens_at THEN 'CHƯA MỞ BÁN'
             WHEN now() >= s.sale_closes_at THEN 'SALES_CLOSED'

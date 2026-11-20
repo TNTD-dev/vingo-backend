@@ -52,7 +52,7 @@ public class VenueSetupClients {
         if (city.isBlank()) city = properties.path("city").asText(null);
         return new LocationSuggestion().address(address).label(address)
                 .lat(properties.path("lat").decimalValue()).lng(properties.path("lon").decimalValue())
-                .city(city).district(properties.path("district").asText(null));
+                .city(VenueRepository.canonicalCity(city)).district(properties.path("district").asText(null));
     }
 
     private byte[] send(HttpRequest request) {

@@ -81,8 +81,9 @@ public class AdminAccountRepository {
         jdbc.sql("SELECT pg_advisory_xact_lock(86420161116)").query((rs, row) -> true).single();
     }
 
-    public long activeAdmins() {
-        return jdbc.sql("SELECT count(*) FROM user_account WHERE role = 'ADMIN' AND deleted_at IS NULL AND email_verified_at IS NOT NULL AND NOT admin_locked AND (locked_until IS NULL OR locked_until <= now())")
+    public long activeAdmins(OffsetDateTime now) {
+        return jdbc.sql("SELECT count(*) FROM user_account WHERE role = 'ADMIN' AND deleted_at IS NULL AND email_verified_at IS NOT NULL AND NOT admin_locked AND (locked_until IS NULL OR locked_until <= :now)")
+                .param("now", now)
                 .query(Long.class).single();
     }
 
@@ -111,6 +112,10 @@ public class AdminAccountRepository {
             beforeJson.add("\"admin_locked\":" + before.getAdminLocked());
             afterJson.add("\"admin_locked\":" + after.getAdminLocked());
         }
+        if (!java.util.Objects.equals(before.getLockedUntil(), after.getLockedUntil())) {
+            beforeJson.add("\"locked_until\":" + jsonTime(before.getLockedUntil()));
+            afterJson.add("\"locked_until\":" + jsonTime(after.getLockedUntil()));
+        }
         jdbc.sql("""
                 INSERT INTO audit_log (actor_id, action, entity, entity_id, reason, at, before, after)
                 VALUES (:actor, 'UPDATE_ACCOUNT', 'user_account', :id, :reason, :now,
@@ -120,6 +125,10 @@ public class AdminAccountRepository {
                 .param("before", "{" + String.join(",", beforeJson) + "}")
                 .param("after", "{" + String.join(",", afterJson) + "}")
                 .update();
+    }
+
+    private static String jsonTime(OffsetDateTime value) {
+        return value == null ? "null" : "\"" + value + "\"";
     }
 
     private static AdminAccount map(ResultSet rs, int row) throws SQLException {

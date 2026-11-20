@@ -27,11 +27,21 @@ class CatalogFixturesTest extends IntegrationTest {
     }
 
     @Test
+    void rejectsInconsistentZonesAndUnsupportedCategoryBeforeInserting() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> fixtures.event()
+                .showtime(s -> s.onSale()).showtime(s -> s.seated(1)).create())
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> fixtures.event().category("OTHER").create())
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("OTHER");
+        assertThat(count("venue")).isZero();
+    }
+
+    @Test
     void create_buildsFullChain_forTouringEventWithUnassignedTier() {
         var created = fixtures.event().title("Tour test").city("HN")
                 .tier("VIP", 2_000_000).tier("Chưa gán", 100_000)
                 .showtime(s -> s.onSale().seated(10, "VIP").standing(100).sold(12))
-                .showtime(s -> s.city("HCM").startsAt(clock.instant().plus(Duration.ofDays(20))).seated(5, "VIP"))
+                .showtime(s -> s.city("HCM").startsAt(clock.instant().plus(Duration.ofDays(20))).seated(10, "VIP").standing(100))
                 .create();
 
         assertThat(created.showtimeIds()).hasSize(2);

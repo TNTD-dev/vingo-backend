@@ -190,6 +190,7 @@ class PhoneVerificationApiTest extends IntegrationTest {
         assertThat(sendCount(buyer)).isEqualTo(2);
         assertThat(snapshot(session.getOtpSessionId())).isEqualTo(before);
         assertThat(sms.sent()).hasSize(1);
+        verifyOk(buyer, session.getOtpSessionId(), sms.lastCode(phone));
     }
 
     @Test

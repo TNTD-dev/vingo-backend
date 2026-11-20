@@ -1,7 +1,6 @@
 package vingo.catalog.internal;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -23,12 +22,10 @@ import vingo.catalog.internal.SeatLayoutSvgParser.ZoneKind;
 public class SeatLayoutRepository {
     private final JdbcClient jdbc;
     private final JdbcTemplate batches;
-    private final SeatLayoutSvgParser parser;
 
-    SeatLayoutRepository(JdbcClient jdbc, JdbcTemplate batches, SeatLayoutSvgParser parser) {
+    SeatLayoutRepository(JdbcClient jdbc, JdbcTemplate batches) {
         this.jdbc = jdbc;
         this.batches = batches;
-        this.parser = parser;
     }
 
     public UUID insertZone(UUID seatMapId, ParsedZone zone) {
@@ -106,6 +103,7 @@ public class SeatLayoutRepository {
             UUID id,
             UUID venueId,
             UUID overviewId,
+            Long overviewVersion,
             String layoutType,
             String name,
             long version,
@@ -127,7 +125,7 @@ public class SeatLayoutRepository {
 
     public record LayoutPosition(long version, UUID id) {}
 
-    public record LayoutAttachmentRow(UUID id, UUID venueId) {}
+    public record LayoutAttachmentRow(UUID id, UUID venueId, boolean matchesCategory) {}
 
     public record ShowtimeData(
             UUID seatLayoutId,
@@ -146,10 +144,10 @@ public class SeatLayoutRepository {
 
     Optional<LayoutHeaderRow> findLayoutHeader(UUID layoutId) {
         return jdbc.sql("""
-                SELECT sm.id, sm.venue_id, sm.venue_map_id, sm.layout_type, sm.name, sm.version, sm.svg, sm.created_at,
+                SELECT sm.id, sm.venue_id, sm.venue_map_id, sm.layout_type, sm.name, sm.version, sm.view_box, sm.created_at, vm.version AS overview_version,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_map_id = sm.id) AS zone_count,
                        (SELECT COUNT(*) FROM seat s WHERE s.seat_map_id = sm.id) AS seat_count
-                FROM seat_map sm
+                FROM seat_map sm LEFT JOIN venue_map vm ON vm.id = sm.venue_map_id
                 WHERE sm.id = :id
                 """)
                 .param("id", layoutId)
@@ -182,19 +180,18 @@ public class SeatLayoutRepository {
     }
 
     private LayoutHeaderRow mapHeader(ResultSet rs) throws SQLException {
-        String svg = rs.getString("svg");
+        var bounds = rs.getArray("view_box");
         Bounds viewBox = null;
-        if (svg != null && !svg.isBlank()) {
-            try {
-                viewBox = parser.parse(svg.getBytes(StandardCharsets.UTF_8)).viewBox();
-            } catch (RuntimeException ignored) {
-                viewBox = null;
-            }
+        if (bounds != null) {
+            BigDecimal[] values = (BigDecimal[]) bounds.getArray();
+            viewBox = new Bounds(values[0], values[1], values[2], values[3]);
         }
+        Integer overviewVersion = rs.getObject("overview_version", Integer.class);
         return new LayoutHeaderRow(
                 rs.getObject("id", UUID.class),
                 rs.getObject("venue_id", UUID.class),
                 rs.getObject("venue_map_id", UUID.class),
+                overviewVersion == null ? null : overviewVersion.longValue(),
                 rs.getString("layout_type"),
                 rs.getString("name"),
                 rs.getLong("version"),
@@ -250,10 +247,10 @@ public class SeatLayoutRepository {
 
     List<LayoutHeaderRow> findByVenue(UUID venueId, String type, LayoutPosition after, int fetchSize) {
         return jdbc.sql("""
-                SELECT sm.id, sm.venue_id, sm.venue_map_id, sm.layout_type, sm.name, sm.version, sm.svg, sm.created_at,
+                SELECT sm.id, sm.venue_id, sm.venue_map_id, sm.layout_type, sm.name, sm.version, sm.view_box, sm.created_at, vm.version AS overview_version,
                        (SELECT COUNT(*) FROM zone z WHERE z.seat_map_id = sm.id) AS zone_count,
                        (SELECT COUNT(*) FROM seat s WHERE s.seat_map_id = sm.id) AS seat_count
-                FROM seat_map sm
+                FROM seat_map sm LEFT JOIN venue_map vm ON vm.id = sm.venue_map_id
                 WHERE sm.venue_id = :venueId
                   AND (CAST(:type AS text) IS NULL OR sm.layout_type = :type)
                   AND (
@@ -312,17 +309,18 @@ public class SeatLayoutRepository {
                 """).param("id", showtimeId).query(Boolean.class).single();
     }
 
-    Optional<LayoutAttachmentRow> findLayoutForAttach(UUID layoutId) {
+    Optional<LayoutAttachmentRow> findLayoutForAttach(UUID eventId, UUID layoutId) {
         return jdbc.sql("""
-                SELECT sm.id, sm.venue_id
+                SELECT sm.id, sm.venue_id, sm.layout_type = e.category AS matches_category
                 FROM seat_map sm
                 JOIN venue v ON v.id = sm.venue_id
+                JOIN event e ON e.id = :event
                 WHERE sm.id = :id AND v.deleted_at IS NULL
                 """)
-                .param("id", layoutId)
+                .param("id", layoutId).param("event", eventId)
                 .query((rs, row) -> new LayoutAttachmentRow(
                         rs.getObject("id", UUID.class),
-                        rs.getObject("venue_id", UUID.class)
+                        rs.getObject("venue_id", UUID.class), rs.getBoolean("matches_category")
                 ))
                 .optional();
     }

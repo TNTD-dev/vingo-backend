@@ -136,6 +136,9 @@ class SearchCacheTest extends IntegrationTest {
 
         JsonNode third = get("/api/v1/showtimes/" + showtime + "/seatmap");
         assertThat(redis.hasKey(freshKey)).isTrue();
+        assertThat(third.path("zones").get(0).path("seats").values())
+                .filteredOn(s -> seat.toString().equals(s.path("seat_id").asString()))
+                .singleElement().satisfies(s -> assertThat(s.path("number").asInt()).isEqualTo(999));
         assertThat(third.path("zones").get(0).path("seats").get(0).path("x").asInt()).isEqualTo(first.path("zones").get(0).path("seats").get(0).path("x").asInt());
     }
 

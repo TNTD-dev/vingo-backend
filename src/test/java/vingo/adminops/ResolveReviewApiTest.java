@@ -62,6 +62,18 @@ class ResolveReviewApiTest extends AdminOpsTestSupport {
     }
 
     @Test
+    void issueTickets_rejectsMissingBuyerBeforeReclaimingSeats() {
+        UUID seat = showtime.event().seat(1);
+        UUID order = reviewSeats(seat);
+        removeEmail(order);
+        var before = seatRow(seat);
+        problem(resolve(order, "ISSUE_TICKETS"), 409, "ORDER_STATE_INVALID");
+        assertThat(seatRow(seat)).isEqualTo(before);
+        assertThat(orderStatus(order)).isEqualTo("NEEDS_REVIEW");
+        assertThat(ticketIds(order)).isEmpty();
+    }
+
+    @Test
     void issueTickets_enqueuesExactlyOneEmailAndRetryingIssuanceDoesNotDuplicateIt() {
         UUID order = reviewSeats(showtime.event().seat(1), showtime.event().seat(2));
         assertThat(outbox()).isEmpty();

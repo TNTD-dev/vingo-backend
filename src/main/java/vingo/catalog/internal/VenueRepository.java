@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -35,7 +36,19 @@ public class VenueRepository {
             BigDecimal lat,
             BigDecimal lng,
             String rules
-            ) {}
+            ) {
+        public VenueData {
+            city = canonicalCity(city);
+        }
+    }
+
+    private static final Map<String, String> CITY_CODES = Map.of(
+            "Hà Nội", "HN", "TP. Hồ Chí Minh", "HCM", "Hồ Chí Minh", "HCM",
+            "Thành phố Hồ Chí Minh", "HCM", "Đà Nẵng", "DN");
+
+    public static String canonicalCity(String city) {
+        return city == null ? null : CITY_CODES.getOrDefault(city.strip(), city.strip());
+    }
 
     public record VenueRow(
             UUID id,
@@ -98,6 +111,11 @@ public class VenueRepository {
             VenuePosition after,
             int fetchSize
     ) {
+        var cityNames = new java.util.ArrayList<String>();
+        cityNames.add(city);
+        CITY_CODES.forEach((name, code) -> {
+            if (code.equals(city)) cityNames.add(name);
+        });
         return jdbc.sql("""
                 SELECT
                 """ + COLUMNS + """
@@ -107,7 +125,7 @@ public class VenueRepository {
                       CAST(:query AS text) IS NULL
                       OR strpos(lower(name), lower(CAST(:query AS text))) > 0
                   )
-                  AND (CAST(:city AS text) IS NULL OR city = :city)
+                  AND (CAST(:city AS text) IS NULL OR city = :city OR city IN (:cityNames))
                   AND (
                       CAST(:afterCreatedAt AS timestamptz) IS NULL
                       OR (created_at, id) < (
@@ -120,6 +138,7 @@ public class VenueRepository {
                 """)
                 .param("query", query)
                 .param("city", city)
+                .param("cityNames", cityNames)
                 .param("afterCreatedAt", after == null ? null : after.createdAt())
                 .param("afterId", after == null ? null : after.id())
                 .param("fetchSize", fetchSize)

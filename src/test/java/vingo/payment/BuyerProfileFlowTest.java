@@ -17,9 +17,10 @@ class BuyerProfileFlowTest extends PaymentTestSupport {
         createPayment(buyerToken(buyer), order, UUID.randomUUID().toString(), "{}")
                 .expectStatus().isEqualTo(422);
 
-        createPayment(buyerToken(buyer), order, UUID.randomUUID().toString(),
+        var payment = createPayment(buyerToken(buyer), order, UUID.randomUUID().toString(),
                 "{\"buyer\":{\"full_name\":\"Buyer Test\",\"phone\":\"+84901234567\",\"email\":\"buyer@test.vingo\"}}")
-                .expectStatus().isEqualTo(201);
+                .expectStatus().isEqualTo(201).expectBody(vingo.api.model.PaymentIntent.class).returnResult().getResponseBody();
+        assertThat(payment).isNotNull();
 
         var saved = jdbc.sql("SELECT buyer_name, buyer_email, buyer_phone FROM ticket_order WHERE id = :id")
                 .param("id", order).query().singleRow();
@@ -30,7 +31,9 @@ class BuyerProfileFlowTest extends PaymentTestSupport {
 
         // Lần gọi sau không cần truyền lại buyer (tái sử dụng payment OPEN và buyer đã lưu trên đơn)
         createPayment(buyerToken(buyer), order, UUID.randomUUID().toString(), "{}")
-                .expectStatus().isEqualTo(201);
+                .expectStatus().isEqualTo(201).expectBody().jsonPath("$.id").isEqualTo(payment.getId().toString());
+        assertThat(jdbc.sql("SELECT count(*) FROM payment WHERE order_id = :id").param("id", order)
+                .query(Integer.class).single()).isOne();
     }
 
     @Test

@@ -77,17 +77,17 @@ public class EventRepository {
         return jdbc.sql("""
                 SELECT EXISTS (
                     SELECT 1 FROM showtime
-                    WHERE event_id = :event AND cancelled_at IS NULL AND seat_map_id <> :layout
+                    WHERE event_id = :event AND seat_map_id <> :layout
                 )
                 """).param("event", event).param("layout", layout).query(Boolean.class).single();
     }
 
     public void selectLayout(UUID event, UUID layout) {
-        jdbc.sql("UPDATE event SET seat_map_id = :layout WHERE id = :event")
+        jdbc.sql("DELETE FROM event_zone WHERE event_id = :event AND seat_map_id <> :layout")
                 .param("event", event)
                 .param("layout", layout)
                 .update();
-        jdbc.sql("DELETE FROM event_zone WHERE event_id = :event AND seat_map_id <> :layout")
+        jdbc.sql("UPDATE event SET seat_map_id = :layout WHERE id = :event")
                 .param("event", event)
                 .param("layout", layout)
                 .update();

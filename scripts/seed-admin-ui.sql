@@ -1,5 +1,5 @@
 -- Dữ liệu DEMO cho giao diện admin, schema v2.
--- Chỉ chạy trên DB local vingo hoặc vingo_admin_ui_20261118. Không xóa/ghi đè dữ liệu hiện có.
+-- Chỉ chạy trên DB local vingo, vingo_admin_ui_20261118 hoặc vingo_admin_ui_v2. Không xóa/ghi đè dữ liệu hiện có.
 -- Toàn bộ trong một transaction; chạy lại sẽ bỏ qua nếu bộ DEMO này đã tồn tại.
 -- Đây là fixture UI: payment/audit được mô phỏng, không gọi VNPay/email/SMS.
 -- Hình học dựng trực tiếp cho UI, không thay thế kiểm thử validator/import SVG.
@@ -43,7 +43,7 @@ DECLARE
     operations text[] := ARRAY['createVenue','updateVenue','completeVenueImport','createEvent',
         'publishEvent','putPriceTiers','putZonePrices','adminUpdateUser'];
 BEGIN
-    IF current_database() NOT IN ('vingo', 'vingo_admin_ui_20261118') THEN
+    IF current_database() NOT IN ('vingo', 'vingo_admin_ui_20261118', 'vingo_admin_ui_v2') THEN
         RAISE EXCEPTION 'Chỉ được seed trên DB local';
     END IF;
     IF EXISTS (SELECT 1 FROM venue WHERE id=pg_temp.demo_id(101)) THEN
@@ -134,10 +134,10 @@ BEGIN
                 svg_:=svg_||format('<text id="LABEL__%s" x="%s" y="%s" font-size="16" fill="#0f172a">%s</text>',
                     code_,CASE WHEN z=3 THEN 410 ELSE 140 END,y_-8,label_);
             END LOOP;
-            INSERT INTO seat_map(id,venue_id,venue_map_id,version,layout_type,name,svg,created_at)
+            INSERT INTO seat_map(id,venue_id,venue_map_id,version,layout_type,name,svg,view_box,created_at)
             VALUES(layout_id_,venue_id_,overview_id_,k,layout_type_,
                 '[DEMO] '||CASE WHEN k<=3 THEN 'Bóng đá' ELSE 'Ca nhạc' END||' · Bản '||k,
-                svg_||'</svg>',now()-interval '90 days'+k*interval '1 hour');
+                svg_||'</svg>',ARRAY[0,0,1000,700],now()-interval '90 days'+k*interval '1 hour');
             FOR z IN 1..CASE WHEN k<=3 THEN 2 ELSE 3 END LOOP
                 zone_id_:=pg_temp.demo_id(10000+v*100+k*10+z);
                 INSERT INTO zone(id,seat_map_id,name,kind,capacity,code)

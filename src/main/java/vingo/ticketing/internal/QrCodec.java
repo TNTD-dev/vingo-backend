@@ -32,7 +32,11 @@ public class QrCodec {
             throw new IllegalStateException(
                     "QR_SECRET không được để trống — đặt biến môi trường QR_SECRET trước khi khởi động");
         }
-        this.secretBytes = secret.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length < 32) {
+            throw new IllegalStateException("QR_SECRET phải có ít nhất 32 byte UTF-8");
+        }
+        this.secretBytes = bytes;
     }
 
     public record ParsedQr(UUID ticketId, int qrVersion) {}

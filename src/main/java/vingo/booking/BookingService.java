@@ -150,6 +150,9 @@ public class BookingService {
         Objects.requireNonNull(action, "action");
         String target;
         if (action == ActionEnum.ISSUE_TICKETS) {
+            if (!repository.hasBuyer(orderId)) {
+                throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đơn chưa có thông tin người mua để phát vé");
+            }
             if (!repository.canIssueReviewedOrder(order.showtimeId(), now)) {
                 throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Suất đã kết thúc hoặc đã bị huỷ");
             }
@@ -452,6 +455,7 @@ public class BookingService {
             // nên mọi mốc thời gian (mở bán, quá hạn, cooldown, expiresAt) phải tính sau khi đã có khoá.
             repository.lockReholdScope(userId, showtimeId);
         }
+        var pending = repository.lockPendingOrder(userId, showtimeId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
 
         var sale = repository.findSale(showtimeId, now)
@@ -463,8 +467,8 @@ public class BookingService {
             throw new DomainException(ErrorCode.SHOWTIME_NOT_ON_SALE, "Suất diễn không đang mở bán");
         }
 
-        repository.lockPendingOrder(userId, showtimeId, now).ifPresent(old -> {
-            if (!old.overdue()) {
+        pending.ifPresent(old -> {
+            if (old.expiresAt().isAfter(now)) {
                 throw new DomainException(ErrorCode.ORDER_STATE_INVALID, "Đã có đơn đang giữ cho suất này");
             }
             repository.lockReplacementInventory(old, seated ? request.getSeatIds() : List.of(), request.getZoneId());

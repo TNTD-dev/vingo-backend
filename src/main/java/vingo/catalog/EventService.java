@@ -162,7 +162,7 @@ public class EventService {
         if (targetLayout != null && (categoryChanged || selectionChanged)) {
             validateSelection(targetLayout, category);
             if (repository.hasConflictingShowtimes(eventId, targetLayout)) {
-                throw invalid("Hủy các suất dùng sơ đồ cũ trước khi đổi sơ đồ của sự kiện.");
+                throw invalid("Không thể đổi sơ đồ khi còn suất tham chiếu sơ đồ cũ, kể cả suất đã hủy.");
             }
         }
         if (selectionChanged) {

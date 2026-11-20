@@ -28,6 +28,7 @@ import vingo.shared.security.CurrentUser;
 public class EventPricingService {
 
     private static final Logger log = LoggerFactory.getLogger(EventPricingService.class);
+    private static final long MAX_TICKET_PRICE = Long.MAX_VALUE / 100 / 20;
     private static final String[] PALETTE = {"#86BDF6", "#A4CC83", "#F5BF70", "#B6A1E5", "#F49CAB", "#70C8C1"};
 
     private final EventRepository events;
@@ -145,8 +146,8 @@ public class EventPricingService {
             OffsetDateTime effectiveFrom,
             String reason
     ) {
-        if (price < 0) {
-            throw invalid("Giá vé phải là số nguyên không âm.");
+        if (price < 0 || price > MAX_TICKET_PRICE) {
+            throw invalid("Giá vé phải từ 0 đến " + MAX_TICKET_PRICE + " đồng.");
         }
         var event = events.lockById(eventId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sự kiện."));
@@ -186,11 +187,11 @@ public class EventPricingService {
         if (item == null) {
             throw invalid("Danh sách không được chứa phần tử null.");
         }
-        if (item.name() == null || item.name().isBlank() || item.name().strip().length() > 100) {
-            throw invalid("Tên hạng giá không được trắng và tối đa 100 ký tự.");
+        if (item.name() == null || item.name().isBlank() || item.name().strip().length() > 200) {
+            throw invalid("Tên hạng giá không được trắng và tối đa 200 ký tự.");
         }
-        if (item.price() == null || item.price() < 0) {
-            throw invalid("Giá vé phải là số nguyên không âm.");
+        if (item.price() == null || item.price() < 0 || item.price() > MAX_TICKET_PRICE) {
+            throw invalid("Giá vé phải từ 0 đến " + MAX_TICKET_PRICE + " đồng.");
         }
         if (item.color() != null && !item.color().matches("^#[0-9A-Fa-f]{6}$")) {
             throw invalid("Màu phải có dạng #RRGGBB.");

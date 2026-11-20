@@ -64,7 +64,7 @@ public class VenueService {
 
         String query = q == null || q.isBlank() ? null : q.strip();
         VenuePosition after = cursor == null ? null : decodeCursor(cursor);
-        List<VenueRow> rows = repository.findActive(query, city, after, pageSize + 1);
+        List<VenueRow> rows = repository.findActive(query, VenueRepository.canonicalCity(city), after, pageSize + 1);
 
         if (rows.size() <= pageSize) {
             return new VenuePage(rows, null);

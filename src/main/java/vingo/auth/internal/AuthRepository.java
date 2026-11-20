@@ -264,9 +264,9 @@ public class AuthRepository {
     public OtpRecord createOtp(UUID userId, OtpPurpose purpose, UUID clientKey, String phone, String codeHash,
                                OffsetDateTime now, OffsetDateTime expiresAt, boolean usable) {
         return jdbc.sql("""
-                        INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at, consumed_at)
+                        INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at, delivered)
                         VALUES (:userId, CAST(:purpose AS otp_purpose), :phone, :clientKey, :codeHash, :now, :expiresAt,
-                                CASE WHEN :usable THEN NULL ELSE :now END)
+                                :usable)
                         RETURNING id, user_id, purpose, phone, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
                         """)
                 .param("userId", userId)
@@ -299,7 +299,7 @@ public class AuthRepository {
     public Optional<UUID> latestOtpId(UUID userId, OtpPurpose purpose) {
         return jdbc.sql("""
                         SELECT id FROM otp_verification
-                        WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose)
+                        WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose) AND delivered
                         ORDER BY sent_at DESC, id DESC LIMIT 1
                         """)
                 .param("user", userId).param("purpose", purpose.name())
@@ -310,11 +310,23 @@ public class AuthRepository {
         return jdbc.sql("""
                         SELECT id, user_id, purpose, phone, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
                         FROM otp_verification
-                        WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose)
+                        WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose) AND delivered
                         ORDER BY sent_at DESC, id DESC LIMIT 1
                         """)
                 .param("user", userId).param("purpose", purpose.name())
                 .query(AuthRepository::otp).optional();
+    }
+
+    public void markOtpDelivered(UUID id) {
+        jdbc.sql("UPDATE otp_verification SET delivered = true WHERE id = :id").param("id", id).update();
+    }
+
+    public List<OffsetDateTime> recentOtpSends(UUID user, OtpPurpose purpose, OffsetDateTime since, int limit) {
+        return jdbc.sql("""
+                SELECT sent_at FROM otp_verification WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose)
+                    AND sent_at > :since ORDER BY sent_at DESC LIMIT :limit
+                """).param("user", user).param("purpose", purpose.name()).param("since", since).param("limit", limit)
+                .query(OffsetDateTime.class).list();
     }
 
     public void incrementOtpAttempts(UUID otpId) {

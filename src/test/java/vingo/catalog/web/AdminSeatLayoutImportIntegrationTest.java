@@ -62,8 +62,6 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
             "/api/v1/admin/venue-imports/{hall_id}/files";
     private static final String LIST_LAYOUTS =
             "/api/v1/admin/venues/{hall_id}/seat-layouts";
-    private static final String PUBLISH =
-            "/api/v1/admin/seat-layouts/{layout_id}/publish";
     private static final String CSV =
             "/api/v1/admin/seat-layouts/{layout_id}/{filename}";
     private static final String OVERVIEW =
@@ -80,6 +78,22 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
     @AfterEach
     void resetClock() {
         clock.reset();
+    }
+
+    @Test
+    void listSeatLayouts_filtersTypeAndPaginatesNewestFirst() {
+        UUID venue = catalog.event().venueId();
+        String token = tokenFor(Role.ADMIN);
+        UUID older = importThienTruong(token, venue);
+        UUID newer = importThienTruong(token, venue);
+        String url = LIST_LAYOUTS + "?layout_type=FOOTBALL&limit=1";
+        String page = client.get().uri(url, venue).headers(h -> h.setBearerAuth(token)).exchange()
+                .expectStatus().isOk().expectBody(String.class).returnResult().getResponseBody();
+        assertThat(JsonPath.<List<String>>read(page, "$.data[*].id")).containsExactly(newer.toString());
+        String cursor = JsonPath.read(page, "$.next_cursor");
+        client.get().uri(url + "&cursor={cursor}", venue, cursor).headers(h -> h.setBearerAuth(token)).exchange()
+                .expectStatus().isOk().expectBody().jsonPath("$.data.length()").isEqualTo(1)
+                .jsonPath("$.data[0].id").isEqualTo(older.toString()).jsonPath("$.next_cursor").isEmpty();
     }
 
     @Test
@@ -483,7 +497,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
 
     @ParameterizedTest
     @CsvSource({"2,4,6,SCHEDULED", "-2,2,4,ON_SALE", "-4,-2,2,SALES_CLOSED", "-6,-4,-2,FINISHED"})
-    void createShowtime_returnsComputedStatusAndStoresScheduled(
+    void createShowtime_returnsComputedStatusWithoutCancelling(
             int opensHours, int closesHours, int endsHours, String expected) {
         var event = catalog.event();
         String token = tokenFor(Role.ADMIN);
@@ -502,7 +516,7 @@ class AdminSeatLayoutImportIntegrationTest extends IntegrationTest {
         assertThat(JsonPath.<String>read(response, "$.status")).isEqualTo(expected);
         UUID id = UUID.fromString(JsonPath.read(response, "$.id"));
         assertThat(jdbc.sql("SELECT cancelled_at FROM showtime WHERE id = :id")
-                .param("id", id).query(OffsetDateTime.class).optional()).isEmpty();
+                .param("id", id).query().singleRow().get("cancelled_at")).isNull();
     }
 
     private UUID importThienTruong(String token, UUID venueId) {

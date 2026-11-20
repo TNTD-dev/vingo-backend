@@ -23,6 +23,12 @@ class QrCodecTest {
     }
 
     @Test
+    void constructor_requires32Utf8Bytes() {
+        assertThatThrownBy(() -> new QrCodec("a".repeat(31))).isInstanceOf(IllegalStateException.class);
+        assertThat(new QrCodec("é".repeat(16))).isNotNull();
+    }
+
+    @Test
     void signAndVerify_roundTripsWithValidSecret() {
         QrCodec codec = new QrCodec("unit-test-qr-secret-at-least-32-bytes");
         UUID ticketId = UUID.randomUUID();

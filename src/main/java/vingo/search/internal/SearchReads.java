@@ -2,6 +2,7 @@ package vingo.search.internal;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,7 +45,7 @@ class SearchReads {
     @Cacheable(cacheNames = SearchCacheConfig.EVENT, key = "@cacheGenerations.eventKey(#eventId)", unless = "#result == null")
     Optional<EventCore> eventCore(UUID eventId) {
         return details.findPublished(eventId).map(event ->
-                new EventCore(event, details.findPriceTiers(eventId), details.findShowtimes(eventId)));
+                new EventCore(event, details.findPriceTiers(eventId, clock.instant().atOffset(ZoneOffset.UTC)), details.findShowtimes(eventId)));
     }
 
     /** Các suất thô của sự kiện PUBLISHED; rỗng nếu sự kiện không tồn tại hoặc chưa PUBLISHED. */
@@ -56,7 +57,7 @@ class SearchReads {
     /** Layout tĩnh của suất. Người gọi đã kiểm suất hiển thị được. */
     @Cacheable(cacheNames = SearchCacheConfig.SEATMAP_LAYOUT, key = "@cacheGenerations.showtimeKey(#showtime.id())")
     SeatmapLayout layout(ShowtimeRef showtime) {
-        return seatmaps.findLayout(showtime);
+        return seatmaps.findLayout(showtime, clock.instant().atOffset(ZoneOffset.UTC));
     }
 
     /**

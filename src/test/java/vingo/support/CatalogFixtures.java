@@ -70,10 +70,6 @@ public final class CatalogFixtures {
     // ------------------------------------------------------------------ Showtime
 
     public final class ShowtimeBuilder {
-        private int coupleFirst=-1;
-        public ShowtimeBuilder couple(int firstIndex) {this.coupleFirst=firstIndex;return this;}
-
-
         private Instant startsAt = clock.instant().plus(Duration.ofDays(7));
         private Duration length = Duration.ofHours(2);
         private String status = "SCHEDULED";
@@ -83,8 +79,6 @@ public final class CatalogFixtures {
         private String venueName;
         private int sold;
         private String layoutSvg;
-        private boolean publishLayout = true;
-        private boolean omitLayoutSvg;
         private final List<ZoneSpec> zones = new ArrayList<>();
 
         private ShowtimeBuilder() {
@@ -95,16 +89,6 @@ public final class CatalogFixtures {
             return this;
         }
 
-        public ShowtimeBuilder draftLayout() {
-            this.publishLayout = false;
-            return this;
-        }
-
-        public ShowtimeBuilder draftLayoutWithoutSvg() {
-            this.omitLayoutSvg = true;
-            return draftLayout();
-        }
-
         public ShowtimeBuilder startsAt(Instant startsAt) {
             this.startsAt = startsAt;
             return this;
@@ -112,11 +96,6 @@ public final class CatalogFixtures {
 
         public ShowtimeBuilder length(Duration length) {
             this.length = length;
-            return this;
-        }
-
-        public ShowtimeBuilder draft() {
-            this.status = "DRAFT";
             return this;
         }
 
@@ -229,7 +208,7 @@ public final class CatalogFixtures {
             return this;
         }
 
-        /** FOOTBALL, CONCERT, THEATER hoặc OTHER. */
+        /** FOOTBALL hoặc CONCERT. */
         public EventBuilder category(String category) {
             this.category = category;
             return this;
@@ -286,6 +265,12 @@ public final class CatalogFixtures {
                 showtime(s -> s.onSale().seated(10));
             }
             ShowtimeBuilder firstShowtime = showtimes.getFirst();
+            if (!"FOOTBALL".equals(category) && !"CONCERT".equals(category)) {
+                throw new IllegalArgumentException("Loại sự kiện không được hỗ trợ: " + category);
+            }
+            if (showtimes.stream().anyMatch(s -> !firstShowtime.zones.equals(s.zones))) {
+                throw new IllegalArgumentException("Mọi suất trong sự kiện phải dùng cùng cấu hình khu");
+            }
             String eventCity = firstShowtime.city != null ? firstShowtime.city : city;
             String eventVenueLabel = firstShowtime.venueName != null
                     ? firstShowtime.venueName
@@ -369,7 +354,6 @@ public final class CatalogFixtures {
         // ---------------------------------------------------------------- SQL
 
         private UUID insertEvent(UUID venueId, UUID layoutId) {
-            String mappedCategory = "FOOTBALL".equals(category) ? "FOOTBALL" : "CONCERT";
             return jdbc.sql("""
                             INSERT INTO event (seat_map_id, title, description, category, poster_desktop_url, status)
                             VALUES (:layout, :title, :description, :category, :poster, :status::event_status)
@@ -378,7 +362,7 @@ public final class CatalogFixtures {
                     .param("layout", layoutId)
                     .param("title", title)
                     .param("description", description)
-                    .param("category", mappedCategory)
+                    .param("category", category)
                     .param("poster", posterUrl)
                     .param("status", status)
                     .query(UUID.class).single();
@@ -452,10 +436,6 @@ public final class CatalogFixtures {
     public void setZoneStock(UUID showtimeId, UUID zoneId, int sold, int held) {
         jdbc.sql("UPDATE standing_inventory SET sold = :sold, held = :held WHERE showtime_id = :s AND zone_id = :z")
                 .param("sold", sold).param("held", held).param("s", showtimeId).param("z", zoneId).update();
-    }
-
-    /** Schema v2 không còn seat_pair/COUPLE. Giữ method rỗng để tương thích builder. */
-    public void makeCouple(UUID seatA, UUID seatB) {
     }
 
     private UUID insertOrder(UUID showtimeId, String status, Instant expiresAt) {

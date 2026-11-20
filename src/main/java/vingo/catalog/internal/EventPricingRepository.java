@@ -13,6 +13,8 @@ import org.springframework.stereotype.Repository;
 import vingo.catalog.EventDetails.SkuPriceRow;
 import vingo.catalog.PriceTierChange;
 import vingo.catalog.ZonePriceChange;
+import vingo.shared.error.DomainException;
+import vingo.shared.error.ErrorCode;
 
 @Repository
 public class EventPricingRepository {
@@ -99,21 +101,17 @@ public class EventPricingRepository {
                 .update();
         requireOneRow(changed);
 
-        // Chưa mở bán / chưa có đơn: cập nhật lại giá ban đầu nếu chỉ có 1 dòng và giá khác.
         Long currentPrice = jdbc.sql("""
                 SELECT price FROM sku_price
-                WHERE sku_id = :skuId
+                WHERE sku_id = :skuId AND effective_from <= :now
                 ORDER BY effective_from DESC LIMIT 1
-                """)
-                .param("skuId", input.id())
-                .query(Long.class)
-                .optional()
-                .orElse(null);
+                """).param("skuId", input.id()).param("now", now).query(Long.class).optional().orElse(null);
 
-        if (currentPrice == null || !currentPrice.equals(input.price())) {
-            jdbc.sql("DELETE FROM sku_price WHERE sku_id = :skuId")
-                    .param("skuId", input.id())
-                    .update();
+        if (!input.price().equals(currentPrice)) {
+            if (skuPriceTimestampExists(input.id(), now)) {
+                throw new DomainException(ErrorCode.VALIDATION_ERROR,
+                        "Đã có mức giá ở mốc thời gian hiệu lực này.");
+            }
             insertSkuPrice(input.id(), input.price(), now, actorId, null, now);
         }
     }

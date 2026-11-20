@@ -28,14 +28,14 @@ final class MetricSources {
                    count(*)::bigint AS capacity,
                    count(*) FILTER (WHERE si.status = 'SOLD')::bigint AS sold
             FROM seat_inventory si
-            JOIN showtime s ON s.id = si.showtime_id
+            JOIN showtime s ON s.id = si.showtime_id AND s.cancelled_at IS NULL
             JOIN event_zone ez ON ez.event_id = s.event_id AND ez.zone_id = si.zone_id
             GROUP BY s.event_id, s.id, si.zone_id, ez.sku_id, s.starts_at
             UNION ALL
             SELECT s.event_id, s.id AS showtime_id, z.zone_id, ez.sku_id AS price_tier_id, s.starts_at,
                    z.capacity::bigint, z.sold::bigint
             FROM standing_inventory z
-            JOIN showtime s ON s.id = z.showtime_id
+            JOIN showtime s ON s.id = z.showtime_id AND s.cancelled_at IS NULL
             JOIN event_zone ez ON ez.event_id = s.event_id AND ez.zone_id = z.zone_id
             """;
 

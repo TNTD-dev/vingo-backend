@@ -115,7 +115,7 @@ class SeatmapRepository {
      * Layout tĩnh của suất: các khu theo {@code name} kèm hạng giá, ghế của khu ngồi theo {@code row_label},
      * {@code number}. Hai câu truy vấn, không phụ thuộc trạng thái ghế nên cache được.
      */
-    SeatmapLayout findLayout(ShowtimeRef showtime) {
+    SeatmapLayout findLayout(ShowtimeRef showtime, OffsetDateTime now) {
         record ZoneBase(UUID id, String name, ZoneKind kind, PriceTierResult tier) {
         }
         List<ZoneBase> zones = jdbc.sql("""
@@ -126,7 +126,7 @@ class SeatmapRepository {
                         LEFT JOIN sku sk ON sk.id = ez.sku_id
                         LEFT JOIN LATERAL (
                             SELECT price FROM sku_price
-                            WHERE sku_id = sk.id AND effective_from <= now()
+                            WHERE sku_id = sk.id AND effective_from <= :now
                             ORDER BY effective_from DESC
                             LIMIT 1
                         ) sp ON true
@@ -135,6 +135,7 @@ class SeatmapRepository {
                         """)
                 .param("eventId", showtime.eventId())
                 .param("layoutId", showtime.seatLayoutId())
+                .param("now", now)
                 .query((rs, n) -> new ZoneBase(
                         rs.getObject("id", UUID.class), rs.getString("name"), ZoneKind.valueOf(rs.getString("kind")),
                         tier(rs).orElse(null)))

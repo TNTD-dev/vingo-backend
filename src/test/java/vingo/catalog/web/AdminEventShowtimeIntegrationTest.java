@@ -175,7 +175,7 @@ class AdminEventShowtimeIntegrationTest extends IntegrationTest {
         UUID target = importLayout(event.venueId(), "Phiên bản mới", SMALL_SVG);
         client.patch().uri(ADMIN + "/events/{id}", event.id()).headers(h -> h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("seat_layout_id", target))
-                .exchange().expectStatus().isEqualTo(409);
+                .exchange().expectStatus().isEqualTo(409).expectBody().jsonPath("$.code").isEqualTo("EVENT_LOCKED");
         assertThat(showtimeSnapshot(showtime.id())).isEqualTo(before);
         assertThat(jdbc.sql("SELECT * FROM standing_inventory WHERE showtime_id = :id ORDER BY zone_id")
                 .param("id", showtime.id()).query().listOfRows()).isEqualTo(stock);

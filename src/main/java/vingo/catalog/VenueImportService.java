@@ -38,6 +38,8 @@ import vingo.api.model.VenueOverviewPage;
 import vingo.catalog.internal.SeatLayoutRepository;
 import vingo.catalog.internal.VenueImportRepository;
 import vingo.catalog.internal.VenueImportRepository.Snapshot;
+import vingo.catalog.internal.VenueImportRepository.FileSource;
+import java.util.stream.Collectors;
 import vingo.catalog.internal.VenueRepository.VenueData;
 import vingo.catalog.internal.VenueSvgProcessor;
 import vingo.shared.error.DomainException;
@@ -117,12 +119,14 @@ public class VenueImportService {
     @Transactional(readOnly = true)
     public VenueImportPage list(String cursor, Integer limit) {
         int size = limit(limit);
-        var ids = repository.list(owner(), cursor(cursor), size + 1, now());
-        boolean more = ids.size() > size;
-        var page = more ? ids.subList(0, size) : ids;
+        var sessions = repository.list(owner(), cursor(cursor), size + 1, now());
+        boolean more = sessions.size() > size;
+        var page = more ? sessions.subList(0, size) : sessions;
+        var bySession = repository.files(page.stream().map(Snapshot::id).toList(), false).stream()
+                .collect(Collectors.groupingBy(FileSource::sessionId));
         return new VenueImportPage()
-                .data(page.stream().map(id -> view(read(id, false), false)).toList())
-                .nextCursor(more ? page.getLast().toString() : null);
+                .data(page.stream().map(s -> view(s, bySession.getOrDefault(s.id(), List.of()))).toList())
+                .nextCursor(more ? page.getLast().id().toString() : null);
     }
 
     @Transactional
@@ -178,12 +182,12 @@ public class VenueImportService {
         }
         return tx.execute(status -> {
             var state = editable(id, revision);
-            var existing = repository.files(id);
+            var existing = repository.files(List.of(id), false);
             var existingChecksums = existing.stream()
-                    .map(f -> checksum(f.svg().getBytes(StandardCharsets.UTF_8)))
+                    .map(FileSource::checksum)
                     .collect(java.util.stream.Collectors.toSet());
             var fresh = parsed.stream().filter(p -> !existingChecksums.contains(p.checksum())).toList();
-            long bytes = existing.stream().mapToLong(f -> f.svg().getBytes(StandardCharsets.UTF_8).length).sum()
+            long bytes = existing.stream().mapToLong(FileSource::size).sum()
                     + fresh.stream().mapToLong(p -> p.parsed().safeSvg().getBytes(StandardCharsets.UTF_8).length).sum();
             if (existing.size() + fresh.size() > FILE_COUNT || bytes > SESSION_LIMIT) {
                 throw tooLarge();
@@ -263,12 +267,14 @@ public class VenueImportService {
 
     public VenueImportResult complete(UUID id, long revision) {
         var state = read(id, false);
+        if (state.result() != null) return state.result();
         expect(state, revision);
         metadata(state);
         var importLayouts = bundles(state);
         var bundle = importLayouts.getFirst().bundle();
         return tx.execute(status -> {
             var locked = read(id, true);
+            if (locked.result() != null) return locked.result();
             expect(locked, revision);
             UUID venue = locked.venueId();
             if (venue != null && !repository.lockVenue(venue)) {
@@ -303,20 +309,23 @@ public class VenueImportService {
                     layout = created;
                 }
             }
-            repository.deleteSession(id);
+            var result = new VenueImportResult().venueId(venue).overviewId(overview).layoutId(layout);
+            repository.close(id, "COMPLETED", result, now());
             LoggerFactory.getLogger(getClass()).info(
                     "Đã hoàn tất nhập sân session_id={} venue_id={} layout_id={}", id, venue, layout);
-            return new VenueImportResult().venueId(venue).overviewId(overview).layoutId(layout);
+            return result;
         });
     }
 
     @Transactional
     public VenueImportSession cancel(UUID id, long revision) {
         var state = read(id, true);
-        expect(state, revision);
-        var response = view(state, false).status(VenueImportSession.StatusEnum.CANCELLED);
-        repository.deleteSession(id);
-        return response;
+        if (!"CANCELLED".equals(state.status())) {
+            expect(state, revision);
+            repository.close(id, "CANCELLED", null, now());
+            state = read(id, false);
+        }
+        return view(state, repository.files(List.of(id), false));
     }
 
     @Transactional(readOnly = true)
@@ -395,32 +404,29 @@ public class VenueImportService {
     }
 
     private VenueImportSession view(Snapshot s) {
-        return view(s, true);
+        return view(s, repository.files(s.id()));
     }
 
-    private VenueImportSession view(Snapshot s, boolean includeSvg) {
-        var files = repository.files(s.id()).stream()
-                .map(f -> {
-                    byte[] bytes = f.svg().getBytes(StandardCharsets.UTF_8);
-                    return new VenueImportFile()
+    private VenueImportSession view(Snapshot s, List<FileSource> sources) {
+        var files = sources.stream()
+                .map(f -> new VenueImportFile()
                             .id(f.id())
                             .originalFilename(f.filename())
                             .role(VenueImportFile.RoleEnum.fromValue(f.role()))
                             .validationStatus(VenueImportFile.ValidationStatusEnum.VALIDATED)
-                            .sizeBytes(bytes.length)
-                            .checksum(checksum(bytes))
+                            .sizeBytes(f.size())
+                            .checksum(f.checksum())
                             .schemaVersion(2)
-                            .sanitizedSvg(includeSvg ? f.svg() : null)
-                            .issues(List.of());
-                })
+                            .sanitizedSvg(f.svg())
+                            .issues(List.of()))
                 .toList();
         return new VenueImportSession()
                 .id(s.id())
                 .targetVenueId(s.venueId())
-                .status(VenueImportSession.StatusEnum.DRAFT)
+                .status(VenueImportSession.StatusEnum.fromValue(s.status()))
                 .step(VenueImportSession.StepEnum.OVERVIEW)
                 .revision(s.revision())
-                .expiresAt(s.updatedAt().plusDays(30))
+                .expiresAt(s.expiresAt())
                 .draftData(s.draft())
                 .files(files);
     }
@@ -435,7 +441,7 @@ public class VenueImportService {
 
     private Snapshot read(UUID id, boolean lock) {
         var s = repository.find(id, owner(), lock).orElseThrow(VenueImportService::missing);
-        if (!s.updatedAt().plusDays(30).isAfter(now())) {
+        if (!s.expiresAt().isAfter(now())) {
             throw missing();
         }
         return s;
@@ -448,7 +454,7 @@ public class VenueImportService {
     }
 
     private void expect(Snapshot state, long revision) {
-        if (state.revision() != revision) {
+        if (!"DRAFT".equals(state.status()) || state.revision() != revision) {
             throw new DomainException(ErrorCode.ACTION_STATE_INVALID,
                     "Phiên nhập đã thay đổi hoặc đã đóng.",
                     Map.of("current_revision", state.revision()));

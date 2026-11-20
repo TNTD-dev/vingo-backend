@@ -1,12 +1,15 @@
 package vingo.catalog.internal;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -14,9 +17,10 @@ import vingo.api.model.OverviewArea;
 import vingo.api.model.OverviewGate;
 import vingo.api.model.SeatLayoutBounds;
 import vingo.api.model.VenueImportDraft;
+import vingo.api.model.VenueImportResult;
 import vingo.api.model.VenueOverview;
 
-/** Lưu nháp phiên nhập sơ đồ; chỉ INSERT venue_map/seat_map/zone/seat khi hoàn tất rồi xoá phiên. */
+/** Lưu nháp phiên nhập sơ đồ; chỉ INSERT venue_map/seat_map/zone/seat khi hoàn tất. */
 @Repository
 public class VenueImportRepository {
 
@@ -30,7 +34,7 @@ public class VenueImportRepository {
         this.parser = parser;
     }
 
-    public record FileSource(UUID id, String filename, String role, String svg) {}
+    public record FileSource(UUID sessionId, UUID id, String filename, String role, String svg, int size, String checksum) {}
 
     public record Snapshot(
             UUID id,
@@ -38,10 +42,24 @@ public class VenueImportRepository {
             UUID venueId,
             VenueImportDraft draft,
             OffsetDateTime createdAt,
-            OffsetDateTime updatedAt) {
-        public long revision() {
-            return updatedAt.toInstant().toEpochMilli();
+            OffsetDateTime updatedAt,
+            long revision,
+            String status,
+            VenueImportResult result) {
+        public OffsetDateTime expiresAt() {
+            return updatedAt.plusDays("DRAFT".equals(status) ? 30 : 7);
         }
+    }
+
+    private static final String SNAPSHOT = "SELECT id, owner_id, venue_id, draft, created_at, updated_at, revision, status, result FROM venue_import_session ";
+
+    private Snapshot snapshot(ResultSet rs, int row) throws SQLException {
+        String result = rs.getString("result");
+        return new Snapshot(rs.getObject("id", UUID.class), rs.getObject("owner_id", UUID.class),
+                rs.getObject("venue_id", UUID.class), json.readValue(rs.getString("draft"), VenueImportDraft.class),
+                rs.getObject("created_at", OffsetDateTime.class), rs.getObject("updated_at", OffsetDateTime.class),
+                rs.getLong("revision"), rs.getString("status"),
+                result == null ? null : json.readValue(result, VenueImportResult.class));
     }
 
     public UUID create(UUID owner, UUID venue, VenueImportDraft draft, OffsetDateTime now) {
@@ -59,25 +77,14 @@ public class VenueImportRepository {
     }
 
     public Optional<Snapshot> find(UUID id, UUID owner, boolean lock) {
-        return jdbc.sql("SELECT id, owner_id, venue_id, draft, created_at, updated_at "
-                        + "FROM venue_import_session WHERE id = :id AND owner_id = :owner"
-                        + (lock ? " FOR UPDATE" : ""))
-                .param("id", id)
-                .param("owner", owner)
-                .query((rs, n) -> new Snapshot(
-                        id,
-                        owner,
-                        rs.getObject("venue_id", UUID.class),
-                        json.readValue(rs.getString("draft"), VenueImportDraft.class),
-                        rs.getObject("created_at", OffsetDateTime.class),
-                        rs.getObject("updated_at", OffsetDateTime.class)))
+        return jdbc.sql(SNAPSHOT + "WHERE id = :id AND owner_id = :owner" + (lock ? " FOR UPDATE" : ""))
+                .param("id", id).param("owner", owner).query(this::snapshot)
                 .optional();
     }
 
-    public List<UUID> list(UUID owner, UUID after, int limit, OffsetDateTime now) {
-        return jdbc.sql("""
-                SELECT id FROM venue_import_session
-                WHERE owner_id = :owner
+    public List<Snapshot> list(UUID owner, UUID after, int limit, OffsetDateTime now) {
+        return jdbc.sql(SNAPSHOT + """
+                WHERE owner_id = :owner AND status = 'DRAFT'
                   AND updated_at > :cutoff
                   AND (CAST(:after AS uuid) IS NULL OR id < :after)
                 ORDER BY id DESC LIMIT :limit
@@ -86,18 +93,25 @@ public class VenueImportRepository {
                 .param("cutoff", now.minusDays(30))
                 .param("after", after)
                 .param("limit", limit)
-                .query(UUID.class)
+                .query(this::snapshot)
                 .list();
     }
 
     public List<FileSource> files(UUID id) {
-        return jdbc.sql("SELECT id, filename, role, svg FROM venue_import_file WHERE session_id = :id ORDER BY id")
-                .param("id", id)
-                .query((rs, n) -> new FileSource(
-                        rs.getObject("id", UUID.class),
-                        rs.getString("filename"),
-                        rs.getString("role"),
-                        rs.getString("svg")))
+        return files(List.of(id), true);
+    }
+
+    public List<FileSource> files(List<UUID> ids, boolean includeSvg) {
+        if (ids.isEmpty()) return List.of();
+        return jdbc.sql("""
+                SELECT session_id, id, filename, role, octet_length(svg) AS size,
+                       encode(sha256(convert_to(svg, 'UTF8')), 'hex') AS checksum, %s AS content
+                FROM venue_import_file WHERE session_id IN (:ids) ORDER BY id
+                """.formatted(includeSvg ? "svg" : "NULL"))
+                .param("ids", ids)
+                .query((rs, n) -> new FileSource(rs.getObject("session_id", UUID.class), rs.getObject("id", UUID.class),
+                        rs.getString("filename"), rs.getString("role"), rs.getString("content"),
+                        rs.getInt("size"), rs.getString("checksum")))
                 .list();
     }
 
@@ -121,17 +135,19 @@ public class VenueImportRepository {
     }
 
     public void patch(UUID id, VenueImportDraft draft, OffsetDateTime now) {
-        jdbc.sql("UPDATE venue_import_session SET draft = CAST(:draft AS jsonb), updated_at = :now WHERE id = :id")
+        jdbc.sql("UPDATE venue_import_session SET draft = CAST(:draft AS jsonb), revision = revision + 1, updated_at = :now WHERE id = :id")
                 .param("id", id)
                 .param("draft", json.writeValueAsString(draft))
                 .param("now", now)
                 .update();
     }
 
-    public void deleteSession(UUID id) {
-        jdbc.sql("DELETE FROM venue_import_session WHERE id = :id")
-                .param("id", id)
-                .update();
+    public void close(UUID id, String status, VenueImportResult result, OffsetDateTime now) {
+        jdbc.sql("""
+                UPDATE venue_import_session SET status = :status, result = CAST(:result AS jsonb),
+                    updated_at = :now, revision = revision + 1 WHERE id = :id
+                """).param("id", id).param("status", status).param("now", now)
+                .param("result", result == null ? null : json.writeValueAsString(result)).update();
     }
 
     public boolean lockVenue(UUID id) {
@@ -194,15 +210,16 @@ public class VenueImportRepository {
 
     public UUID insertLayout(UUID venue, UUID venueMapId, String type, String name, VenueSvgProcessor.Bundle bundle,
                              SeatLayoutRepository layouts) {
+        var bounds = bundle.layout().viewBox();
         UUID id = jdbc.sql("""
-                INSERT INTO seat_map(venue_id, venue_map_id, version, name, layout_type, svg)
+                INSERT INTO seat_map(venue_id, venue_map_id, version, name, layout_type, svg, view_box)
                 VALUES (
                     :venue,
                     :venueMapId,
                     (SELECT COALESCE(MAX(version), 0) + 1 FROM seat_map WHERE venue_id = :venue),
                     :name,
                     :type,
-                    :svg
+                    :svg, CAST(:bounds AS numeric[])
                 )
                 RETURNING id
                 """)
@@ -210,6 +227,8 @@ public class VenueImportRepository {
                 .param("venueMapId", venueMapId)
                 .param("name", name)
                 .param("type", type)
+                .param("bounds", bounds == null ? null : new SqlArrayValue(
+                        "numeric", bounds.x(), bounds.y(), bounds.width(), bounds.height()))
                 .param("svg", bundle.layout().svgContent())
                 .query(UUID.class)
                 .single();
@@ -227,13 +246,15 @@ public class VenueImportRepository {
         return jdbc.sql("""
                 DELETE FROM venue_import_session WHERE id IN (
                     SELECT id FROM venue_import_session
-                    WHERE updated_at < :cutoff
+                    WHERE (status = 'DRAFT' AND updated_at <= :cutoff)
+                       OR (status <> 'DRAFT' AND updated_at <= :closedCutoff)
                     ORDER BY updated_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT :batch
                 )
                 """)
                 .param("cutoff", now.minusDays(30))
+                .param("closedCutoff", now.minusDays(7))
                 .param("batch", batch)
                 .update();
     }

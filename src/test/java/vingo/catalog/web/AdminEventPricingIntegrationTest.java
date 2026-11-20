@@ -66,6 +66,28 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void putPriceTiers_comparesWithEffectivePriceAndPreservesHistoryAndScheduledPrices() {
+        UUID event = newDraft();
+        put(event, "price-tiers", List.of(Map.of("name", "VIP", "price", 100))).expectStatus().isOk();
+        UUID sku = tierIds(event).getFirst();
+        var future = clock.instant().plus(java.time.Duration.ofDays(1)).atOffset(java.time.ZoneOffset.UTC);
+        client.post().uri("/api/v1/admin/events/{event}/price-tiers/{sku}/prices", event, sku)
+                .headers(h -> h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("price", 300, "effective_from", future.toString())).exchange().expectStatus().isCreated();
+
+        clock.advance(java.time.Duration.ofSeconds(1));
+        put(event, "price-tiers", List.of(Map.of("id", sku, "name", "VIP", "price", 100))).expectStatus().isOk();
+        assertThat(prices(sku)).containsExactly(100L, 300L);
+        put(event, "price-tiers", List.of(Map.of("id", sku, "name", "VIP", "price", 300))).expectStatus().isOk();
+        assertThat(prices(sku)).containsExactly(100L, 300L, 300L);
+    }
+
+    private List<Long> prices(UUID sku) {
+        return jdbc.sql("SELECT price FROM sku_price WHERE sku_id = :sku ORDER BY effective_from")
+                .param("sku", sku).query(Long.class).list();
+    }
+
+    @Test
     void putPriceTiers_returns400WithoutPartialChanges_whenNamesDuplicate() {
         UUID eventId = newDraft();
 

@@ -51,8 +51,8 @@ class EventDetailTest extends IntegrationTest {
                 .venue("Sân gần")
                 .showtime(s -> s.startsAt(NOW.minus(Duration.ofDays(5))).saleWindow(
                         NOW.minus(Duration.ofDays(40)), NOW.minus(Duration.ofDays(5))).seated(2, "VIP"))
-                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(20))).onSale().seated(3, "Thường"))
-                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(10))).onSale().seated(3, "VIP"))
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(20))).onSale().seated(2, "VIP"))
+                .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(10))).onSale().seated(2, "VIP"))
                 .create();
 
         JsonNode body = get("/api/v1/events/" + created.id());

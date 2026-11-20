@@ -1,5 +1,8 @@
 # Profile local: máy dev. Đọc .env.local, log dạng dễ đọc.
 spring:
+  flyway:
+    placeholders:
+      allowDestructiveReset: true
   config:
     import: optional:file:.env.local[.properties]
 logging:
