@@ -201,6 +201,17 @@ class SeatmapTest extends IntegrationTest {
     }
 
     @Test
+    void seatmapAndAvailability_hideZonesWithoutEventSku() {
+        var showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10)).create().showtimeId();
+        var zones = fixtures.zoneIds(showtime);
+        jdbc.sql("DELETE FROM event_zone WHERE zone_id = :zone")
+                .param("zone", zones.getLast()).update();
+        var base = "/api/v1/showtimes/" + showtime;
+        assertThat(get(base + "/seatmap").path("zones")).hasSize(1);
+        assertThat(get(base + "/availability").path("zones")).hasSize(1);
+    }
+
+    @Test
     void getAvailability_soldOut_whenAllZonesEmpty() {
         UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10).sold(12)).create()
                 .showtimeId();

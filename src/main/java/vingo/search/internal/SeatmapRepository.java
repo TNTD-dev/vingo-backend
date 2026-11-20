@@ -120,7 +120,7 @@ class SeatmapRepository {
                         SELECT z.id, COALESCE(ez.display_name, z.name) AS name, z.kind,
                                sk.id AS tier_id, sk.name AS tier_name, sp.price, sk.color
                         FROM zone z
-                        LEFT JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
+                        JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
                         LEFT JOIN sku sk ON sk.id = ez.sku_id
                         LEFT JOIN LATERAL (
                             SELECT price FROM sku_price
@@ -142,10 +142,12 @@ class SeatmapRepository {
                         SELECT s.zone_id, s.id, s.row_label, s.number
                         FROM zone z
                         JOIN seat s ON s.zone_id = z.id
+                        JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
                         WHERE z.seat_map_id = :layoutId AND z.kind = 'SEATED'
                         ORDER BY z.name, z.id, s.row_label, s.number
                         """)
                 .param("layoutId", showtime.seatLayoutId())
+                .param("eventId", showtime.eventId())
                 .query((rs, n) -> {
                     seatsByZone.computeIfAbsent(rs.getObject("zone_id", UUID.class), k -> new ArrayList<>())
                             .add(new LayoutSeat(
@@ -219,7 +221,7 @@ class SeatmapRepository {
                                     ELSE COUNT(ss.seat_id) FILTER (WHERE %s) END AS seats_left,
                                COUNT(s.id) FILTER (WHERE ss.seat_id IS NULL) AS missing_seats
                         FROM zone z
-                        LEFT JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
+                        JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
                         LEFT JOIN sku sk ON sk.id = ez.sku_id
                         LEFT JOIN LATERAL (
                             SELECT price FROM sku_price
