@@ -40,7 +40,7 @@ class VenueImportIntegrationTest extends IntegrationTest {
         UUID layout=UUID.fromString(JsonPath.read(complete,"$.layout_id"));
         assertThat(jdbc.sql("SELECT count(*) FROM seat_map WHERE id=:id").param("id",layout).query(Integer.class).single()).isOne();
         assertThat(jdbc.sql("SELECT count(*) FROM zone WHERE seat_map_id=:id").param("id",layout).query(Integer.class).single()).isOne();
-        post(id,"complete",token,revision(state),404);
+        assertThat(post(id,"complete",token,revision(state),200)).isEqualTo(complete);
     }
     @Test void ownerIsolationAndRevisionPreventCrossAdminChangesAndLostUpdates() {
         String owner=tokenFor(Role.ADMIN),other=tokenFor(Role.ADMIN);String s=create(client,owner,null);UUID id=id(s);
@@ -86,7 +86,8 @@ class VenueImportIntegrationTest extends IntegrationTest {
     @Test void cancelledAndExpiredDraftsCannotBeMutatedAndCleanupIsIdempotent() {
         String token=tokenFor(Role.ADMIN);String init=create(client,token,null);UUID id=id(init);
         String s=upload(client,token,id,revision(init),bytes(BASE),"image/svg+xml");post(id,"cancel",token,revision(s),200);
-        patch(id,token,revision(s),Map.of("layout_name","X"),404);
+        assertThat(JsonPath.<String>read(post(id,"cancel",token,revision(s),200),"$.status")).isEqualTo("CANCELLED");
+        patch(id,token,revision(s),Map.of("layout_name","X"),409);
         UUID expiring=id(create(client,token,null));clock.advance(Duration.ofDays(31));
         client.get().uri(ROOT+"/{id}",expiring).headers(h->h.setBearerAuth(token)).exchange().expectStatus().isNotFound();
         int n=cleanup.cleanupBatch();assertThat(n).isGreaterThanOrEqualTo(2);
@@ -132,9 +133,9 @@ class VenueImportIntegrationTest extends IntegrationTest {
             var b=executor.submit(()->{start.await();return client.post().uri(ROOT+"/{id}/complete",id).headers(h->h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON).body(Map.of("revision",rev)).exchange().returnResult(String.class).getStatus().value();});
             start.countDown();
             assertThat(List.of(a.get(30,java.util.concurrent.TimeUnit.SECONDS),b.get(30,java.util.concurrent.TimeUnit.SECONDS)))
-                    .containsExactlyInAnyOrder(200, 404);
+                    .containsExactly(200, 200);
         }
-        assertThat(jdbc.sql("SELECT count(*) FROM venue_import_session WHERE id=:id").param("id",id).query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM venue_import_session WHERE id=:id AND status='COMPLETED'").param("id",id).query(Integer.class).single()).isOne();
     }
     @Test void enforcesFileCountQuotaAndKeepsManifestUnchangedOnFailure() {
         String token=tokenFor(Role.ADMIN);String init=create(client,token,null);UUID id=id(init);long rev=revision(init);

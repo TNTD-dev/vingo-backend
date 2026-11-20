@@ -184,7 +184,7 @@ public class SeatLayoutImportService {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "Sự kiện bóng đá chỉ có một suất diễn.");
         }
         validateShowtimeData(input);
-        requireActiveVenueLayout(input.seatLayoutId());
+        requireActiveVenueLayout(eventId, input.seatLayoutId());
         requireSelectedEventLayout(eventId, input.seatLayoutId());
 
         var created = repository.insertShowtime(eventId, input);
@@ -219,7 +219,7 @@ public class SeatLayoutImportService {
         );
         validateShowtimeData(merged);
         requireSelectedEventLayout(eventId, merged.seatLayoutId());
-        requireActiveVenueLayout(merged.seatLayoutId());
+        requireActiveVenueLayout(eventId, merged.seatLayoutId());
 
         boolean layoutChanged = !merged.seatLayoutId().equals(current.data().seatLayoutId());
         if (layoutChanged && repository.hasAllocatedInventoryOrOrders(showtimeId)) {
@@ -262,9 +262,12 @@ public class SeatLayoutImportService {
         return status;
     }
 
-    private void requireActiveVenueLayout(UUID layoutId) {
-        var layout = repository.findLayoutForAttach(layoutId)
+    private void requireActiveVenueLayout(UUID eventId, UUID layoutId) {
+        var layout = repository.findLayoutForAttach(eventId, layoutId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sơ đồ sân đang hoạt động."));
+        if (!layout.matchesCategory()) {
+            throw new DomainException(ErrorCode.INVALID_SEAT_LAYOUT, "Loại sơ đồ không khớp loại sự kiện.");
+        }
         if (!repository.activeVenueExists(layout.venueId(), true)) {
             throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sân.");
         }

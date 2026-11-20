@@ -2,7 +2,8 @@ package vingo.auth.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.time.Clock;
+import java.time.Duration;
+import org.junit.jupiter.api.AfterEach;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,8 +42,10 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    @Autowired
-    private Clock clock;
+    @AfterEach
+    void resetClock() {
+        clock.reset();
+    }
 
     @Test
     void activeBuyerAndAdmin_canLoginByEmailCaseInsensitive_andPhone_withCorrectRoleAndRefreshLogout() {
@@ -207,7 +210,9 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
 
         // Admin hard-locked account (locked_until = NULL) stays locked
         String adminLockedEmail = "adminlock." + UUID.randomUUID() + "@vingo.local";
-        insertUser(adminLockedEmail, null, "Admin Locked", passwordEncoder.encode(PASSWORD), Role.BUYER, "LOCKED", null, null);
+        UUID hardLocked = insertUser(adminLockedEmail, null, "Admin Locked", passwordEncoder.encode(PASSWORD), Role.BUYER, "ACTIVE", null, null);
+        jdbc.sql("UPDATE user_account SET admin_locked = true WHERE id = :id").param("id", hardLocked).update();
+        clock.advance(Duration.ofMinutes(16));
         client.post().uri(LOGIN)
                 .body(new LoginRequest(adminLockedEmail, PASSWORD))
                 .exchange()

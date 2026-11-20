@@ -2,6 +2,7 @@ package vingo.auth;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -70,7 +71,7 @@ public class AdminAccountService {
         if (body == null || body.getReason() == null || body.getReason().isBlank() || body.getReason().length() > 500
                 || (body.getRole() == null && body.getLocked() == null)) throw invalid("Cần thao tác và lý do hợp lệ");
         accounts.lockAdministration();
-        var now = OffsetDateTime.now(clock);
+        var now = clock.instant().atOffset(ZoneOffset.UTC);
         UUID actor = currentUser.require().id();
         var administrator = accounts.find(actor, false).orElseThrow(() -> new DomainException(ErrorCode.UNAUTHORIZED, "Phiên không hợp lệ"));
         if (administrator.getRole() != AdminAccount.RoleEnum.ADMIN || !isActive(administrator, now)) {
@@ -93,7 +94,7 @@ public class AdminAccountService {
             return before;
         }
         if (before.getRole() == AdminAccount.RoleEnum.ADMIN && wasActive
-                && (!"ADMIN".equals(role) || !willBeActive) && accounts.activeAdmins() <= 1) {
+                && (!"ADMIN".equals(role) || !willBeActive) && accounts.activeAdmins(now) <= 1) {
             throw new DomainException(ErrorCode.ACTION_STATE_INVALID, "Cần giữ ít nhất một ADMIN hoạt động");
         }
         accounts.update(id, role, locked, body.getLocked() != null, now);

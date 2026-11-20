@@ -98,7 +98,7 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void getAdminEvent_returnsTiersAndAllShowtimesWithTheirOwnVenues() {
+    void getAdminEvent_returnsTiersAndShowtimesOnTheEventLayout() {
         clock.set(Instant.parse("2026-11-12T08:00:00Z"));
 
         var firstEvent = catalog.event(
@@ -107,7 +107,7 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
 
         var draft = catalog.showtime(firstEvent, Window.notOpenYet());
         var cancelled = catalog.showtime(firstEvent, Window.cancelled());
-        var otherVenue = catalog.showtime(
+        var onSale = catalog.showtime(
                 firstEvent, Window.onSale()
         );
 
@@ -125,13 +125,13 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
                 .containsExactlyInAnyOrder(
                         draft.id().toString(),
                         cancelled.id().toString(),
-                        otherVenue.id().toString()
+                        onSale.id().toString()
                 );
 
         String draftPath = "$.showtimes[?(@.id == '"
                 + draft.id() + "')]";
-        String otherPath = "$.showtimes[?(@.id == '"
-                + otherVenue.id() + "')]";
+        String onSalePath = "$.showtimes[?(@.id == '"
+                + onSale.id() + "')]";
         String cancelledPath = "$.showtimes[?(@.id == '"
                 + cancelled.id() + "')]";
 
@@ -150,17 +150,17 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
                 .containsExactly("HN");
 
         assertThat(JsonPath.<List<String>>read(
-                response, otherPath + ".venue.id"))
+                response, onSalePath + ".venue.id"))
                 .containsExactly(firstEvent.venueId().toString());
         assertThat(JsonPath.<List<String>>read(
-                response, otherPath + ".venue.city"))
+                response, onSalePath + ".venue.city"))
                 .containsExactly("HN");
 
+        jdbc.sql("UPDATE event SET status = 'PUBLISHED' WHERE id = :id").param("id", firstEvent.id()).update();
+        assertThat(JsonPath.<List<String>>read(readDetails(firstEvent.id()), onSalePath + ".status"))
+                .containsExactly("ON_SALE");
         assertThat(JsonPath.<List<String>>read(
-                response, otherPath + ".venue.id"))
-                .containsExactly(firstEvent.venueId().toString());
-        assertThat(JsonPath.<List<String>>read(
-                response, otherPath + ".seat_layout_id"))
+                response, onSalePath + ".seat_layout_id"))
                 .containsExactly(firstEvent.layoutId().toString());
     }
 
@@ -192,12 +192,11 @@ class AdminEventDetailIntegrationTest extends IntegrationTest {
         clock.set(start.plus(Duration.ofHours(4)));
         assertShowtimeStatus(event.id(), "FINISHED");
 
-        java.time.OffsetDateTime cancelledAt = jdbc.sql("""
+        Object cancelledAt = jdbc.sql("""
                 SELECT cancelled_at FROM showtime WHERE id = :id
                 """)
                 .param("id", showtime.id())
-                .query(java.time.OffsetDateTime.class)
-                .optional().orElse(null);
+                .query().singleRow().get("cancelled_at");
 
         assertThat(cancelledAt).isNull();
     }

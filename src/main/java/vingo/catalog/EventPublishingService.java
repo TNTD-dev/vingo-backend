@@ -71,7 +71,7 @@ public class EventPublishingService {
         var now = clock.instant().atOffset(ZoneOffset.UTC);
         boolean allFinished = !sessions.isEmpty() && sessions.stream()
                 .allMatch(s -> s.cancelledAt() != null || !now.isBefore(s.endsAt()));
-        if (allFinished || sessions.stream().anyMatch(s -> blocksCancellation(event.status(), s, now))) {
+        if (allFinished || sessions.stream().filter(s -> s.cancelledAt() == null).anyMatch(s -> blocksCancellation(event.status(), s, now))) {
             throw new DomainException(ErrorCode.EVENT_LOCKED, "Sự kiện đã mở bán, có giao dịch hoặc đã kết thúc.");
         }
         sessions.stream().filter(s -> s.cancelledAt() == null).forEach(s -> publishing.cancelShowtime(s.id(), now));

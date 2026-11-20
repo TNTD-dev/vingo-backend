@@ -7,6 +7,7 @@ import static vingo.support.CatalogFixture.VIP_PRICE;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,11 @@ class HoldSeatsTest extends BookingTestSupport {
     private Showtime showtime;
     private UUID buyer;
     private String token;
+
+    @AfterEach
+    void resetClock() {
+        clock.reset();
+    }
 
     @BeforeEach
     void createBuyerAndShowtime() {
@@ -382,7 +388,6 @@ class HoldSeatsTest extends BookingTestSupport {
 
         // Đơn giữ ở bước 1 vẫn giữ nguyên giá và phiên bản giá lúc giữ chỗ.
         assertThat(orderSeatPrice(firstOrder)).isEqualTo(firstRow);
-        clock.reset();
     }
 
     @Test
@@ -407,7 +412,6 @@ class HoldSeatsTest extends BookingTestSupport {
 
         // Đơn khu đứng giữ ở bước 1 vẫn giữ nguyên giá lúc giữ chỗ.
         assertThat(orderStandingPrice(firstOrder)).isEqualTo(firstRow);
-        clock.reset();
     }
 
     private UUID skuIdFor(UUID eventId, String name) {

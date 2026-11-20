@@ -346,6 +346,34 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void resendOtp_acceptsPreviousSessionAfterMailFailure() {
+        var initial = registerUser("retry." + UUID.randomUUID() + "@vingo.local", randomPhone());
+        clock.advance(Duration.ofSeconds(31));
+        var request = new ResendOtpRequest(initial.getOtpSessionId());
+        mailSender.failure = new DeliveryException(true, "EMAIL_TRANSPORT_ERROR", 0);
+        client.post().uri(RESEND_OTP).body(request).exchange().expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        mailSender.failure = null;
+        clock.advance(Duration.ofSeconds(31));
+        client.post().uri(RESEND_OTP).body(request).exchange().expectStatus().isAccepted()
+                .expectBody().jsonPath("$.otp_session_id").exists();
+    }
+
+    @Test
+    void resendOtp_limitsTheAccountAndPurposeAcrossNewSessionIds() {
+        var session = registerUser("limit." + UUID.randomUUID() + "@vingo.local", randomPhone());
+        for (int resend = 0; resend < 2; resend++) {
+            clock.advance(Duration.ofSeconds(31));
+            session = client.post().uri(RESEND_OTP).body(new ResendOtpRequest(session.getOtpSessionId())).exchange()
+                    .expectStatus().isAccepted().expectBody(OtpSession.class).returnResult().getResponseBody();
+            assertThat(session).isNotNull();
+        }
+        clock.advance(Duration.ofSeconds(31));
+        client.post().uri(RESEND_OTP).body(new ResendOtpRequest(session.getOtpSessionId())).exchange()
+                .expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS).expectHeader().exists(HttpHeaders.RETRY_AFTER)
+                .expectBody().jsonPath("$.code").isEqualTo("RATE_LIMITED");
+    }
+
+    @Test
     void register_returns429RateLimited_whenExceedingPerIpLimit() {
         for (int i = 0; i < 3; i++) {
             registerUser("rl." + i + "." + UUID.randomUUID() + "@vingo.local", randomPhone());

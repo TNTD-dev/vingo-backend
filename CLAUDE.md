@@ -87,14 +87,14 @@ Quy tắc:
 - IPN trùng (payment đã `SUCCEEDED`) → trả `02`, không làm gì thêm.
 - Tiền về nhưng đơn hết hạn/huỷ/sai số tiền → đơn `NEEDS_REVIEW`, trả `00`.
 - Không bao giờ tin số tiền từ client; so `vnp_Amount/100` với `ticket_order.total_amount`.
-- Chốt ghế: `UPDATE seat_inventory SET status='SOLD' WHERE order_id = :id AND status='HELD'`; thiếu ghế → `NEEDS_REVIEW`.
+- Chốt ghế: `UPDATE seat_inventory SET status='SOLD', held_until = NULL WHERE order_id = :id AND status='HELD'`; thiếu ghế → `NEEDS_REVIEW`.
 
 **Job nền (profile worker)**
 - `expire_holds` (5s), `reconcile_payments` (1 phút), `outbox_sender` (2s), `realtime_gc`.
 - Chọn dòng bằng `FOR UPDATE SKIP LOCKED`. Mỗi job có ShedLock để không chạy trùng.
 - Job phải idempotent: chạy lại không gây sai.
 
-**Trạng thái suất diễn**: `SCHEDULED`, `ON_SALE`, `SALES_CLOSED`, `FINISHED`, `CANCELLED` tính khi đọc từ `cancelled_at`, `sale_opens_at`, `sale_closes_at`, `ends_at`. Bảng `showtime` không lưu cột `status`.
+**Trạng thái suất diễn**: Suất đã hủy hoặc sự kiện `CANCELLED` trả `CANCELLED`; sự kiện `DRAFT` trả `DRAFT`. Các suất còn lại tính `SCHEDULED`, `ON_SALE`, `SALES_CLOSED`, `FINISHED` khi đọc từ `sale_opens_at`, `sale_closes_at`, `ends_at`. Bảng `showtime` không lưu cột `status`.
 
 **Không có hoàn tiền, không đổi ghế** trong hệ thống. Không thêm tính năng này.
 

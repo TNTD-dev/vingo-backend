@@ -262,17 +262,17 @@ class SearchEventsTest extends IntegrationTest {
         UUID hcmFootball = fixtures.event().title("HCM football").city("HCM").category("FOOTBALL")
                 .defaultPrice(900_000)
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(20))).seated(5)).create().id();
-        UUID dnTheater = fixtures.event().title("DN theater").city("DN").category("THEATER")
+        UUID dnConcert = fixtures.event().title("DN concert").city("DN").category("CONCERT")
                 .defaultPrice(1_500_000)
                 .showtime(s -> s.startsAt(NOW.plus(Duration.ofDays(40))).seated(5)).create().id();
 
         assertThat(ids(search("city", "HN"))).containsExactly(hnConcert);
         assertThat(ids(search("category", "FOOTBALL"))).containsExactly(hcmFootball);
         assertThat(ids(search("from", at(10), "to", at(30)))).containsExactly(hcmFootball);
-        assertThat(ids(search("from", at(10)))).containsExactly(hcmFootball, dnTheater);
+        assertThat(ids(search("from", at(10)))).containsExactly(hcmFootball, dnConcert);
         assertThat(ids(search("to", at(10)))).containsExactly(hnConcert);
         assertThat(ids(search("price_min", "500000", "price_max", "1000000"))).containsExactly(hcmFootball);
-        assertThat(ids(search("price_min", "1000000"))).containsExactly(dnTheater);
+        assertThat(ids(search("price_min", "1000000"))).containsExactly(dnConcert);
         assertThat(ids(search("price_max", "300000"))).containsExactly(hnConcert);
         assertThat(ids(search("city", "HN", "category", "FOOTBALL"))).isEmpty();
     }

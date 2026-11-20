@@ -47,19 +47,17 @@ class SchemaConstraintsTest extends IntegrationTest {
     @Test
     void ticket_rejectsSecondLiveTicket_forSameSeatAndShowtime() {
         UUID order = insertPendingOrder(catalog.buyer());
-        UUID skuPriceId = jdbc.sql("""
-                        SELECT sp.id FROM sku_price sp
-                        JOIN sku s ON s.id = sp.sku_id
-                        JOIN showtime sh ON sh.event_id = s.event_id
-                        WHERE sh.id = :s
-                        ORDER BY sp.effective_from DESC LIMIT 1
-                        """)
-                .param("s", showtimeId).query(UUID.class).single();
         jdbc.sql("""
                         INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
-                        VALUES (:o, :s, :seat, :sp, 500000)
+                        SELECT :o, si.showtime_id, si.seat_id, sp.id, sp.price
+                        FROM seat_inventory si
+                        JOIN showtime sh ON sh.id = si.showtime_id
+                        JOIN event_zone ez ON ez.event_id = sh.event_id AND ez.zone_id = si.zone_id
+                        JOIN sku_price sp ON sp.sku_id = ez.sku_id
+                        WHERE si.showtime_id = :s AND si.seat_id = :seat AND sp.effective_from <= :now
+                        ORDER BY sp.effective_from DESC LIMIT 1
                         """)
-                .param("o", order).param("s", showtimeId).param("seat", seatId).param("sp", skuPriceId).update();
+                .param("o", order).param("s", showtimeId).param("seat", seatId).param("now", OffsetDateTime.now(clock)).update();
         insertTicket(order);
 
         assertThatThrownBy(() -> insertTicket(order)).isInstanceOf(DataIntegrityViolationException.class);

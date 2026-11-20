@@ -86,7 +86,11 @@ public class VenueSvgProcessor {
             if (seatIds.stream().anyMatch(baseIds::contains)) {
                 return detail;
             }
-            baseRoot.appendChild(detailGroup(base, seatRoot));
+            var group = detailGroup(base, seatRoot);
+            if (!group.hasAttribute("fill")) {
+                group.setAttribute("fill", "black");
+            }
+            baseRoot.appendChild(group);
             return SeatLayoutSvgParser.serialize(base);
         } catch (DomainException invalidSvg) {
             // Các bản ghi cũ có thể chưa qua bước kiểm tra hai lớp của wizard.

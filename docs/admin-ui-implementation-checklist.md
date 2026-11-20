@@ -41,7 +41,7 @@ Các mục đánh dấu bên dưới là đã triển khai source, chưa xác nh
 - [x] Chọn FOOTBALL/CONCERT gọi API cây riêng theo loại, sau đó chọn phiên bản và xem khu.
 - [x] Giữ preview/publish/import và cấu hình giá hiện có; không thêm kéo zone/X/Y/lưu hình học.
 - [x] Giữ giới hạn một suất bóng đá có sẵn; giới hạn tạo mới theo FOOTBALL/CONCERT, vẫn hiển thị sự kiện lịch sử loại khác.
-- [x] Người dùng: danh sách, lọc/sort/tải thêm, avatar, quyền/khóa có lý do, thống kê, lịch sử và export.
+- [x] Người dùng: danh sách, lọc/sort/tải thêm, avatar, quyền/khóa có lý do, thống kê, lịch sử thao tác quản trị và export.
 - [x] Tổng quan dùng API dashboard thật và ngày Việt Nam; không thêm số liệu giả/hoàn tiền.
 - [x] Activity feed và Logs dùng API audit; không đọc log file server.
 - [x] Không thêm membership/Super Admin/mã giả; danh sách người dùng dùng cursor tải thêm.

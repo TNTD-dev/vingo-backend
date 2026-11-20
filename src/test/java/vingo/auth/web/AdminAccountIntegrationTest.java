@@ -45,7 +45,7 @@ class AdminAccountIntegrationTest extends IntegrationTest {
     void deleteMe_rejectsLastActiveAdmin() {
         String admin = tokenFor(Role.ADMIN);
         // The shared test database also contains admins created by other tests.
-        doReturn(1L).when(accounts).activeAdmins();
+        doReturn(1L).when(accounts).activeAdmins(org.mockito.ArgumentMatchers.any());
         client.delete().uri("/api/v1/me").headers(h -> h.setBearerAuth(admin))
                 .exchange().expectStatus().isEqualTo(409)
                 .expectBody().jsonPath("$.code").isEqualTo("ACTION_STATE_INVALID");

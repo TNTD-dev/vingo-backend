@@ -310,27 +310,27 @@ public class BookingRepository {
                 }).optional();
     }
 
-    public Optional<PendingOrder> lockPendingOrder(UUID userId, UUID showtimeId, OffsetDateTime now) {
+    public Optional<PendingOrder> lockPendingOrder(UUID userId, UUID showtimeId) {
         return jdbc.sql("""
-                        SELECT id, user_id, showtime_id, expires_at <= :now AS overdue FROM ticket_order
+                        SELECT id, user_id, showtime_id, expires_at FROM ticket_order
                         WHERE user_id = :user AND showtime_id = :showtime AND status = 'PENDING' FOR UPDATE
                         """)
-                .param("user", userId).param("showtime", showtimeId).param("now", now)
+                .param("user", userId).param("showtime", showtimeId)
                 .query((rs, row) -> new PendingOrder(rs.getObject("id", UUID.class),
                         rs.getObject("user_id", UUID.class), rs.getObject("showtime_id", UUID.class),
-                        rs.getBoolean("overdue"))).optional();
+                        rs.getObject("expires_at", OffsetDateTime.class))).optional();
     }
 
     public List<PendingOrder> lockOverduePendingOrders(OffsetDateTime now, int limit) {
         return jdbc.sql("""
-                        SELECT id, user_id, showtime_id FROM ticket_order
+                        SELECT id, user_id, showtime_id, expires_at FROM ticket_order
                         WHERE status = 'PENDING' AND expires_at <= :now
                         ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED
                         """)
                 .param("now", now).param("limit", limit)
                 .query((rs, row) -> new PendingOrder(rs.getObject("id", UUID.class),
                         rs.getObject("user_id", UUID.class), rs.getObject("showtime_id", UUID.class),
-                        true)).list();
+                        rs.getObject("expires_at", OffsetDateTime.class))).list();
     }
 
     public void lockReplacementInventory(PendingOrder old, Collection<UUID> seatIds, UUID zoneId) {
@@ -564,7 +564,7 @@ public class BookingRepository {
 
     public record OrderPosition(UUID id, OffsetDateTime createdAt) {}
 
-    public record PendingOrder(UUID id, UUID userId, UUID showtimeId, boolean overdue) {}
+    public record PendingOrder(UUID id, UUID userId, UUID showtimeId, OffsetDateTime expiresAt) {}
 
     public record HoldItem(UUID seatId, UUID zoneId, UUID skuPriceId, int quantity, long unitPrice) {}
 

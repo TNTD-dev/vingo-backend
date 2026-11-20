@@ -76,18 +76,19 @@ class EventDetailRepository {
                 .optional();
     }
 
-    List<PriceTierResult> findPriceTiers(UUID eventId) {
+    List<PriceTierResult> findPriceTiers(UUID eventId, OffsetDateTime now) {
         return jdbc.sql("""
                         SELECT s.id, s.name, COALESCE(sp.price, 0) AS price, s.color
                         FROM sku s
                         LEFT JOIN LATERAL (
                             SELECT price FROM sku_price
-                            WHERE sku_id = s.id AND effective_from <= now()
+                            WHERE sku_id = s.id AND effective_from <= :now
                             ORDER BY effective_from DESC LIMIT 1
                         ) sp ON true
                         WHERE s.event_id = :id
                         ORDER BY price, s.name, s.id
                         """)
+                .param("now", now)
                 .param("id", eventId)
                 .query((rs, n) -> new PriceTierResult(
                         rs.getObject("id", UUID.class),

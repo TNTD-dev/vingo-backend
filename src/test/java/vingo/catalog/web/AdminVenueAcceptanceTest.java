@@ -90,7 +90,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
 
         UUID event = jdbc.sql("""
                 INSERT INTO event (seat_map_id, title, category, status)
-                VALUES (:layout, 'CP7 fixture', 'CONCERT', 'DRAFT') RETURNING id
+                VALUES (:layout, 'CP7 fixture', 'FOOTBALL', 'DRAFT') RETURNING id
                 """).param("layout", v1).query(UUID.class).single();
         String createPath = ADMIN + "/events/" + event + "/showtimes";
         var bodyV1 = showtimeBody(hall, v1, now);
@@ -104,7 +104,7 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
         UUID standingV2 = zoneId(overviewV2, "B11-T2");
         UUID eventB = jdbc.sql("""
                 INSERT INTO event (seat_map_id, title, category, status)
-                VALUES (:layout, 'CP7 fixture B', 'CONCERT', 'DRAFT') RETURNING id
+                VALUES (:layout, 'CP7 fixture B', 'FOOTBALL', 'DRAFT') RETURNING id
                 """).param("layout", v2).query(UUID.class).single();
         UUID showtimeB = id(request("POST", ADMIN + "/events/" + eventB + "/showtimes", token, showtimeBody(hall, v2, now), 201));
         assertInventory(showtimeA, v1, standingV1, 1000);
