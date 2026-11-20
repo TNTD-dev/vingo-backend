@@ -360,6 +360,97 @@ class HoldSeatsTest extends BookingTestSupport {
         assertThat(orderCount(buyer)).isZero();
     }
 
+    @Test
+    void holdSeats_usesCurrentPrice_whenNextPriceIsScheduledInFuture() {
+        UUID eventId = showtime.event().id();
+        UUID vipSkuId = skuIdFor(eventId, "VIP");
+        UUID currentPriceId = latestSkuPriceId(vipSkuId);
+        OffsetDateTime tomorrow = catalog.now().plusDays(1);
+        UUID futurePriceId = insertSkuPrice(vipSkuId, 700_000, tomorrow, catalog.buyer());
+
+        UUID firstOrder = orderId(holdOk(token, showtime.id(), seats(showtime.event().seat(1))));
+        var firstRow = orderSeatPrice(firstOrder);
+        assertThat(firstRow.unitPrice()).isEqualTo(VIP_PRICE);
+        assertThat(firstRow.skuPriceId()).isEqualTo(currentPriceId);
+
+        clock.set(tomorrow.plusMinutes(1).toInstant());
+        String secondBuyerToken = buyerToken(catalog.buyer());
+        UUID secondOrder = orderId(holdOk(secondBuyerToken, showtime.id(), seats(showtime.event().seat(2))));
+        var secondRow = orderSeatPrice(secondOrder);
+        assertThat(secondRow.unitPrice()).isEqualTo(700_000);
+        assertThat(secondRow.skuPriceId()).isEqualTo(futurePriceId);
+
+        // Đơn giữ ở bước 1 vẫn giữ nguyên giá và phiên bản giá lúc giữ chỗ.
+        assertThat(orderSeatPrice(firstOrder)).isEqualTo(firstRow);
+        clock.reset();
+    }
+
+    @Test
+    void holdStanding_usesCurrentPrice_whenNextPriceIsScheduledInFuture() {
+        UUID eventId = showtime.event().id();
+        UUID gaSkuId = skuIdFor(eventId, "GA");
+        UUID currentPriceId = latestSkuPriceId(gaSkuId);
+        OffsetDateTime tomorrow = catalog.now().plusDays(1);
+        UUID futurePriceId = insertSkuPrice(gaSkuId, 500_000, tomorrow, catalog.buyer());
+
+        UUID firstOrder = orderId(holdOk(token, showtime.id(), standing(showtime.event().standingZoneId(), 2)));
+        var firstRow = orderStandingPrice(firstOrder);
+        assertThat(firstRow.unitPrice()).isEqualTo(GA_PRICE);
+        assertThat(firstRow.skuPriceId()).isEqualTo(currentPriceId);
+
+        clock.set(tomorrow.plusMinutes(1).toInstant());
+        String secondBuyerToken = buyerToken(catalog.buyer());
+        UUID secondOrder = orderId(holdOk(secondBuyerToken, showtime.id(), standing(showtime.event().standingZoneId(), 1)));
+        var secondRow = orderStandingPrice(secondOrder);
+        assertThat(secondRow.unitPrice()).isEqualTo(500_000);
+        assertThat(secondRow.skuPriceId()).isEqualTo(futurePriceId);
+
+        // Đơn khu đứng giữ ở bước 1 vẫn giữ nguyên giá lúc giữ chỗ.
+        assertThat(orderStandingPrice(firstOrder)).isEqualTo(firstRow);
+        clock.reset();
+    }
+
+    private UUID skuIdFor(UUID eventId, String name) {
+        return jdbc.sql("SELECT id FROM sku WHERE event_id = :event AND name = :name")
+                .param("event", eventId).param("name", name).query(UUID.class).single();
+    }
+
+    private UUID latestSkuPriceId(UUID skuId) {
+        return jdbc.sql("SELECT id FROM sku_price WHERE sku_id = :sku ORDER BY effective_from DESC LIMIT 1")
+                .param("sku", skuId).query(UUID.class).single();
+    }
+
+    private UUID insertSkuPrice(UUID skuId, long price, OffsetDateTime effectiveFrom, UUID createdBy) {
+        return jdbc.sql("""
+                        INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                        VALUES (:sku, :price, :effectiveFrom, :createdBy)
+                        RETURNING id
+                        """)
+                .param("sku", skuId)
+                .param("price", price)
+                .param("effectiveFrom", effectiveFrom)
+                .param("createdBy", createdBy)
+                .query(UUID.class).single();
+    }
+
+    private OrderPriceRow orderSeatPrice(UUID orderId) {
+        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_seat WHERE order_id = :order")
+                .param("order", orderId)
+                .query((rs, row) -> new OrderPriceRow(
+                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                .single();
+    }
+
+    private OrderPriceRow orderStandingPrice(UUID orderId) {
+        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_standing WHERE order_id = :order")
+                .param("order", orderId)
+                .query((rs, row) -> new OrderPriceRow(
+                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                .single();
+    }
+
+    private record OrderPriceRow(UUID skuPriceId, long unitPrice) {}
+
     private void assertValidation(String request) {
         problem(hold(token, showtime.id(), request), 400, "VALIDATION_ERROR");
         assertAvailable(showtime, showtime.event().seats().toArray(UUID[]::new));
