@@ -1,6 +1,7 @@
 package vingo.notifications.internal;
 
 import java.time.OffsetDateTime;
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,11 +34,20 @@ public class OutboxRepository {
     }
 
     public UUID enqueueTickets(String recipient, List<UUID> ticketIds) {
+        return enqueue(recipient, "TICKETS", Map.of("ticket_ids", ticketIds));
+    }
+
+    public UUID enqueueNewDevice(String recipient, String agent, String ip, OffsetDateTime loginAt, URI recoveryPage) {
+        return enqueue(recipient, "NEW_DEVICE", Map.of("user_agent", agent == null ? "" : agent,
+                "ip", ip == null ? "" : ip, "login_at", loginAt.toString(), "recovery_url", recoveryPage.toString()));
+    }
+
+    private UUID enqueue(String recipient, String template, Map<String, ?> payload) {
         return jdbc.sql("""
                 INSERT INTO notification_outbox(channel,recipient,template,payload)
-                VALUES ('EMAIL',:recipient,'TICKETS',CAST(:payload AS jsonb)) RETURNING id
+                VALUES ('EMAIL',:recipient,:template,CAST(:payload AS jsonb)) RETURNING id
                 """).param("recipient", recipient)
-                .param("payload", json.writeValueAsString(Map.of("ticket_ids", ticketIds)))
+                .param("template", template).param("payload", json.writeValueAsString(payload))
                 .query(UUID.class).single();
     }
 
@@ -46,7 +56,7 @@ public class OutboxRepository {
         return jdbc.sql("""
                 WITH candidate AS (
                     SELECT id FROM notification_outbox WHERE channel='EMAIL' AND status='PENDING'
-                        AND template IN ('OTP','TICKETS') AND send_after<=now() AND attempts<5
+                        AND template IN ('OTP','TICKETS','NEW_DEVICE') AND send_after<=now() AND attempts<5
                     ORDER BY send_after,id FOR UPDATE SKIP LOCKED LIMIT 1
                 )
                 UPDATE notification_outbox o SET send_after=now()+interval '30 seconds'
@@ -102,6 +112,10 @@ public class OutboxRepository {
         // Chỉ đọc tương thích thư bản cũ, không ghi envelope/metadata mới.
         if (tree.path("version").asInt() == 1 && tree.has("ciphertext")) {
             return json.readValue(legacyCipher.decrypt(tree.path("ciphertext").asText()),EmailPayload.class);
+        }
+        if (message.template().equals("NEW_DEVICE")) {
+            return NewDeviceEmail.render(message.recipient(), tree.path("user_agent").asText(), tree.path("ip").asText(),
+                    OffsetDateTime.parse(tree.path("login_at").asText()), tree.path("recovery_url").asText());
         }
         if (!message.template().equals("TICKETS") || !tree.path("ticket_ids").isArray()) {
             throw new PayloadUnavailableException();

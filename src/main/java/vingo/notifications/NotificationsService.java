@@ -1,6 +1,7 @@
 package vingo.notifications;
 
 import java.time.Clock;
+import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -89,6 +90,12 @@ public class NotificationsService {
         }
         return outbox.enqueueTickets(recipient,List.copyOf(ticketIds));
     }
+    /** Ghi cảnh báo cùng phiên đăng nhập; worker chịu trách nhiệm gửi và thử lại. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public UUID enqueueNewDevice(String recipient, String agent, String ip, OffsetDateTime loginAt, URI recoveryPage) {
+        return outbox.enqueueNewDevice(recipient, agent, ip, loginAt, recoveryPage);
+    }
+
     /** Chỉ kiểm tra hình dạng địa chỉ, không xác nhận hộp thư hay quyền sở hữu vé. */
     private static void validateRecipient(String email) {
         if (email==null || email.length()>254 || !email.matches("[^\\s@<>]+@[^\\s@<>]+\\.[^\\s@<>]+")) {

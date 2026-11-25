@@ -8,17 +8,18 @@ param(
 
 # Token chi nam trong bo nho; khong ghi ra log hoac file.
 $ErrorActionPreference = 'Stop'
-$token = $env:VINGO_ACCESS_TOKEN
+$token = $env:VINGO_SESSION_TOKEN
+if (-not $token) { $token = $env:VINGO_ACCESS_TOKEN }
 if ($TokenFromClipboard) {
     $token = Get-Clipboard -Raw
 }
 if (-not $token) {
-    $secureToken = Read-Host 'Access token buyer (an)' -AsSecureString
+    $secureToken = Read-Host 'Session token buyer (an)' -AsSecureString
     $token = [System.Net.NetworkCredential]::new('', $secureToken).Password
 }
 $token = ($token.Trim() -replace '^Bearer\s+', '') -replace '\s+', ''
-if ($token -notmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$') {
-    throw 'Access token khong dung dinh dang JWT. Chi dan chuoi eyJ... gom 3 phan ngan bang dau cham; khong dan JSON, dau nhay hoac lenh terminal.'
+if ($token -cnotmatch '^[A-Za-z0-9_-]{43}$') {
+    throw 'Session token khong hop le. Dan token opaque do scripts/dev-token.sh buyer tao.'
 }
 $api = $BaseUrl.TrimEnd('/') + '/api/v1'
 $uri = [uri]$api

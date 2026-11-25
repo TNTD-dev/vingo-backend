@@ -12,6 +12,8 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import vingo.api.model.SessionInfo;
+import vingo.shared.security.AuthenticatedUser;
 import vingo.auth.AuthUser;
 import vingo.shared.security.Role;
 
@@ -41,7 +43,7 @@ public class AuthRepository {
     public Optional<AuthUser> findByGoogleSubject(String subject) {
         return jdbc.sql("SELECT " + ACCOUNT_COLUMNS + " FROM user_account WHERE google_sub = :subject FOR UPDATE")
                 .param("subject", subject)
-                .query(this::account).optional();
+                .query((rs, row) -> account(rs, false)).optional();
     }
 
     /** Tạo tài khoản BUYER qua Google (email đã được Google xác minh). Trả rỗng nếu email hoặc subject đã có. */
@@ -59,7 +61,7 @@ public class AuthRepository {
                 .param("name", name)
                 .param("avatar", avatar == null ? null : avatar.toString())
                 .param("now", now)
-                .query(this::account).optional();
+                .query((rs, row) -> account(rs, false)).optional();
     }
 
     /** Tìm và khoá tài khoản theo email (không phân biệt hoa/thường). */
@@ -71,7 +73,7 @@ public class AuthRepository {
                         FOR UPDATE
                         """.formatted(ACCOUNT_COLUMNS))
                 .param("email", email)
-                .query((rs, row) -> new PasswordAccount(account(rs, row), rs.getString("password_hash")))
+                .query((rs, row) -> new PasswordAccount(account(rs, row), rs.getString("password_hash"), rs.getBoolean("admin_locked")))
                 .optional();
     }
 
@@ -116,44 +118,83 @@ public class AuthRepository {
                 .param("user", userId).param("now", now).update();
     }
 
-    /** Lưu hash refresh token của phiên mới và trả về id phiên. */
-    public UUID createSession(UUID userId, String tokenHash, OffsetDateTime expiresAt) {
-        return jdbc.sql("""
-                        INSERT INTO login_session (user_id, token_hash, expires_at)
-                        VALUES (:user, :hash, :expires)
-                        RETURNING id
-                        """)
-                .param("user", userId)
-                .param("hash", tokenHash)
-                .param("expires", expiresAt)
-                .query(UUID.class)
-                .single();
+    public void createSession(UUID userId, String tokenHash, OffsetDateTime now, OffsetDateTime expiresAt,
+                              String agent, String ip) {
+        jdbc.sql("""
+                INSERT INTO login_session (user_id, token_hash, created_at, expires_at, last_seen_at, user_agent, last_ip)
+                VALUES (:user, :hash, :now, :expires, :now, left(:agent, 512), CAST(:ip AS inet))
+                """).param("user", userId).param("hash", tokenHash).param("now", now).param("expires", expiresAt)
+                .param("agent", agent).param("ip", ip).update();
     }
 
-    /** Xoay refresh token tại chỗ nếu phiên và tài khoản còn hiệu lực. */
-    public Optional<RotatedSession> rotate(String oldHash, String newHash, OffsetDateTime now) {
+    /** Gọi dưới khoá user; chỉ trả true khi vừa thêm thiết bị và đã có thiết bị khác. */
+    public boolean recordDevice(UUID userId, String hash, OffsetDateTime now) {
+        int added = jdbc.sql("""
+                INSERT INTO user_device (user_id, device_hash, created_at, last_seen_at)
+                VALUES (:user, :hash, :now, :now) ON CONFLICT (user_id, device_hash) DO NOTHING
+                """).param("user", userId).param("hash", hash).param("now", now).update();
+        if (added == 0) {
+            jdbc.sql("""
+                    UPDATE user_device SET last_seen_at = greatest(last_seen_at, :now)
+                    WHERE user_id = :user AND device_hash = :hash
+                    """).param("user", userId).param("hash", hash).param("now", now).update();
+            return false;
+        }
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM user_device WHERE user_id = :user AND device_hash <> :hash)")
+                .param("user", userId).param("hash", hash).query(Boolean.class).single();
+    }
+
+    public Optional<AuthenticatedUser> authenticate(String hash, OffsetDateTime now,
+                                                   String agent, String ip, boolean recordActivity) {
+        // Use the same snapshot for identity and the conditional activity write.
         return jdbc.sql("""
-                        UPDATE login_session s SET token_hash = :newHash
-                        FROM user_account u
-                        WHERE s.token_hash = :oldHash AND s.expires_at > :now
-                          AND s.user_id = u.id
-                          AND u.deleted_at IS NULL AND u.email_verified_at IS NOT NULL AND NOT u.admin_locked
-                          AND (u.locked_until IS NULL OR u.locked_until <= :now)
-                        RETURNING s.id AS session_id, s.expires_at, u.id, u.email, u.phone, u.full_name,
-                                  u.avatar_url, u.role, u.deleted_at, u.email_verified_at, u.admin_locked,
-                                  u.locked_until
-                        """)
-                .param("newHash", newHash)
-                .param("oldHash", oldHash)
-                .param("now", now)
-                .query((rs, row) -> new RotatedSession(rs.getObject("session_id", UUID.class),
-                        rs.getObject("expires_at", OffsetDateTime.class), account(rs, row)))
-                .optional();
+                WITH valid AS MATERIALIZED (
+                    SELECT s.id, s.user_id, s.expires_at, s.last_seen_at, u.role
+                    FROM login_session s JOIN user_account u ON u.id = s.user_id
+                    WHERE s.token_hash = :hash AND s.expires_at > :now
+                      AND u.deleted_at IS NULL AND u.email_verified_at IS NOT NULL AND NOT u.admin_locked
+                ), touched AS (
+                    UPDATE login_session s SET last_seen_at = :now, user_agent = left(:agent, 512), last_ip = CAST(:ip AS inet)
+                    FROM valid v WHERE :recordActivity AND s.id = v.id AND s.token_hash = :hash
+                      AND v.last_seen_at <= :cutoff AND s.last_seen_at <= :cutoff
+                )
+                SELECT id, user_id, role, expires_at FROM valid
+                """).param("hash", hash).param("now", now)
+                .param("recordActivity", recordActivity).param("cutoff", now.minusMinutes(5)).param("agent", agent)
+                .param("ip", LoginClient.normalizeIp(ip))
+                .query((rs, row) -> new AuthenticatedUser(rs.getObject("user_id", UUID.class),
+                        Role.valueOf(rs.getString("role")), rs.getObject("id", UUID.class),
+                        rs.getObject("expires_at", OffsetDateTime.class))).optional();
+    }
+
+    public List<SessionInfo> sessions(UUID user, UUID current, OffsetDateTime now) {
+        return jdbc.sql("""
+                SELECT id, created_at, last_seen_at, expires_at, user_agent, host(last_ip) AS ip FROM login_session
+                WHERE user_id = :user AND expires_at > :now
+                ORDER BY last_seen_at DESC, created_at DESC, id DESC
+                """).param("user", user).param("now", now)
+                .query((rs, row) -> {
+                    UUID id = rs.getObject("id", UUID.class);
+                    return new SessionInfo(id, rs.getString("user_agent"), rs.getString("ip"),
+                            rs.getObject("created_at", OffsetDateTime.class),
+                            rs.getObject("last_seen_at", OffsetDateTime.class), rs.getObject("expires_at", OffsetDateTime.class),
+                            current.equals(id));
+                }).list();
+    }
+
+    public boolean replaceToken(UUID user, UUID session, String hash) {
+        if (jdbc.sql("UPDATE login_session SET token_hash = :hash WHERE user_id = :user AND id = :id")
+                .param("user", user).param("id", session).param("hash", hash).update() == 0) {
+            return false;
+        }
+        jdbc.sql("DELETE FROM login_session WHERE user_id = :user AND id <> :id")
+                .param("user", user).param("id", session).update();
+        return true;
     }
 
     /** Đăng xuất = xoá phiên; allDevices xoá mọi phiên của đúng user. */
-    public void revoke(UUID userId, UUID sessionId, boolean allDevices) {
-        jdbc.sql("""
+    public int revoke(UUID userId, UUID sessionId, boolean allDevices) {
+        return jdbc.sql("""
                         DELETE FROM login_session
                         WHERE user_id = :user AND (:allDevices OR id = CAST(:session AS uuid))
                         """)
@@ -166,7 +207,7 @@ public class AuthRepository {
     public Optional<EditableAccount> findEditableAccount(UUID userId) {
         return jdbc.sql("SELECT " + ACCOUNT_COLUMNS + ", password_hash FROM user_account WHERE id = :id FOR UPDATE")
                 .param("id", userId)
-                .query((rs, row) -> new EditableAccount(account(rs, row), rs.getString("password_hash")))
+                .query((rs, row) -> new EditableAccount(account(rs, row), rs.getString("password_hash"), rs.getBoolean("admin_locked")))
                 .optional();
     }
 
@@ -184,6 +225,7 @@ public class AuthRepository {
 
     /** Ẩn danh hoá tài khoản: giữ hàng để khoá ngoại của OTP và đơn vẫn đúng, xoá mọi dữ liệu cá nhân. */
     public void deleteAccount(UUID userId, OffsetDateTime now) {
+        jdbc.sql("DELETE FROM user_device WHERE user_id = :id").param("id", userId).update();
         jdbc.sql("""
                         UPDATE user_account SET email = 'deleted+' || id || '@invalid.local', phone = NULL,
                             phone_verified_at = NULL, full_name = 'Deleted user', password_hash = NULL,
@@ -195,10 +237,14 @@ public class AuthRepository {
                 .param("now", now).param("id", userId).update();
     }
 
-    public record EditableAccount(AuthUser user, String passwordHash) {}
+    public record EditableAccount(AuthUser user, String passwordHash, boolean adminLocked) {}
 
     /** Ánh xạ tài khoản; trạng thái suy ra từ các cột mốc thời gian tại thời điểm đọc. */
     private AuthUser account(ResultSet rs, int row) throws SQLException {
+        return account(rs, true);
+    }
+
+    private AuthUser account(ResultSet rs, boolean checkTemporaryLock) throws SQLException {
         String avatar = rs.getString("avatar_url");
         OffsetDateTime now = OffsetDateTime.now(clock);
         OffsetDateTime lockedUntil = rs.getObject("locked_until", OffsetDateTime.class);
@@ -207,7 +253,7 @@ public class AuthRepository {
             status = "DELETED";
         } else if (rs.getObject("email_verified_at", OffsetDateTime.class) == null) {
             status = "UNVERIFIED";
-        } else if (rs.getBoolean("admin_locked") || (lockedUntil != null && lockedUntil.isAfter(now))) {
+        } else if (rs.getBoolean("admin_locked") || (checkTemporaryLock && lockedUntil != null && lockedUntil.isAfter(now))) {
             status = "LOCKED";
         } else {
             status = "ACTIVE";
@@ -339,12 +385,11 @@ public class AuthRepository {
                 .optional();
     }
 
-    /** Đặt mật khẩu mới, tăng auth_version để vô hiệu JWT cũ và gỡ khoá tạm do sai mật khẩu. */
+    /** Đặt mật khẩu mới và gỡ khoá tạm do sai mật khẩu. */
     public void updatePasswordAndUnlock(UUID userId, String passwordHash, OffsetDateTime now) {
         jdbc.sql("""
                         UPDATE user_account
                         SET password_hash = :passwordHash,
-                            auth_version = auth_version + 1,
                             locked_until = NULL,
                             failed_login_count = 0,
                             last_failed_login_at = NULL,
@@ -367,10 +412,7 @@ public class AuthRepository {
 
     public enum OtpPurpose { VERIFY, RESET }
 
-    public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
-    }
-
-    public record PasswordAccount(AuthUser user, String passwordHash) {
+    public record PasswordAccount(AuthUser user, String passwordHash, boolean adminLocked) {
     }
 
     public record OtpRecord(

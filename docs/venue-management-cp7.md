@@ -12,7 +12,7 @@ Yêu cầu Java 25 và Docker Desktop đang chạy Linux containers. Bộ test k
 git diff --check
 ```
 
-`AdminVenueAcceptanceTest` gọi server trên cổng ngẫu nhiên bằng `java.net.http.HttpClient`, đi qua HTTP, multipart, xác thực JWT và controller thật. Test tự tạo tài khoản và token; token không được ghi vào tài liệu hoặc file mẫu.
+`AdminVenueAcceptanceTest` gọi server trên cổng ngẫu nhiên bằng `java.net.http.HttpClient`, đi qua HTTP, multipart, xác thực token phiên và controller thật. Test tự tạo tài khoản và token; token không được ghi vào tài liệu hoặc file mẫu.
 
 ## Kịch bản nghiệm thu xuyên suốt
 

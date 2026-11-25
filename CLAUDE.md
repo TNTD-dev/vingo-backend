@@ -110,7 +110,7 @@ Quy tắc:
 | 400 | OTP_INVALID | Mã hoặc phiên OTP không hợp lệ |
 | 400 | OTP_EXPIRED | OTP đã hết hạn |
 | 400 | OTP_TOO_MANY_ATTEMPTS | Nhập sai OTP quá số lần |
-| 401 | UNAUTHORIZED | Chưa đăng nhập hoặc refresh token không hợp lệ |
+| 401 | UNAUTHORIZED | Chưa đăng nhập hoặc phiên hết hạn hoặc đã thu hồi |
 | 401 | INVALID_CREDENTIALS | Sai thông tin đăng nhập |
 | 403 | FORBIDDEN | Không có quyền |
 | 404 | NOT_FOUND | Không tìm thấy |
@@ -138,11 +138,12 @@ Quy tắc:
 ## 8. Bảo mật
 
 - Mọi endpoint phải khai báo quyền: public, `BUYER`, hoặc `ADMIN`. Endpoint `/admin/**` chỉ `ADMIN`.
-- Đăng nhập mật khẩu dùng email. JWT yêu cầu tài khoản đã xác minh email, kể cả khi giữ ghế. Số điện thoại là thông tin liên hệ, nhiều tài khoản có thể dùng chung.
+- Đăng nhập mật khẩu dùng email. Phiên yêu cầu tài khoản đã xác minh email, kể cả khi giữ ghế. Số điện thoại là thông tin liên hệ, nhiều tài khoản có thể dùng chung.
 - Lấy user hiện tại qua `CurrentUser` trong `shared.security`, không đọc header tay.
 - Kiểm tra quyền sở hữu: buyer chỉ xem/huỷ đơn và vé **của mình**.
-- Không log: mật khẩu, token, refresh token, OTP, `vnp_HashSecret`, số điện thoại đầy đủ.
-- Chỉ lưu hash của mật khẩu (Argon2), OTP và refresh token.
+- Không log: mật khẩu, token phiên, OTP, `vnp_HashSecret`, số điện thoại đầy đủ.
+- Chỉ lưu hash của mật khẩu (Argon2), OTP và token phiên (SHA-256). Cookie phiên HttpOnly áp dụng Path=/; request ghi bằng cookie phải có Origin của frontend.
+- Phiên hết hạn sau `AUTH_SESSION_TTL` (mặc định 7 ngày từ lúc đăng nhập). Đổi token giữ nguyên `expires_at`. Job chỉ dọn theo `expires_at`; `last_seen_at` dùng để hiển thị danh sách thiết bị.
 - Secret chỉ đọc từ biến môi trường. Không commit `.env`.
 - Validate input bằng Bean Validation trên model sinh từ yaml.
 

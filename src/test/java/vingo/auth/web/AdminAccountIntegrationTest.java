@@ -15,7 +15,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import vingo.api.model.AdminAccount;
 import vingo.api.model.AdminAccountPage;
 import vingo.api.model.LoginRequest;
-import vingo.api.model.TokenPair;
 import vingo.auth.internal.AdminAccountRepository;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
@@ -82,34 +81,34 @@ class AdminAccountIntegrationTest extends IntegrationTest {
         var old = login(id);
         var promoted = update(admin, id, Map.of("role", "ADMIN", "reason", "Phụ trách vận hành"));
         assertThat(promoted.getRole()).isEqualTo(AdminAccount.RoleEnum.ADMIN);
-        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(old.getAccessToken()))
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(old))
                 .exchange().expectStatus().isUnauthorized();
-        client.post().uri("/api/v1/auth/refresh").body(Map.of("refresh_token", old.getRefreshToken()))
+        client.get().uri("/api/v1/me/sessions").headers(h -> h.setBearerAuth(old))
                 .exchange().expectStatus().isUnauthorized();
         var elevated = login(id);
-        client.get().uri(ROOT).headers(h -> h.setBearerAuth(elevated.getAccessToken()))
+        client.get().uri(ROOT).headers(h -> h.setBearerAuth(elevated))
                 .exchange().expectStatus().isOk();
         update(admin, id, Map.of("role", "BUYER", "reason", "Kết thúc phân công"));
-        client.get().uri(ROOT).headers(h -> h.setBearerAuth(elevated.getAccessToken()))
+        client.get().uri(ROOT).headers(h -> h.setBearerAuth(elevated))
                 .exchange().expectStatus().isUnauthorized();
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE entity_id = :id AND action = 'UPDATE_ACCOUNT'")
                 .param("id", id).query(Long.class).single()).isEqualTo(2);
     }
 
     @Test
-    void lock_blocksLoginAndRefresh_unlockDoesNotRestoreOldJwt() {
+    void lock_blocksLoginAndSessions_unlockDoesNotRestoreOldSession() {
         String admin = tokenFor(Role.ADMIN);
         UUID id = user("lock");
         var old = login(id);
         assertThat(update(admin, id, Map.of("locked", true, "reason", "Tạm ngừng truy cập")).getAdminLocked()).isTrue();
         client.post().uri("/api/v1/auth/login").body(new LoginRequest(email(id), "Password#2026"))
                 .exchange().expectStatus().isEqualTo(423);
-        client.post().uri("/api/v1/auth/refresh").body(Map.of("refresh_token", old.getRefreshToken()))
+        client.get().uri("/api/v1/me/sessions").headers(h -> h.setBearerAuth(old))
                 .exchange().expectStatus().isUnauthorized();
         update(admin, id, Map.of("locked", false, "reason", "Cho phép truy cập lại"));
-        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(old.getAccessToken()))
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(old))
                 .exchange().expectStatus().isUnauthorized();
-        assertThat(login(id).getAccessToken()).isNotBlank();
+        assertThat(login(id)).isNotBlank();
     }
 
     @Test
@@ -170,9 +169,9 @@ class AdminAccountIntegrationTest extends IntegrationTest {
 
     private String email(UUID id) { return jdbc.sql("SELECT email FROM user_account WHERE id = :id").param("id", id).query(String.class).single(); }
 
-    private TokenPair login(UUID id) {
-        return client.post().uri("/api/v1/auth/login").body(new LoginRequest(email(id), "Password#2026"))
-                .exchange().expectStatus().isOk().expectBody(TokenPair.class).returnResult().getResponseBody();
+    private String login(UUID id) {
+        return sessionToken(client.post().uri("/api/v1/auth/login").body(new LoginRequest(email(id), "Password#2026"))
+                .exchange().expectStatus().isOk().returnResult(Void.class).getResponseHeaders());
     }
 
     private AdminAccount update(String token, UUID id, Map<String, ?> body) {

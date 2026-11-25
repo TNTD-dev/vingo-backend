@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import vingo.booking.BookingService;
@@ -29,21 +28,20 @@ import vingo.ticketing.internal.QrCodec;
 
 class CheckinApiTest extends TicketingTestSupport {
 
-    private final JwtDecoder jwtDecoder;
     private String adminToken;
     private UUID admin;
 
     @Autowired
     CheckinApiTest(BookingService bookingService, TicketingService ticketingService,
-                   PlatformTransactionManager transactionManager, JwtDecoder jwtDecoder) {
+                   PlatformTransactionManager transactionManager) {
         super(bookingService, ticketingService, transactionManager);
-        this.jwtDecoder = jwtDecoder;
     }
 
     @BeforeEach
     void createAdmin() {
         adminToken = tokenFor(Role.ADMIN);
-        admin = UUID.fromString(jwtDecoder.decode(adminToken).getSubject());
+        admin = jdbc.sql("SELECT user_id FROM login_session WHERE token_hash = :hash")
+                .param("hash", vingo.auth.internal.TokenSecrets.hash(adminToken)).query(UUID.class).single();
     }
 
     @Test

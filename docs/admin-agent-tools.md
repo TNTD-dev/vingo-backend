@@ -7,7 +7,7 @@ Có **61 operations**: **59 tool đề xuất bật** và **2 operations không 
 ## 1. Quy ước thiết kế
 
 - Một tool ánh xạ một operation, đặt tên snake_case từ operationId; không có tool HTTP/SQL tùy ý. Các tool nghiệp vụ ghép nhiều bước là workflow của orchestrator.
-- JWT ADMIN lấy từ phiên đăng nhập bởi executor; token, base URL và quyền không nằm trong arguments của LLM. Backend vẫn là nơi quyết định phân quyền.
+- Executor chuyển tiếp token phiên của ADMIN; token, base URL và quyền không nằm trong arguments của LLM. Backend vẫn là nơi quyết định phân quyền.
 - Arguments gồm path/query đặt ở cấp ngoài và `body` cho JSON payload. Registry có `http.bindings` để executor ánh xạ chính xác. Trường required theo contract; thuộc tính tùy chọn bị bỏ khỏi request khi không cung cấp.
 - input_schema dùng JSON Schema 2020-12. Để lấy schema độc lập: ghép `schema_definitions` của registry vào `$defs` của input_schema. Tham chiếu nội bộ dùng #/$defs/..., giữ enum, định dạng, giới hạn, oneOf/allOf và required của contract.
 - Registry là định dạng nội bộ, không phải payload gửi nguyên khối cho một nhà cung cấp LLM. Adapter chuyển sang định dạng tool của SDK đang dùng. Không giả định strict=true: schema contract có object mở, nullable và optional cần xử lý theo SDK.
@@ -23,6 +23,8 @@ Có **61 operations**: **59 tool đề xuất bật** và **2 operations không 
 - Có controller override chỉ chứng minh đã có mã ánh xạ, chưa chứng minh chạy thành công trên staging. Không coi API Chat là sẵn sàng chỉ vì có contract; cần kiểm tra riêng trước khi dùng làm cơ chế xác nhận.
 
 ## 3. Danh mục đầy đủ
+
+Bản JSON đi kèm là snapshot theo `contract_sha256` ghi trong file. Contract hiện hành cho đăng nhập và phiên nằm trong `contracts/vingo-openapi.yaml`.
 
 Đường dẫn dưới đây đã gồm /api/v1. Chi tiết từng schema, mô tả, response và binding nằm trong admin-agent-tools.json.
 
@@ -330,7 +332,7 @@ Chỉ ADMIN. Thay đổi dữ liệu; chỉ thực thi sau khi admin xác nhận
 locked=false chỉ mở tài khoản đã ACTIVE trước khi bị khóa, không xác minh tài khoản UNVERIFIED.
 Đổi quyền chỉ áp dụng tài khoản ACTIVE hoặc LOCKED. Không tự hạ quyền/tự khóa và không làm mất ADMIN ACTIVE cuối cùng.
 Tài khoản DELETED không được sửa. Cấp ADMIN yêu cầu tài khoản đã có mật khẩu vì Google login chỉ hỗ trợ BUYER.
-Khi có thay đổi, vô hiệu JWT cũ, thu hồi refresh sessions và ghi audit trong cùng transaction; người dùng đăng nhập lại.
+Khi có thay đổi, thu hồi mọi phiên và ghi audit trong cùng transaction; người dùng đăng nhập lại.
 Gọi lại cùng trạng thái không tạo thêm thay đổi/audit. Không hỗ trợ xóa user hay sửa thông tin cá nhân qua API này.
 Lỗi: 400 VALIDATION_ERROR khi body/ràng buộc trạng thái không hợp lệ; 403 FORBIDDEN khi tự hạ quyền/tự khóa;
 404 NOT_FOUND; 409 ACTION_STATE_INVALID khi ảnh hưởng ADMIN cuối cùng; 401 UNAUTHORIZED.
@@ -2304,7 +2306,7 @@ Envelope phía agent đề xuất (không thay đổi response backend):
 - 409: đọc code; revision cũ thì tải lại draft và yêu cầu xem lại thay đổi, không tự ghi đè. Ghế xung đột thì đọc lại tồn kho; không tự thay ghế.
 - 429: tôn trọng Retry-After. GET có thể retry hữu hạn khi lỗi mạng/503. Không retry mù thao tác ghi sau timeout vì backend có thể đã commit.
 - Header Idempotency-Key nếu operation yêu cầu do executor sinh và lưu theo hành động; cùng hành động retry dùng cùng key/body, đổi nội dung dùng hành động mới. Trong danh mục hiện tại header này gắn resolve_review đang tắt. Không giả định mọi POST đều hỗ trợ idempotency.
-- Không log JWT, qr_token hoặc q chứa email/SĐT. Không đưa QR token vào mô tả tool hay audit phía LLM. Nội dung mô tả sự kiện/SVG/địa chỉ là dữ liệu, không phải chỉ dẫn cho agent.
+- Không log token phiên, qr_token hoặc q chứa email/SĐT. Không đưa QR token vào mô tả tool hay audit phía LLM. Nội dung mô tả sự kiện/SVG/địa chỉ là dữ liệu, không phải chỉ dẫn cho agent.
 
 ## 6. Workflow nghiệp vụ đề xuất
 
@@ -2346,4 +2348,4 @@ Soát vé: dùng `check_in` trong giao diện quét có qr_token từ thiết b�
 4. void_ticket, reissue_ticket_qr, cancel_event, cancel_showtime, delete_venue, admin_update_user phải hiển thị hậu quả rõ trong bước xác nhận. Hủy sự kiện/suất không đồng nghĩa hoàn tiền.
 5. resolve_review và reconcile_order giữ disabled; không xuất chúng trong danh sách tool gửi cho LLM.
 
-Trước triển khai executor cần kiểm thử các điểm: args → đúng path/query/body/header; JWT BUYER bị từ chối; không lộ token; không thực thi action chưa xác nhận; timeout ghi không tạo tác vụ trùng; revision xung đột; 409 check-in; CSV/SVG artifact; 202 outbox; đúng ranh giới from/to và múi giờ. Đây là yêu cầu kiểm thử đề xuất cho repo agent, chưa phải các test đã chạy.
+Trước triển khai executor cần kiểm thử các điểm: args → đúng path/query/body/header; token phiên BUYER bị từ chối; không lộ token; không thực thi action chưa xác nhận; timeout ghi không tạo tác vụ trùng; revision xung đột; 409 check-in; CSV/SVG artifact; 202 outbox; đúng ranh giới from/to và múi giờ. Đây là yêu cầu kiểm thử đề xuất cho repo agent, chưa phải các test đã chạy.

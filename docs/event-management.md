@@ -121,7 +121,7 @@ Trước CHECK cho city cần cập nhật cả dữ liệu test: `CatalogFixtur
 
 ## 5. Contract hồ sơ sự kiện EV2
 
-Mọi endpoint admin dùng Bearer JWT và quyền `ADMIN`. Hai API GET đã bổ sung vào contract và triển khai controller trong EV2; thay đổi local cần được đưa vào PR của team.
+Mọi endpoint admin dùng Bearer opaque và quyền `ADMIN`. Hai API GET đã bổ sung vào contract và triển khai controller trong EV2; thay đổi local cần được đưa vào PR của team.
 
 | API | Hành vi dự kiến |
 |---|---|

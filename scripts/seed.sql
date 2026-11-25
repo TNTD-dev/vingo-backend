@@ -1,4 +1,4 @@
--- Dữ liệu mẫu cho máy dev (schema v2 - 31 bảng), đủ để gọi thử mọi API (search, booking, auth refresh/logout).
+-- Dữ liệu mẫu cho máy dev (schema v2 - 31 bảng), đủ để gọi thử mọi API (search, booking, auth sessions/logout).
 -- Chạy qua scripts/seed-local.sh (nạp SQL rồi xoá cache Redis). Chỉ dùng cho DB local.
 --
 -- CẢNH BÁO: script XOÁ SẠCH dữ liệu catalog, booking, payment, ticketing rồi nạp lại từ đầu.
@@ -161,17 +161,7 @@ ON CONFLICT (id) DO UPDATE SET
     failed_login_count = 0,
     locked_until = NULL;
 
--- Refresh token dạng chữ cố định, DB chỉ lưu SHA-256 hex như TokenSecrets.hash().
-INSERT INTO login_session (id, user_id, token_hash, expires_at)
-SELECT pg_temp.sid(sid_n), pg_temp.sid(user_n), encode(sha256(convert_to(token, 'UTF8')), 'hex'), exp
-FROM (VALUES
-    (701, 1, 'seed-refresh-admin',   now() + interval '30 days'),
-    (702, 2, 'seed-refresh-buyer',   now() + interval '30 days'),
-    (703, 3, 'seed-refresh-buyer2',  now() + interval '30 days'),
-    (704, 4, 'seed-refresh-buyer3',  now() + interval '30 days'),
-    (706, 2, 'seed-refresh-expired', now() - interval '1 hour'),
-    (707, 5, 'seed-refresh-locked',  now() + interval '30 days')
-) AS t (sid_n, user_n, token, exp);
+-- Local clients create an individual session with scripts/dev-token.sh.
 
 -- ------------------------------------------------------------------ Sân, nền sân, sơ đồ ghế
 

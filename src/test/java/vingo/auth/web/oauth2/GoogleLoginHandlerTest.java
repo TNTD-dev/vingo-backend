@@ -32,8 +32,8 @@ class GoogleLoginHandlerTest {
     void success_redirectsToFailedWithoutLoggingExceptionMessage(CapturedOutput output) throws Exception {
         var login = mock(GoogleLoginService.class);
         String sensitiveMessage = "fixture-email@example.com fixture-token";
-        when(login.login(any())).thenThrow(new IllegalStateException(sensitiveMessage));
-        var properties = new AuthProperties(URI.create("http://localhost:3000/auth/google"), false, Duration.ofDays(30));
+        when(login.login(any(), any())).thenThrow(new IllegalStateException(sensitiveMessage));
+        var properties = new AuthProperties(URI.create("http://localhost:3000/auth/google"), false, Duration.ofDays(7));
         var handler = new GoogleLoginHandler(login, properties, mock(AuthCookies.class));
         var claims = OidcIdToken.withTokenValue("fixture-id-token").subject("test-user")
                 .claim("email", "fixture-email@example.com").claim("email_verified", true).build();

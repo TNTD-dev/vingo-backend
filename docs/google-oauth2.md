@@ -1,13 +1,13 @@
 # Đăng nhập Google trong Vingo
 
-Vingo dùng **OAuth 2.0 Authorization Code + OpenID Connect (OIDC)**. Google xác thực danh tính người dùng. Backend Vingo dùng danh tính đó để tìm hoặc tạo tài khoản, sau đó cấp phiên riêng của Vingo. Frontend lấy access JWT của Vingo qua endpoint refresh để gọi API. [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect) · [Spring Security OAuth2 Login](https://docs.spring.io/spring-security/reference/servlet/oauth2/login/advanced.html)
+Vingo dùng **OAuth 2.0 Authorization Code + OpenID Connect (OIDC)**. Google xác thực danh tính người dùng. Backend Vingo dùng danh tính đó để tìm hoặc tạo tài khoản, sau đó cấp phiên riêng của Vingo. Trình duyệt gửi cookie phiên khi gọi API. [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect) · [Spring Security OAuth2 Login](https://docs.spring.io/spring-security/reference/servlet/oauth2/login/advanced.html)
 
 ## 1. Phạm vi triển khai
 
 - Bổ sung luồng điều hướng qua `GET /api/v1/auth/google` và callback do Spring Security xử lý. OpenAPI vẫn giữ operation `POST /api/v1/auth/google` nhận ID token từ `develop`. Luồng browser dùng `GET`, còn operation `POST` hiện dùng stub sinh từ OpenAPI và chưa hỗ trợ xác minh ID token.
 - Tạo tài khoản `BUYER` ở lần đăng nhập đầu, lưu Google `sub` và avatar nếu có. Lần sau dùng lại UUID Vingo theo `google_sub`.
-- Tạo phiên trong PostgreSQL cho mỗi lượt đăng nhập thành công. Trình duyệt nhận refresh token qua cookie `HttpOnly`. Access JWT được cấp khi frontend gọi refresh.
-- Xoay vòng refresh token khi refresh và thu hồi một phiên hoặc mọi phiên của tài khoản khi logout.
+- Tạo phiên trong PostgreSQL cho mỗi lượt đăng nhập thành công. Trình duyệt nhận token phiên qua cookie `HttpOnly`.
+- Thu hồi một phiên hoặc mọi phiên của tài khoản khi logout.
 - Ghi mã lỗi callback trong log để phân biệt sự cố OAuth2 với lỗi kết nối trang frontend sau redirect.
 
 [Contract OpenAPI](../contracts/vingo-openapi.yaml) · [Migration Google login](../src/main/resources/db/migration/V20261111_1030__auth_google_login.sql)
@@ -43,14 +43,14 @@ sequenceDiagram
         OAuth->>OAuth: Xác minh ID token và nonce
         alt Google xác thực thành công
             OAuth->>Login: Truyền sub, email, email_verified, name, picture
-            Login->>DB: Tìm theo google_sub, tạo user nếu cần và lưu hash refresh token
+            Login->>DB: Tìm theo google_sub, tạo user nếu cần và lưu hash token phiên
             alt Tài khoản được phép đăng nhập
                 DB-->>Login: Hoàn tất transaction của user và session
-                Login-->>OAuth: Refresh token Vingo và trạng thái tài khoản mới hay cũ
-                OAuth-->>Browser: 302 về web với google_login=created hoặc success, đặt cookie refresh
-                Browser->>API: POST /api/v1/auth/refresh với cookie và Origin
-                API->>DB: Kiểm tra phiên, cập nhật hash refresh token
-                API-->>Browser: 200 với access JWT và user, cập nhật cookie refresh
+                Login-->>OAuth: Token phiên Vingo và trạng thái tài khoản mới hay cũ
+                OAuth-->>Browser: 302 về web với google_login=created hoặc success, đặt cookie phiên
+                Browser->>API: GET /api/v1/me với cookie
+                API->>DB: Kiểm tra phiên và đọc tài khoản
+                API-->>Browser: 200 với thông tin user
             else Email trùng hoặc tài khoản không đủ điều kiện
                 Login-->>OAuth: Từ chối tạo phiên
                 OAuth-->>Browser: 302 về web với google_login=email_taken hoặc failed
@@ -61,7 +61,7 @@ sequenceDiagram
     end
 ```
 
-Google trả người dùng về **callback của backend** trên cổng `8080`. Sau khi xử lý xong, backend chuyển tiếp người dùng đến **trang nhận kết quả của frontend**, mặc định là `http://localhost:3000/auth/google`. Giá trị `google_login` phục vụ hiển thị thông báo. Frontend xác nhận phiên bằng phản hồi `200` từ endpoint refresh.
+Google trả người dùng về **callback của backend** trên cổng `8080`. Sau khi xử lý xong, backend chuyển tiếp người dùng đến **trang nhận kết quả của frontend**, mặc định là `http://localhost:3000/auth/google`. Giá trị `google_login` phục vụ hiển thị thông báo. Frontend xác nhận phiên bằng phản hồi `200` từ GET /api/v1/me.
 
 ## 3. Trách nhiệm của từng lớp
 
@@ -70,12 +70,12 @@ Google trả người dùng về **callback của backend** trên cổng `8080`.
 | [`GoogleOAuth2SecurityConfig`](../src/main/java/vingo/auth/web/oauth2/GoogleOAuth2SecurityConfig.java) | Đăng ký Google client, bật PKCE, cấu hình hai đường dẫn OAuth2 và gắn success/failure handler. Filter chain này chỉ áp dụng cho trang bắt đầu và callback. |
 | [`GoogleLoginStartFilter`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginStartFilter.java) và [`GoogleLoginRateLimiter`](../src/main/java/vingo/auth/internal/GoogleLoginRateLimiter.java) | Giới hạn request bắt đầu theo IP bằng Redis trước khi Spring dọn hoặc lưu state trong PostgreSQL. |
 | [`GoogleAuthorizationRequests`](../src/main/java/vingo/auth/web/oauth2/GoogleAuthorizationRequests.java) | Nối Spring Security với kho yêu cầu OAuth2. Tạo cookie tạm, chuyển yêu cầu OAuth2 thành dữ liệu lưu trữ và khôi phục yêu cầu khi callback quay về. |
-| [`GoogleLoginHandler`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginHandler.java) | Đọc claim từ `OidcUser` đã xác thực, gọi use case, đặt cookie refresh và redirect. |
+| [`GoogleLoginHandler`](../src/main/java/vingo/auth/web/oauth2/GoogleLoginHandler.java) | Đọc claim từ `OidcUser` đã xác thực, gọi use case, đặt cookie phiên và redirect. |
 | [`GoogleLoginService`](../src/main/java/vingo/auth/GoogleLoginService.java) | Kiểm tra điều kiện tài khoản, tìm hoặc tạo user, tạo session trong một transaction. |
-| [`AuthController`](../src/main/java/vingo/auth/web/AuthController.java) và [`AuthService`](../src/main/java/vingo/auth/AuthService.java) | Nhận HTTP refresh/logout, xử lý vòng đời phiên, ký JWT và trả kết quả theo OpenAPI. |
-| [`AuthRepository`](../src/main/java/vingo/auth/internal/AuthRepository.java) và [`GoogleAuthorizationRequestRepository`](../src/main/java/vingo/auth/internal/GoogleAuthorizationRequestRepository.java) | Thực hiện SQL trên `users`, `sessions` và `oauth_login_request`. |
+| [`AuthController`](../src/main/java/vingo/auth/web/AuthController.java) và [`AuthService`](../src/main/java/vingo/auth/AuthService.java) | Nhận HTTP login/logout, xử lý vòng đời phiên và trả kết quả theo OpenAPI. |
+| [`AuthRepository`](../src/main/java/vingo/auth/internal/AuthRepository.java) và [`GoogleAuthorizationRequestRepository`](../src/main/java/vingo/auth/internal/GoogleAuthorizationRequestRepository.java) | Thực hiện SQL trên `user_account`, `login_session` và `oauth_state`. |
 
-Luồng nghiệp vụ đi theo **điểm vào HTTP → service → repository → PostgreSQL**. Callback OAuth2 đi qua Spring Security và `GoogleLoginHandler`. Kho trạng thái OAuth2 là hạ tầng của filter chain, được gọi qua adapter riêng. Các service và `AuthUser` nằm ở package gốc `vingo.auth`. DTO nội bộ nằm trong `vingo.auth.internal`. Các kiểu HTTP như `User` và `RefreshResult` được sinh từ OpenAPI.
+Luồng nghiệp vụ đi theo **điểm vào HTTP → service → repository → PostgreSQL**. Callback OAuth2 đi qua Spring Security và `GoogleLoginHandler`. Kho trạng thái OAuth2 là hạ tầng của filter chain, được gọi qua adapter riêng. Các service và `AuthUser` nằm ở package gốc `vingo.auth`. DTO nội bộ nằm trong `vingo.auth.internal`. Các kiểu HTTP như `User` và `LoginResult` được sinh từ OpenAPI.
 
 ## 4. Vì sao chọn cách này?
 
@@ -103,44 +103,13 @@ Frontend điều hướng trình duyệt đến endpoint bắt đầu. Backend d
 
 Email và `google_sub` có unique index. Khi hai callback tạo tài khoản cùng lúc, `INSERT … ON CONFLICT DO NOTHING` rồi đọc lại theo `google_sub` giúp cả hai lượt dùng cùng một user. Tài khoản Google mới có `password_hash = NULL` vì họ đã xác thực bằng Google. Nếu Vingo bổ sung đăng nhập mật khẩu cho tài khoản này, người dùng có thể tự đặt mật khẩu sau khi xác thực lại.
 
-### Tách access token và refresh token
+### Phiên Vingo sau callback
 
-| Dữ liệu | Lưu ở đâu và dùng khi nào |
-|---|---|
-| `users` | PostgreSQL lưu tài khoản, gồm `google_sub`, email, tên, role, trạng thái và `avatar_url` nếu có. |
-| `oauth_login_request` | PostgreSQL lưu yêu cầu OAuth2 tạm thời. Bản ghi gồm hash để đối chiếu `state` và cookie, dữ liệu yêu cầu cần để khôi phục luồng và thời hạn. |
-| Refresh token Vingo | Trình duyệt giữ giá trị gốc trong cookie `HttpOnly`. Bảng `sessions` lưu hash SHA-256, user ID, hạn phiên và thời điểm thu hồi. Token ngẫu nhiên có 32 byte trước khi mã hóa Base64 URL. |
-| Access JWT Vingo | Frontend nhận qua JSON khi refresh. Thời hạn mặc định 15 phút. `sub` là UUID Vingo, `sid` là UUID phiên, `role` lấy từ DB. JWT được ký HS256 bằng cấu hình của Vingo. |
+Cookie phiên dùng HttpOnly, SameSite=Lax và Path=/; khi bật Secure, tên cookie là `__Host-vingo_session`. Backend tra hash SHA-256, đọc vai trò hiện tại và kiểm tra hạn tuyệt đối (mặc định 7 ngày kể từ lúc đăng nhập). Hoạt động và đổi token đều giữ nguyên mốc hết hạn. Xóa dòng phiên sẽ thu hồi quyền truy cập ở request tiếp theo.
 
-Cookie dùng `SameSite=Lax` để trình duyệt gửi cookie tạm khi Google điều hướng về callback. Ở cấu hình HTTPS, cookie có `Secure` và tiền tố `__Host-`. Profile `local` dùng cookie HTTP cho localhost. Cookie refresh là thông tin xác thực do trình duyệt tự gửi, nên nhánh refresh bằng cookie kiểm tra `Origin` khớp origin của `AUTH_FRONTEND_RETURN_URL`. CORS của refresh và logout cũng giới hạn theo origin này. Khi frontend và API chạy khác origin, dùng hai địa chỉ cùng site và gửi request với `credentials: 'include'`.
+## 5. Frontend xác nhận phiên
 
-Phiên mặc định có hạn 30 ngày tính từ lúc đăng nhập. Mỗi lần refresh thay hash trong cùng bản ghi, giữ nguyên hạn phiên. Refresh token cũ mất hiệu lực sau lần xoay vòng thành công. Logout đặt `revoked_at` và xóa cookie. JWT đã cấp có thể dùng tới hạn riêng của nó, vì API xác thực JWT theo chế độ stateless.
-
-## 5. API và cách frontend nối luồng
-
-| API | Cách gọi | Kết quả |
-|---|---|---|
-| `GET /api/v1/auth/google` | Điều hướng trình duyệt tới endpoint này | `302` sang Google, `404` nếu tắt, `429` nếu vượt hạn mức hoặc `503` nếu Redis không khả dụng |
-| `GET /api/v1/auth/oauth2/callback/google` | Google điều hướng trình duyệt về cùng code và state, hoặc thông tin lỗi | `302` về URL frontend với `google_login=created`, `success`, `email_taken` hoặc `failed` |
-| `POST /api/v1/auth/refresh` | Web gửi cookie, body rỗng. Client API có thể gửi `{"refresh_token":"…"}` | `200` với `access_token`, `expires_in` và `user`. Với cookie, token refresh mới đi qua `Set-Cookie`. Với JSON, token mới nằm trong `refresh_token`. |
-| `POST /api/v1/auth/logout` | Gửi bearer JWT của Vingo. Dùng `{"all_devices":true}` để thu hồi mọi phiên. | `204` khi thu hồi phiên và gửi lệnh xóa cookie |
-
-Sau khi nhận `created` hoặc `success`, frontend gọi refresh. Ví dụ dưới đây chạy trên origin đã cấu hình cho frontend.
-
-```javascript
-const response = await fetch('http://localhost:8080/api/v1/auth/refresh', {
-  method: 'POST',
-  credentials: 'include',
-});
-
-if (!response.ok) {
-  throw new Error(`Không thể làm mới phiên: HTTP ${response.status}`);
-}
-
-const { access_token, expires_in, user } = await response.json();
-```
-
-Frontend giữ access token trong bộ nhớ và gửi `Authorization: Bearer <access_token>` khi gọi API. Khi tải lại trang hoặc khi access token hết hạn, frontend có thể gọi refresh nếu cookie phiên vẫn còn hiệu lực.
+Sau redirect, web gọi `GET /api/v1/me` với cookie để lấy hồ sơ. Dùng đường dẫn API cùng origin qua reverse proxy khi frontend và backend ở hai cổng khác nhau; mapping CORS riêng của auth chỉ áp dụng cho logout. Request POST/PUT/PATCH/DELETE dùng cookie phải gửi Origin khớp `AUTH_FRONTEND_RETURN_URL`. Đăng xuất bằng `POST /api/v1/auth/logout`. Client server-to-server có thể gửi cùng token opaque qua Authorization Bearer.
 
 ## 6. Cấu hình và kiểm thử local
 
@@ -163,7 +132,7 @@ Frontend giữ access token trong bộ nhớ và gửi `Authorization: Bearer <a
    ```
 
 4. Khi frontend chưa chạy, dùng `AUTH_FRONTEND_RETURN_URL=http://localhost:8080/actuator/health` để quan sát tham số `google_login` trên thanh địa chỉ. JSON `status=UP` chỉ báo tình trạng backend.
-5. Mở [trang bắt đầu đăng nhập Google](http://localhost:8080/api/v1/auth/google). Với email mới, mong đợi `created`. Đăng nhập lại cùng tài khoản để kiểm tra `success` và UUID Vingo giữ nguyên. Kiểm tra access token qua refresh, rồi gọi logout và xác nhận refresh token của phiên bị từ chối.
+5. Mở [trang bắt đầu đăng nhập Google](http://localhost:8080/api/v1/auth/google). Với email mới, mong đợi `created`. Đăng nhập lại cùng tài khoản để kiểm tra `success` và UUID Vingo giữ nguyên. Gọi GET /me bằng cookie, sau đó logout và xác nhận cùng cookie trả 401.
 
 ### Lệnh test tự động
 
@@ -173,7 +142,7 @@ Frontend giữ access token trong bộ nhớ và gửi `Authorization: Bearer <a
 .\mvnw.cmd clean verify
 ```
 
-Test tích hợp dùng PostgreSQL 18 và Redis để kiểm tra state, giới hạn tần suất, tạo tài khoản đồng thời, email trùng, refresh và logout. Test callback HTTP đi qua filter chain thật, dùng token endpoint và JWK Set mô phỏng trên loopback để đổi code, kiểm tra chữ ký và nonce. Có test riêng cho các đường dẫn Google khi tính năng tắt. Bước đổi code với Google thật được kiểm tra thủ công bằng trình duyệt.
+Test tích hợp dùng PostgreSQL 18 và Redis để kiểm tra state, giới hạn tần suất, tạo tài khoản đồng thời, email trùng, xác thực phiên và logout. Test callback HTTP đi qua filter chain thật, dùng token endpoint và JWK Set mô phỏng trên loopback để đổi code, kiểm tra chữ ký và nonce. Có test riêng cho các đường dẫn Google khi tính năng tắt. Bước đổi code với Google thật được kiểm tra thủ công bằng trình duyệt.
 
 ### Lỗi local đã gặp
 
@@ -184,4 +153,4 @@ Test tích hợp dùng PostgreSQL 18 và Redis để kiểm tra state, giới h�
 | `ERR_CONNECTION_REFUSED` tại cổng `3000` sau callback | Frontend chưa nghe ở địa chỉ trả về. Khởi động frontend hoặc dùng URL health như bước 4 để test backend riêng. |
 | URL có `google_login=failed` | Xem dòng `Google OAuth2 callback rejected: reason=` hoặc `Google sign-in rejected: reason=` trong terminal. `authorization_request_not_found` gợi ý kiểm tra lượt đăng nhập còn hạn, URL bắt đầu và cookie trong cùng trình duyệt. Log chỉ ghi mã lỗi được chọn. |
 | Google báo `redirect_uri_mismatch` | So sánh `GOOGLE_REDIRECT_URI` và URI trong Google Cloud, gồm scheme, host, port, path và dấu gạch chéo cuối. |
-| Refresh báo `401` hoặc `403` | Với `401`, kiểm tra cookie còn hạn và phiên chưa bị thu hồi. Với `403`, kiểm tra `Origin` của frontend. Ở local, dùng `localhost` nhất quán cho frontend và API. |
+| API báo `401` hoặc `403` | Với `401`, kiểm tra cookie còn hạn và phiên chưa bị thu hồi. Với `403`, kiểm tra `Origin` của frontend. Ở local, dùng `localhost` nhất quán cho frontend và API. |

@@ -19,7 +19,7 @@ import vingo.shared.web.GlobalExceptionHandler;
 
 /** Trả 401/403 dạng ProblemDetail có {@code code}, giống mọi lỗi khác. */
 @Component
-class ProblemAuthenticationHandlers implements AuthenticationEntryPoint, AccessDeniedHandler {
+public class ProblemAuthenticationHandlers implements AuthenticationEntryPoint, AccessDeniedHandler {
 
     private final JsonMapper jsonMapper;
 
@@ -30,7 +30,7 @@ class ProblemAuthenticationHandlers implements AuthenticationEntryPoint, AccessD
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException ex)
             throws IOException {
-        write(response, GlobalExceptionHandler.problem(ErrorCode.UNAUTHORIZED, "Thiếu hoặc sai access token"));
+        write(response, GlobalExceptionHandler.problem(ErrorCode.UNAUTHORIZED, "Thiếu phiên hoặc phiên không hợp lệ"));
     }
 
     @Override

@@ -94,7 +94,7 @@ class ReportingIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void access_usesSharedJwtRolesAndBasePath() {
+    void access_usesSharedSessionRolesAndBasePath() {
         client.get().uri(PATH + "?metric=revenue").exchange().expectStatus().isUnauthorized()
                 .expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
         client.get().uri(PATH + "?metric=revenue").header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor(Role.BUYER))

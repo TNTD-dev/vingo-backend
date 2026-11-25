@@ -109,7 +109,7 @@ class BookingCorrectionsTest extends BookingTestSupport {
 
         String page = body(get(token, "/api/v1/orders"), 200);
 
-        // Một truy vấn xác thực trạng thái/quyền JWT, ba truy vấn đọc trang đơn.
+        // Một truy vấn xác thực trạng thái/quyền phiên, ba truy vấn đọc trang đơn.
         verify(queryClient, times(4)).sql(anyString());
         assertThat(strings(page, "$.data[*].id")).containsExactly(second.toString(), first.toString());
     }

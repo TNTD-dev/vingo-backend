@@ -27,8 +27,6 @@ import org.springframework.test.web.servlet.client.RestTestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
 
-import vingo.api.model.RefreshResult;
-import vingo.api.model.RefreshTokenRequest;
 import vingo.auth.internal.TokenSecrets;
 import vingo.support.IntegrationTest;
 
@@ -48,9 +46,9 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
     private static final String AVATAR = "https://lh3.googleusercontent.com/test-avatar";
     private static final String START = "/api/v1/auth/google";
     private static final String CALLBACK = "/api/v1/auth/oauth2/callback/google";
-    private static final String REFRESH = "/api/v1/auth/refresh";
     private static final String BROWSER_COOKIE = "__Host-vingo_oauth_browser";
-    private static final String REFRESH_COOKIE = "__Host-vingo_refresh";
+    private static final String SESSION_COOKIE = "__Host-vingo_session";
+    private static final String DEVICE_COOKIE = "__Host-vingo_device";
 
     @Autowired
     private GoogleTestProvider provider;
@@ -110,10 +108,15 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         var returning = callback(subject, email, true);
         assertThat(created.getLocation()).hasToString(RETURN + "created");
         assertThat(returning.getLocation()).hasToString(RETURN + "success");
-        String cookie = refreshCookie(created);
+        String cookie = sessionCookie(created);
         assertThat(cookie).contains("HttpOnly", "Secure", "SameSite=Lax");
         assertThat(created.getOrEmpty(HttpHeaders.SET_COOKIE))
                 .noneMatch(value -> value.contains("JSESSIONID") || value.contains("google-test-access"));
+        assertThat(created.getOrEmpty(HttpHeaders.SET_COOKIE))
+                .anyMatch(value -> value.startsWith("__Host-vingo_device=") && value.contains("Path=/;")
+                        && value.contains("Secure") && value.contains("HttpOnly") && value.contains("SameSite=Lax"));
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox WHERE recipient=:email AND template='NEW_DEVICE'")
+                .param("email", email).query(Integer.class).single()).isOne();
         String token = cookieValue(cookie);
 
         UUID userId = jdbc.sql("SELECT id FROM user_account WHERE google_sub = :sub AND password_hash IS NULL")
@@ -122,19 +125,34 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .param("id", userId).query(String.class).list();
         assertThat(stored).hasSize(2).contains(TokenSecrets.hash(token)).doesNotContain(token);
 
-        var result = client.post().uri(REFRESH).header(HttpHeaders.ORIGIN, ORIGIN)
-                .cookie(REFRESH_COOKIE, token).exchange().expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.user.id").isEqualTo(userId.toString())
-                .jsonPath("$.user.avatar_url").isEqualTo(AVATAR)
-                .jsonPath("$.expires_in").isEqualTo(900)
-                .jsonPath("$.refresh_token").doesNotExist()
-                .returnResult();
-        String rotated = cookieValue(refreshCookie(result.getResponseHeaders()));
-        assertThat(rotated).isNotEqualTo(token);
-        client.post().uri(REFRESH).header(HttpHeaders.ORIGIN, ORIGIN)
-                .cookie(REFRESH_COOKIE, token)
-                .exchange().expectStatus().isUnauthorized().expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
+        client.get().uri("/api/v1/me").cookie(SESSION_COOKIE, token).exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.id").isEqualTo(userId.toString()).jsonPath("$.avatar_url").isEqualTo(AVATAR);
+    }
+
+    /** Cookie máy quen được giữ qua callback; cùng IP không làm hai máy mới thành một. */
+    @Test
+    void familiarGoogleBrowserDoesNotQueueAnotherAlert() throws Exception {
+        String email = UUID.randomUUID() + "@gmail.com";
+        String subject = UUID.randomUUID().toString();
+        var first = callback(subject, email, true);
+        String deviceHeader = first.getOrEmpty(HttpHeaders.SET_COOKIE).stream()
+                .filter(value -> value.startsWith(DEVICE_COOKIE + "=")).findFirst().orElseThrow();
+        assertThat(deviceHeader).contains("Max-Age=31536000;").doesNotContain("Domain=");
+        String device = cookieValue(deviceHeader);
+        assertThat(java.util.Base64.getUrlDecoder().decode(device)).hasSize(32);
+
+        var familiar = callback(subject, email, true, device);
+        assertThat(familiar.getLocation()).hasToString(RETURN + "success");
+        assertThat(familiar.getOrEmpty(HttpHeaders.SET_COOKIE))
+                .noneMatch(value -> value.startsWith(DEVICE_COOKIE + "="));
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox WHERE recipient=:email AND template='NEW_DEVICE'")
+                .param("email", email).query(Integer.class).single()).isZero();
+
+        callback(subject, email, true);
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox WHERE recipient=:email AND template='NEW_DEVICE'")
+                .param("email", email).query(Integer.class).single()).isOne();
+        assertThat(jdbc.sql("SELECT count(*) FROM user_device d JOIN user_account u ON u.id=d.user_id WHERE u.google_sub=:subject")
+                .param("subject", subject).query(Integer.class).single()).isEqualTo(2);
     }
 
     /** Email trùng tài khoản hiện có không cấp phiên hoặc tự liên kết. */
@@ -149,7 +167,7 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
 
         var response = callback(UUID.randomUUID().toString(), email.toUpperCase(Locale.ROOT), true);
         assertThat(response.getLocation()).hasToString(RETURN + "email_taken");
-        assertThat(refreshCookie(response)).isNull();
+        assertThat(sessionCookie(response)).isNull();
         assertThat(jdbc.sql("SELECT count(*) FROM login_session WHERE user_id = :id")
                 .param("id", userId).query(Integer.class).single()).isZero();
         assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE id = :id AND google_sub IS NULL")
@@ -168,6 +186,10 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
         }
         assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE google_sub = :subject")
                 .param("subject", subject).query(Integer.class).single()).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM user_device d JOIN user_account u ON u.id=d.user_id WHERE u.google_sub=:subject")
+                .param("subject", subject).query(Integer.class).single()).isEqualTo(2);
+        assertThat(jdbc.sql("SELECT count(*) FROM notification_outbox WHERE recipient=:email AND template='NEW_DEVICE'")
+                .param("email", email).query(Integer.class).single()).isOne();
     }
 
     /** Claim email chưa xác minh không tạo tài khoản. */
@@ -180,40 +202,16 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .param("subject", subject).query(Integer.class).single()).isZero();
     }
 
-    /** Refresh bằng cookie cần Origin đúng, và logout thu hồi phiên đã xoay vòng. */
     @Test
-    void cookieRequiresTrustedOrigin_andLogoutRevokesTheRotatedSession() throws Exception {
+    void googleSessionRequiresOriginForCookieLogoutAndIsImmediatelyRevoked() throws Exception {
         var response = callback(UUID.randomUUID().toString(), UUID.randomUUID() + "@gmail.com", true);
-        String token = cookieValue(refreshCookie(response));
-        client.post().uri(REFRESH).cookie(REFRESH_COOKIE, token)
+        String token = cookieValue(sessionCookie(response));
+        client.post().uri("/api/v1/auth/logout").cookie(SESSION_COOKIE, token)
                 .exchange().expectStatus().isForbidden().expectBody().jsonPath("$.code").isEqualTo("FORBIDDEN");
-        var pair = client.post().uri(REFRESH)
-                .body(new RefreshTokenRequest(token))
-                .exchange().expectStatus().isOk().expectBody(RefreshResult.class)
-                .returnResult().getResponseBody();
-        assertThat(pair).isNotNull();
-        client.post().uri("/api/v1/auth/logout").header(HttpHeaders.AUTHORIZATION, "Bearer " + pair.getAccessToken())
+        client.post().uri("/api/v1/auth/logout").headers(h -> h.setBearerAuth(token))
                 .exchange().expectStatus().isNoContent().expectHeader().valueMatches(HttpHeaders.SET_COOKIE, ".*Max-Age=0.*");
-        client.post().uri(REFRESH).body(new RefreshTokenRequest(pair.getRefreshToken()))
-                .exchange().expectStatus().isUnauthorized();
-    }
-
-    /** Logout yêu cầu access token kể cả khi client gửi cookie. */
-    @Test
-    void logout_returns401_whenBearerTokenIsMissing() {
-        client.post().uri("/api/v1/auth/logout").cookie(REFRESH_COOKIE, "test-refresh")
-                .exchange().expectStatus().isUnauthorized()
-                .expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED")
-                .jsonPath("$.detail").isEqualTo("Thiếu hoặc sai access token");
-    }
-
-    /** Refresh phân biệt thiếu credential và body JSON không hợp lệ. */
-    @Test
-    void refresh_rejectsMissingTokenAndMalformedBody() {
-        client.post().uri(REFRESH).exchange().expectStatus().isUnauthorized()
-                .expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
-        client.post().uri(REFRESH).body(Map.of()).exchange().expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+        client.get().uri("/api/v1/me").cookie(SESSION_COOKIE, token)
+                .exchange().expectStatus().isUnauthorized().expectBody().jsonPath("$.code").isEqualTo("UNAUTHORIZED");
     }
 
     /** Đếm yêu cầu OAuth2 còn trong PostgreSQL theo state ban đầu. */
@@ -237,10 +235,15 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
 
     /** Gửi callback thật với code của Google mô phỏng và cookie của chính lượt đăng nhập. */
     private HttpHeaders callback(String subject, String email, boolean verified) throws Exception {
+        return callback(subject, email, verified, null);
+    }
+
+    private HttpHeaders callback(String subject, String email, boolean verified, String device) throws Exception {
         var attempt = startLogin();
         String code = provider.issueCode(attempt.nonce(), subject, email, verified, AVATAR);
-        var response = callbackRequest(attempt, "code", code).cookie(BROWSER_COOKIE, attempt.browserSecret())
-                .exchange().expectStatus().isFound().returnResult(Void.class).getResponseHeaders();
+        var request = callbackRequest(attempt, "code", code).cookie(BROWSER_COOKIE, attempt.browserSecret());
+        if (device != null) request.cookie(DEVICE_COOKIE, device);
+        var response = request.exchange().expectStatus().isFound().returnResult(Void.class).getResponseHeaders();
         assertThat(pending(attempt.state())).isZero();
         return response;
     }
@@ -251,10 +254,10 @@ class GoogleLoginIntegrationTest extends IntegrationTest {
                 .queryParam(parameter, value).queryParam("state", attempt.state()).build());
     }
 
-    /** Lấy riêng cookie refresh vì callback còn trả lệnh xoá cookie OAuth2. */
-    private static String refreshCookie(HttpHeaders headers) {
+    /** Lấy riêng cookie phiên vì callback còn trả lệnh xoá cookie OAuth2. */
+    private static String sessionCookie(HttpHeaders headers) {
         return headers.getOrEmpty(HttpHeaders.SET_COOKIE).stream()
-                .filter(value -> value.startsWith(REFRESH_COOKIE + "=")).findFirst().orElse(null);
+                .filter(value -> value.startsWith(SESSION_COOKIE + "=")).findFirst().orElse(null);
     }
 
     /** Lấy giá trị cookie trước các thuộc tính Set-Cookie. */

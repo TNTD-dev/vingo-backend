@@ -1,5 +1,7 @@
 # Cấu hình chung cho mọi profile. Secret chỉ đọc từ biến môi trường.
 spring:
+  autoconfigure:
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   application:
     name: vingo-backend
   threads:
@@ -38,10 +40,6 @@ server:
   shutdown: graceful
 
 vingo:
-  jwt:
-    secret: ${JWT_SECRET:}
-    issuer: vingo
-    access-token-ttl: PT15M
   qr:
     secret: ${QR_SECRET:}
   hold:
@@ -82,7 +80,8 @@ vingo:
   auth:
     frontend-return-url: ${AUTH_FRONTEND_RETURN_URL:http://localhost:3000/auth/google}
     secure-cookies: ${AUTH_SECURE_COOKIES:true}
-    refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:P30D}
+    session-ttl: ${AUTH_SESSION_TTL:P7D}
+    stream-max: ${AUTH_STREAM_MAX:PT15M}
     login:
       max-attempts: ${AUTH_LOGIN_MAX_ATTEMPTS:5}
       attempt-window: ${AUTH_LOGIN_ATTEMPT_WINDOW:PT15M}

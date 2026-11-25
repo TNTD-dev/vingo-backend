@@ -56,8 +56,9 @@ class GoogleLoginHandler {
         String result;
         try {
             var login = loginService.login(new GoogleLoginRequest(google.getSubject(), google.getEmail(),
-                    Boolean.TRUE.equals(google.getEmailVerified()), google.getFullName(), avatar(google.getPicture())));
-            response.addHeader(HttpHeaders.SET_COOKIE, cookies.refresh(login.refreshToken(), login.expiresAt()).toString());
+                    Boolean.TRUE.equals(google.getEmailVerified()), google.getFullName(), avatar(google.getPicture())),
+                    cookies.loginClient(request));
+            cookies.writeLoginCookies(login.session(), value -> response.addHeader(HttpHeaders.SET_COOKIE, value));
             result = login.created() ? "created" : "success";
         } catch (DomainException ex) {
             log.info("Google sign-in rejected: reason={}", ex.code());

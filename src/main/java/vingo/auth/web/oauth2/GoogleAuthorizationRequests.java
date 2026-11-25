@@ -57,6 +57,7 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
         OffsetDateTime now = OffsetDateTime.now(clock);
         requests.save(TokenSecrets.hash(authorization.getState()), TokenSecrets.hash(browserSecret),
                 json.writeValueAsString(SavedRequest.from(authorization)), now, now.plus(TTL));
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         response.addHeader(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.OAUTH_BROWSER, browserSecret, TTL).toString());
     }
 
@@ -65,6 +66,7 @@ class GoogleAuthorizationRequests implements AuthorizationRequestRepository<OAut
     public OAuth2AuthorizationRequest removeAuthorizationRequest(HttpServletRequest request, HttpServletResponse response) {
         OAuth2AuthorizationRequest authorization = findRequest(request, true);
         if (authorization != null) {
+            response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
             response.addHeader(HttpHeaders.SET_COOKIE,
                     cookies.cookie(AuthCookies.OAUTH_BROWSER, "", Duration.ZERO).toString());
         }

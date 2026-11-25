@@ -11,7 +11,7 @@ Admin mở **Hệ thống → Tài khoản người dùng** tại `/admin/users`
 
 ## API
 
-Tất cả endpoint yêu cầu `Authorization: Bearer <access_token>` với role ADMIN.
+Tất cả endpoint yêu cầu `Authorization: Bearer <session_token>` với role ADMIN.
 
 | Method | URL | Kết quả |
 |---|---|---|
@@ -49,21 +49,17 @@ Thay `locked` bằng `false` để mở khóa. Có thể gửi đồng thời `r
 - Khóa quản trị đặt `admin_locked=true`, `status=LOCKED`, không tự hết hạn. Mở khóa trả về ACTIVE và xóa hạn khóa tạm.
 - Đặt lại mật khẩu không gỡ khóa quản trị.
 - Gọi lại cùng trạng thái không thu hồi thêm phiên hoặc tạo thêm audit.
-- Thay đổi thực tế cập nhật users, tăng auth_version, thu hồi tất cả refresh sessions và ghi audit UPDATE_ACCOUNT cùng transaction.
+- Thay đổi thực tế cập nhật user_account, thu hồi tất cả phiên và ghi audit UPDATE_ACCOUNT cùng transaction.
 - Audit lưu actor, lý do, ID tài khoản và role/status/admin_locked trước/sau; không đưa thông tin xác thực vào audit.
 
 ## Vô hiệu token cũ
 
-JWT mới có claim `av` là auth_version của user. Khi xác thực API, backend đọc trạng thái user hiện hành và đối chiếu role/version; tài khoản không ACTIVE hoặc bị khóa quản trị bị từ chối.
-
-Token trước thay đổi chưa có `av` được xem là version 0, nên vẫn hoạt động nếu tài khoản chưa bị thay đổi. Sau khi đổi quyền/khóa, token cũ trả 401 ngay ở request tiếp theo. Mở khóa không khôi phục hiệu lực token cũ. Người dùng phải đăng nhập lại.
-
-Việc kiểm tra này thêm một truy vấn PostgreSQL cho mỗi request có JWT; không dùng cache có thể giữ quyền cũ. Request hoặc SSE đã bắt đầu trước khi thay đổi không bị hủy giữa chừng bởi validator.
+Mỗi request xác thực đọc phiên và vai trò từ PostgreSQL. Việc đổi quyền, khóa hoặc mở khóa xóa mọi phiên trong cùng transaction với audit. Token cũ trả 401 ở request tiếp theo. Stream đã mở phải kết nối lại trong vòng tối đa 15 phút theo cấu hình mặc định.
 
 ## Migration và review
 
 - Migration mới: `V20261116_1800__auth_admin_accounts.sql`; không thay đổi migration lịch sử.
-- Bổ sung users.admin_locked, users.auth_version và action UPDATE_ACCOUNT vào constraint audit.
+- Bổ sung cờ khóa quản trị và action UPDATE_ACCOUNT vào constraint audit.
 - Contract backend là nguồn cho phần API tài khoản; frontend copy phần bổ sung và sinh lại Orval. Các chênh lệch contract có sẵn ngoài tính năng này được giữ nguyên.
 - Cần review contract theo CLAUDE.md và phối hợp review các phần auth, security, audit và frontend admin.
 

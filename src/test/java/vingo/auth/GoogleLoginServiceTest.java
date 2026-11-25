@@ -22,7 +22,10 @@ import org.junit.jupiter.api.Test;
 import vingo.auth.internal.AuthProperties;
 import vingo.auth.internal.AuthRepository;
 import vingo.auth.internal.GoogleLoginRequest;
+import vingo.auth.internal.LoginClient;
+import vingo.auth.internal.LoginSessions;
 import vingo.auth.internal.TokenSecrets;
+import vingo.notifications.NotificationsService;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.security.Role;
@@ -30,13 +33,15 @@ import vingo.shared.security.Role;
 class GoogleLoginServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-11-11T00:00:00Z"), ZoneOffset.UTC);
-    private static final Duration SESSION_TTL = Duration.ofDays(30);
+    private static final Duration SESSION_TTL = Duration.ofDays(7);
     private static final String SUBJECT = "google-subject";
     private static final String EMAIL = "buyer@gmail.com";
 
     private final AuthRepository accounts = mock(AuthRepository.class);
-    private final GoogleLoginService login = new GoogleLoginService(accounts,
-            new AuthProperties(URI.create("http://localhost:3000/auth/google"), false, SESSION_TTL), CLOCK);
+    private final LoginClient browser = new LoginClient("Browser", "127.0.0.1", null);
+    private final GoogleLoginService login = new GoogleLoginService(accounts, new LoginSessions(accounts,
+            new AuthProperties(URI.create("http://localhost:3000/auth/google"), false, SESSION_TTL),
+            mock(NotificationsService.class)), CLOCK);
 
     /** Email chuẩn hoá được dùng làm tên khi Google thiếu thông tin hồ sơ. */
     @Test
@@ -46,11 +51,13 @@ class GoogleLoginServiceTest {
         when(accounts.createGoogleAccount(SUBJECT, EMAIL, EMAIL, null, OffsetDateTime.now(CLOCK)))
                 .thenReturn(Optional.of(account));
 
-        var result = login.login(new GoogleLoginRequest(SUBJECT, " Buyer@gmail.com ", true, null, null));
+        var result = login.login(new GoogleLoginRequest(SUBJECT, " Buyer@gmail.com ", true, null, null), browser);
 
         assertThat(result.created()).isTrue();
-        assertThat(result.expiresAt()).isEqualTo(OffsetDateTime.now(CLOCK).plus(SESSION_TTL));
-        verify(accounts).createSession(account.id(), TokenSecrets.hash(result.refreshToken()), result.expiresAt());
+        var session = result.session();
+        assertThat(session.expiresAt()).isEqualTo(OffsetDateTime.now(CLOCK).plus(SESSION_TTL));
+        verify(accounts).createSession(account.id(), TokenSecrets.hash(session.token()), OffsetDateTime.now(CLOCK), session.expiresAt(), "Browser", "127.0.0.1");
+        verify(accounts).recordDevice(account.id(), TokenSecrets.hash(session.newDeviceToken()), OffsetDateTime.now(CLOCK));
     }
 
     /** User đã khoá không được tạo phiên mới. */
@@ -58,9 +65,9 @@ class GoogleLoginServiceTest {
     void existingLockedAccount_cannotStartSession() {
         when(accounts.findByGoogleSubject(SUBJECT)).thenReturn(Optional.of(account("LOCKED")));
 
-        assertThatThrownBy(() -> login.login(new GoogleLoginRequest(SUBJECT, EMAIL, true, null, null)))
+        assertThatThrownBy(() -> login.login(new GoogleLoginRequest(SUBJECT, EMAIL, true, null, null), browser))
                 .isInstanceOfSatisfying(DomainException.class, ex -> assertThat(ex.code()).isEqualTo(ErrorCode.UNAUTHORIZED));
-        verify(accounts, never()).createSession(any(), any(), any());
+        verify(accounts, never()).createSession(any(), any(), any(), any(), any(), any());
     }
 
     /** Tạo buyer Google với trạng thái tài khoản mà test cần. */

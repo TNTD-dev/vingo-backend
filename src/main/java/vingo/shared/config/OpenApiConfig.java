@@ -5,6 +5,7 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,12 +23,15 @@ public class OpenApiConfig {
     static final String BEARER_AUTH = "bearerAuth";
 
     @Bean
-    OpenAPI vingoOpenApi() {
+    OpenAPI vingoOpenApi(@Value("${vingo.auth.secure-cookies}") boolean secure) {
         return new OpenAPI()
                 .components(new Components().addSecuritySchemes(BEARER_AUTH, new SecurityScheme()
                         .type(SecurityScheme.Type.HTTP)
                         .scheme("bearer")
-                        .bearerFormat("JWT")))
-                .addSecurityItem(new SecurityRequirement().addList(BEARER_AUTH));
+                        .bearerFormat("opaque"))
+                        .addSecuritySchemes("sessionCookie", new SecurityScheme().type(SecurityScheme.Type.APIKEY)
+                                .in(SecurityScheme.In.COOKIE).name(secure ? "__Host-vingo_session" : "vingo_session")))
+                .addSecurityItem(new SecurityRequirement().addList(BEARER_AUTH))
+                .addSecurityItem(new SecurityRequirement().addList("sessionCookie"));
     }
 }

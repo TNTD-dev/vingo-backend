@@ -10,8 +10,6 @@ vingo:
       # Ghi rõ để biến môi trường AUTH_LOGIN_* trên máy chạy test không ghi đè được.
       attempt-window: PT15M
       lock-duration: PT15M
-  jwt:
-    secret: test-secret-for-integration-tests-only-32b
   qr:
     secret: test-qr-secret-for-integration-tests-only-32b
   realtime:
