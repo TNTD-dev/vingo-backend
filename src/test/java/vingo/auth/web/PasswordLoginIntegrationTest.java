@@ -24,6 +24,7 @@ import vingo.api.model.LoginRequest;
 import vingo.api.model.RefreshResult;
 import vingo.api.model.RefreshTokenRequest;
 import vingo.api.model.TokenPair;
+import vingo.api.model.UpdateMeRequest;
 import vingo.api.model.User;
 import vingo.shared.security.Role;
 import vingo.support.IntegrationTest;
@@ -48,7 +49,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void activeBuyerAndAdmin_canLoginByEmailCaseInsensitive_andPhone_withCorrectRoleAndRefreshLogout() {
+    void activeBuyerAndAdmin_canLoginByEmailCaseInsensitive_withCorrectRoleAndRefreshLogout() {
         String buyerEmail = "Buyer." + UUID.randomUUID() + "@Vingo.Local";
         String buyerPhone = CatalogFixture.uniquePhone();
         UUID buyerId = insertUser(buyerEmail.toLowerCase(), buyerPhone, "Buyer User",
@@ -68,7 +69,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         assertThat(buyerTokens).isNotNull();
         assertThat(buyerTokens.getUser().getId()).isEqualTo(buyerId);
         assertThat(buyerTokens.getUser().getRole()).isEqualTo(User.RoleEnum.BUYER);
-        assertThat(buyerTokens.getUser().getPhoneVerified()).isTrue();
+        assertThat(buyerTokens.getUser().getPhone()).isEqualTo(buyerPhone);
         assertThat(buyerTokens.getAccessToken()).isNotBlank();
         assertThat(buyerTokens.getRefreshToken()).isNotBlank();
 
@@ -78,21 +79,10 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden();
 
-        // Buyer can also login by phone
-        TokenPair phoneTokens = client.post().uri(LOGIN)
-                .body(new LoginRequest(buyerPhone, PASSWORD))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody(TokenPair.class)
-                .returnResult()
-                .getResponseBody();
-        assertThat(phoneTokens).isNotNull();
-        assertThat(phoneTokens.getUser().getId()).isEqualTo(buyerId);
-        assertThat(phoneTokens.getUser().getPhoneVerified()).isTrue();
-        client.post().uri(LOGIN).body(new LoginRequest("0" + buyerPhone.substring(3), PASSWORD))
-                .exchange().expectStatus().isOk().expectBody()
-                .jsonPath("$.user.id").isEqualTo(buyerId.toString())
-                .jsonPath("$.user.phone_verified").isEqualTo(true);
+        // Cả số từng được xác minh trên hệ thống cũ cũng chỉ là thông tin liên hệ.
+        client.post().uri(LOGIN).body(new LoginRequest(buyerPhone, PASSWORD))
+                .exchange().expectStatus().isUnauthorized().expectBody()
+                .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
 
         // Refresh rotation with cookie works
         String cookieHeader = emailLogin.getResponseHeaders().getFirst(HttpHeaders.SET_COOKIE);
@@ -107,7 +97,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(rotated).isNotNull();
         assertThat(rotated.getAccessToken()).isNotBlank();
-        assertThat(rotated.getUser().getPhoneVerified()).isTrue();
+        assertThat(rotated.getUser().getPhone()).isEqualTo(buyerPhone);
 
         // Old refresh token is invalidated after rotation
         client.post().uri(REFRESH)
@@ -299,7 +289,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         client.post().uri(LOGIN).body(new LoginRequest(email, PASSWORD))
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.user.id").isEqualTo(user.toString())
-                .jsonPath("$.user.phone_verified").isEqualTo(false);
+                .jsonPath("$.user.phone").isEqualTo(phone);
     }
 
     @Test
@@ -328,6 +318,23 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                     .exchange().expectStatus().isUnauthorized().expectBody()
                     .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
         }
+    }
+
+    @Test
+    void updateMe_allowsSharingContactPhone_andClearsLegacyTimestamp() {
+        UUID buyer = catalog.buyer();
+        UUID other = catalog.buyer();
+        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE id IN (:buyer, :other)")
+                .param("now", OffsetDateTime.now(clock)).param("buyer", buyer).param("other", other).update();
+        String contact = jdbc.sql("SELECT phone FROM user_account WHERE id = :id")
+                .param("id", other).query(String.class).single();
+
+        client.patch().uri("/api/v1/me").headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
+                .body(new UpdateMeRequest().phone(contact))
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.phone").isEqualTo(contact);
+
+        assertThat(jdbc.sql("SELECT phone_verified_at IS NULL FROM user_account WHERE id = :id")
+                .param("id", buyer).query(Boolean.class).single()).isTrue();
     }
 
     private UUID insertUser(String email, String phone, String fullName, String passwordHash,

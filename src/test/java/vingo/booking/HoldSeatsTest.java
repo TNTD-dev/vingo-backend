@@ -327,6 +327,26 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     @Test
+    void holdSeats_returns401_whenSignedTokenBelongsToBuyerWithoutVerifiedEmail() {
+        jdbc.sql("UPDATE user_account SET email_verified_at = NULL WHERE id = :id").param("id", buyer).update();
+        UUID seat = showtime.event().seat(1);
+
+        problem(hold(token, showtime.id(), seats(seat)), 401, "UNAUTHORIZED");
+
+        assertAvailable(showtime, seat);
+        assertThat(orderCount(buyer)).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_record WHERE user_id = :id")
+                .param("id", buyer).query(Integer.class).single()).isZero();
+    }
+
+    @Test
+    void holdSeats_returns201_whenEmailVerifiedAndPhoneMissing() {
+        jdbc.sql("UPDATE user_account SET phone = NULL WHERE id = :id").param("id", buyer).update();
+        holdOk(token, showtime.id(), seats(showtime.event().seat(1)));
+        assertThat(orderCount(buyer)).isEqualTo(1);
+    }
+
+    @Test
     void holdSeats_returns401_whenTokenMissing() {
         problem(hold(null, showtime.id(), seats(showtime.event().seat(1))), 401, "UNAUTHORIZED");
         assertAvailable(showtime, showtime.event().seat(1));

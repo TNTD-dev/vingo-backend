@@ -1,7 +1,7 @@
 -- Dữ liệu DEMO cho giao diện admin, schema v2.
 -- Chỉ chạy trên DB local vingo, vingo_admin_ui_20261118 hoặc vingo_admin_ui_v2. Không xóa/ghi đè dữ liệu hiện có.
 -- Toàn bộ trong một transaction; chạy lại sẽ bỏ qua nếu bộ DEMO này đã tồn tại.
--- Đây là fixture UI: payment/audit được mô phỏng, không gọi VNPay/email/SMS.
+-- Đây là fixture UI: payment/audit được mô phỏng, không gọi VNPay/email.
 -- Hình học dựng trực tiếp cho UI, không thay thế kiểm thử validator/import SVG.
 \set ON_ERROR_STOP on
 \encoding UTF8

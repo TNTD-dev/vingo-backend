@@ -25,12 +25,12 @@ public class AdminAccountRepository {
                  ELSE 'ACTIVE' END
             """;
     private static final String ACCOUNTS = """
-            (SELECT id, email, phone, avatar_url, full_name, role, email_verified_at, phone_verified_at,
+            (SELECT id, email, phone, avatar_url, full_name, role, email_verified_at,
                     admin_locked, locked_until, deleted_at, created_at, password_hash,
                     (%s) AS status
              FROM user_account) a
             """.formatted(STATUS_EXPR);
-    private static final String COLUMNS = "id, email, phone, avatar_url, full_name, role, email_verified_at, phone_verified_at, admin_locked, locked_until, deleted_at, created_at, status, (password_hash IS NOT NULL) AS has_password";
+    private static final String COLUMNS = "id, email, phone, avatar_url, full_name, role, email_verified_at, admin_locked, locked_until, deleted_at, created_at, status, (password_hash IS NOT NULL) AS has_password";
 
     private final JdbcClient jdbc;
 
@@ -137,7 +137,6 @@ public class AdminAccountRepository {
                 .role(AdminAccount.RoleEnum.fromValue(rs.getString("role")))
                 .status(AdminAccount.StatusEnum.fromValue(rs.getString("status")))
                 .emailVerifiedAt(rs.getObject("email_verified_at", OffsetDateTime.class))
-                .phoneVerifiedAt(rs.getObject("phone_verified_at", OffsetDateTime.class))
                 .adminLocked(rs.getBoolean("admin_locked")).hasPassword(rs.getBoolean("has_password"))
                 .lockedUntil(rs.getObject("locked_until", OffsetDateTime.class))
                 .deletedAt(rs.getObject("deleted_at", OffsetDateTime.class))

@@ -115,7 +115,6 @@ Quy tắc:
 | 403 | FORBIDDEN | Không có quyền |
 | 404 | NOT_FOUND | Không tìm thấy |
 | 409 | EMAIL_TAKEN | Email đã tồn tại |
-| 409 | PHONE_TAKEN | Số điện thoại đã tồn tại |
 | 409 | SEAT_TAKEN | Ghế vừa bị giữ/bán (kèm gợi ý ghế khác) |
 | 409 | NOT_ENOUGH_STOCK | Khu đứng không đủ chỗ |
 | 409 | SHOWTIME_NOT_ON_SALE | Suất chưa mở / đã đóng bán |
@@ -128,7 +127,6 @@ Quy tắc:
 | 415 | UNSUPPORTED_MEDIA_TYPE | Tệp tải lên có định dạng không được hỗ trợ |
 | 422 | INVALID_SEAT_LAYOUT | SVG không đọc được, vi phạm quy ước nhập sơ đồ sân, hoặc sơ đồ chưa được publish hay không thuộc sân/nền đã chọn |
 | 422 | PROFILE_REQUIRED | Đơn chưa có thông tin người mua (họ tên, email, SĐT) khi tạo thanh toán |
-| 422 | PHONE_VERIFICATION_REQUIRED | Chưa xác minh số điện thoại để giữ ghế |
 | 422 | MAX_TICKETS_EXCEEDED | Vượt số vé tối đa mỗi đơn |
 | 423 | ACCOUNT_LOCKED | Sai mật khẩu quá số lần |
 | 429 | RATE_LIMITED | Gọi quá nhanh |
@@ -140,6 +138,7 @@ Quy tắc:
 ## 8. Bảo mật
 
 - Mọi endpoint phải khai báo quyền: public, `BUYER`, hoặc `ADMIN`. Endpoint `/admin/**` chỉ `ADMIN`.
+- Đăng nhập mật khẩu dùng email. JWT yêu cầu tài khoản đã xác minh email, kể cả khi giữ ghế. Số điện thoại là thông tin liên hệ, nhiều tài khoản có thể dùng chung.
 - Lấy user hiện tại qua `CurrentUser` trong `shared.security`, không đọc header tay.
 - Kiểm tra quyền sở hữu: buyer chỉ xem/huỷ đơn và vé **của mình**.
 - Không log: mật khẩu, token, refresh token, OTP, `vnp_HashSecret`, số điện thoại đầy đủ.

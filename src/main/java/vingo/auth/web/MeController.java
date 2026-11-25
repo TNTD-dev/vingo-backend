@@ -1,21 +1,14 @@
 package vingo.auth.web;
 
-import jakarta.servlet.http.HttpServletRequest;
-
-import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.web.bind.annotation.RestController;
 
 import vingo.api.MeApi;
-import vingo.api.model.OtpSession;
-import vingo.api.model.PhoneOtpRequest;
-import vingo.api.model.PhoneVerifyRequest;
 import vingo.api.model.UpdateMeRequest;
 import vingo.api.model.User;
 import vingo.auth.AuthService;
 import vingo.auth.AuthUser;
-import vingo.auth.internal.sms.DemoSmsSender;
 import vingo.shared.security.CurrentUser;
 
 @RestController
@@ -25,32 +18,11 @@ class MeController implements MeApi {
     private final AuthService auth;
     private final CurrentUser currentUser;
     private final AuthCookies cookies;
-    private final HttpServletRequest request;
 
-    MeController(AuthService auth, CurrentUser currentUser, AuthCookies cookies, HttpServletRequest request) {
+    MeController(AuthService auth, CurrentUser currentUser, AuthCookies cookies) {
         this.auth = auth;
         this.currentUser = currentUser;
         this.cookies = cookies;
-        this.request = request;
-    }
-
-    /** Gửi SMS OTP cho user hiện tại, dùng IP từ servlet như AuthController. */
-    @Override
-    public ResponseEntity<OtpSession> requestPhoneOtp(PhoneOtpRequest body) {
-        var session = auth.requestPhoneOtp(currentUser.require().id(), body.getPhone(), request.getRemoteAddr());
-        var response = ResponseEntity.ok().cacheControl(CacheControl.noStore());
-        // Chỉ có khi chạy SMS_PROVIDER=demo: trả mã để web demo hiện lên màn hình.
-        DemoSmsSender.takeCode().ifPresent(code -> response.header(DemoSmsSender.HEADER, code));
-        return response.body(new OtpSession()
-                .otpSessionId(session.otpId()).expiresAt(session.expiresAt())
-                .channel(OtpSession.ChannelEnum.fromValue(session.channel())));
-    }
-
-    /** Xác minh SMS OTP của đúng user đang đăng nhập. */
-    @Override
-    public ResponseEntity<User> verifyPhoneOtp(PhoneVerifyRequest body) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(toUser(
-                auth.verifyPhone(currentUser.require().id(), body.getOtpSessionId(), body.getOtp())));
     }
 
     @Override
@@ -75,7 +47,6 @@ class MeController implements MeApi {
 
     private static User toUser(AuthUser account) {
         return new User().id(account.id()).email(account.email()).phone(account.phone())
-                .phoneVerified(account.phoneVerified())
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name()))
                 .emailVerified(!"UNVERIFIED".equals(account.status()));

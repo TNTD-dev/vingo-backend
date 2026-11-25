@@ -126,7 +126,7 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void register_returns409_whenEmailOrVerifiedPhoneAlreadyTaken() {
+    void register_rejectsDuplicateEmail_andAcceptsSharedContactPhone() {
         String email = "dup." + UUID.randomUUID() + "@vingo.local";
         String phone = "+84" + randomPhone().substring(1);
 
@@ -148,15 +148,10 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE email = :email")
                 .param("now", java.time.OffsetDateTime.now(clock)).param("email", email).update();
 
-        Problem phoneConflict = client.post().uri(REGISTER)
-                .body(new RegisterRequest("Third User", "other." + UUID.randomUUID() + "@vingo.local", phone, PASSWORD))
-                .exchange()
-                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
-                .expectBody(Problem.class)
-                .returnResult()
-                .getResponseBody();
-        assertThat(phoneConflict).isNotNull();
-        assertThat(phoneConflict.getCode()).isEqualTo(Problem.CodeEnum.PHONE_TAKEN);
+        OtpSession session = registerUser("other." + UUID.randomUUID() + "@vingo.local", phone);
+        assertThat(session.getChannel()).isEqualTo(OtpSession.ChannelEnum.EMAIL);
+        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE phone = :phone")
+                .param("phone", phone).query(Integer.class).single()).isEqualTo(2);
     }
 
     @Test
@@ -225,7 +220,6 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(tokens.getUser().getEmail()).isEqualTo(email);
         assertThat(tokens.getUser().getEmailVerified()).isTrue();
         assertThat(tokens.getUser().getRole()).isEqualTo(User.RoleEnum.BUYER);
-        assertThat(tokens.getUser().getPhoneVerified()).isFalse();
 
         // Dùng lại phiên OTP đã xác thực phải bị từ chối
         Problem reused = client.post().uri(VERIFY_OTP)
@@ -500,6 +494,25 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(invalidReset).isNotNull();
         assertThat(invalidReset.getCode()).isEqualTo(Problem.CodeEnum.OTP_INVALID);
+    }
+
+    @Test
+    void emailOtpEndpoints_rejectLegacySessionWithoutSendingMail() {
+        UUID session = jdbc.sql("""
+                INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at)
+                SELECT id, 'PHONE', phone, :client, 'legacy', :sent, :expires FROM user_account WHERE id = :buyer
+                RETURNING id
+                """).param("buyer", catalog.buyer()).param("client", UUID.randomUUID())
+                .param("sent", java.time.OffsetDateTime.now(clock))
+                .param("expires", java.time.OffsetDateTime.now(clock).plusMinutes(5)).query(UUID.class).single();
+
+        client.post().uri(VERIFY_OTP).body(new VerifyOtpRequest(session, "123456"))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+        client.post().uri(RESEND_OTP).body(new ResendOtpRequest(session))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+        client.post().uri(RESET_PASSWORD).body(new ResetPasswordRequest(session, "123456", PASSWORD))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+        assertThat(mailSender.sent).isEmpty();
     }
 
     private OtpSession registerUser(String email, String phone) {

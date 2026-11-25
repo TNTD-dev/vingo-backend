@@ -5,6 +5,5 @@ import java.util.UUID;
 
 import vingo.shared.security.Role;
 
-public record AuthUser(UUID id, String email, String phone, String fullName, URI avatar, Role role, String status,
-                       boolean phoneVerified) {
+public record AuthUser(UUID id, String email, String phone, String fullName, URI avatar, Role role, String status) {
 }

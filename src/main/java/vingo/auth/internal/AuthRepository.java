@@ -1,7 +1,6 @@
 package vingo.auth.internal;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -27,7 +26,7 @@ public class AuthRepository {
 
     private static final String ACCOUNT_COLUMNS = """
             id, email, phone, full_name, avatar_url, role, deleted_at, email_verified_at,
-            admin_locked, locked_until, phone_verified_at IS NOT NULL AS phone_verified
+            admin_locked, locked_until
             """;
 
     private final JdbcClient jdbc;
@@ -63,22 +62,15 @@ public class AuthRepository {
                 .query(this::account).optional();
     }
 
-    /** Tìm và khoá tài khoản theo email (không phân biệt hoa/thường) hoặc SĐT đã xác minh. */
-    public Optional<PasswordAccount> findForPasswordLogin(String identifier) {
-        String predicate = "lower(email) = lower(:identifier)";
-        if (!identifier.contains("@")) {
-            var phone = PhoneNumbers.normalize(identifier);
-            if (phone.isEmpty()) return Optional.empty();
-            identifier = phone.get();
-            predicate = "phone_verified_at IS NOT NULL AND phone = :identifier";
-        }
+    /** Tìm và khoá tài khoản theo email (không phân biệt hoa/thường). */
+    public Optional<PasswordAccount> findForPasswordLogin(String email) {
         return jdbc.sql("""
                         SELECT %s, password_hash
                         FROM user_account
-                        WHERE %s
+                        WHERE lower(email) = lower(:email)
                         FOR UPDATE
-                        """.formatted(ACCOUNT_COLUMNS, predicate))
-                .param("identifier", identifier)
+                        """.formatted(ACCOUNT_COLUMNS))
+                .param("email", email)
                 .query((rs, row) -> new PasswordAccount(account(rs, row), rs.getString("password_hash")))
                 .optional();
     }
@@ -149,7 +141,7 @@ public class AuthRepository {
                           AND (u.locked_until IS NULL OR u.locked_until <= :now)
                         RETURNING s.id AS session_id, s.expires_at, u.id, u.email, u.phone, u.full_name,
                                   u.avatar_url, u.role, u.deleted_at, u.email_verified_at, u.admin_locked,
-                                  u.locked_until, u.phone_verified_at IS NOT NULL AS phone_verified
+                                  u.locked_until
                         """)
                 .param("newHash", newHash)
                 .param("oldHash", oldHash)
@@ -179,15 +171,14 @@ public class AuthRepository {
     }
 
     public void updateAccount(UUID userId, String fullName, String phone, String passwordHash,
-                              boolean phoneChanged, OffsetDateTime now) {
+                              OffsetDateTime now) {
         jdbc.sql("""
                         UPDATE user_account SET full_name = :name, phone = :phone,
-                            phone_verified_at = CASE WHEN :phoneChanged THEN NULL ELSE phone_verified_at END,
+                            phone_verified_at = CASE WHEN phone IS DISTINCT FROM :phone THEN NULL ELSE phone_verified_at END,
                             password_hash = COALESCE(:passwordHash, password_hash), updated_at = :now
                         WHERE id = :id
                         """)
                 .param("name", fullName).param("phone", phone).param("passwordHash", passwordHash)
-                .param("phoneChanged", phoneChanged)
                 .param("now", now).param("id", userId).update();
     }
 
@@ -223,19 +214,12 @@ public class AuthRepository {
         }
         return new AuthUser(rs.getObject("id", UUID.class), rs.getString("email"), rs.getString("phone"),
                 rs.getString("full_name"), avatar == null ? null : URI.create(avatar),
-                Role.valueOf(rs.getString("role")), status, rs.getBoolean("phone_verified"));
+                Role.valueOf(rs.getString("role")), status);
     }
 
     public boolean existsByEmail(String email) {
         return jdbc.sql("SELECT EXISTS (SELECT 1 FROM user_account WHERE lower(email) = lower(:email))")
                 .param("email", email)
-                .query(Boolean.class)
-                .single();
-    }
-
-    public boolean existsByPhone(String phone) {
-        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM user_account WHERE phone = :phone AND phone_verified_at IS NOT NULL)")
-                .param("phone", PhoneNumbers.normalize(phone).orElse(phone))
                 .query(Boolean.class)
                 .single();
     }
@@ -257,21 +241,17 @@ public class AuthRepository {
                 .single();
     }
 
-    /**
-     * Ghi một lần gửi OTP. Mỗi lần gửi là một dòng mới; {@code usable = false} dùng để ghi lượt đã bị từ chối
-     * (đếm vào hạn mức nhưng không cho nhập mã).
-     */
-    public OtpRecord createOtp(UUID userId, OtpPurpose purpose, UUID clientKey, String phone, String codeHash,
+    /** Ghi lượt gửi OTP email; phiên gửi lại chỉ có hiệu lực sau khi gửi thành công. */
+    public OtpRecord createOtp(UUID userId, OtpPurpose purpose, UUID clientKey, String codeHash,
                                OffsetDateTime now, OffsetDateTime expiresAt, boolean usable) {
         return jdbc.sql("""
-                        INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at, delivered)
-                        VALUES (:userId, CAST(:purpose AS otp_purpose), :phone, :clientKey, :codeHash, :now, :expiresAt,
+                        INSERT INTO otp_verification (user_id, purpose, client_key, code_hash, sent_at, expires_at, delivered)
+                        VALUES (:userId, CAST(:purpose AS otp_purpose), :clientKey, :codeHash, :now, :expiresAt,
                                 :usable)
-                        RETURNING id, user_id, purpose, phone, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
+                        RETURNING id, user_id, purpose, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
                         """)
                 .param("userId", userId)
                 .param("purpose", purpose.name())
-                .param("phone", phone)
                 .param("clientKey", clientKey)
                 .param("codeHash", codeHash)
                 .param("now", now)
@@ -284,10 +264,10 @@ public class AuthRepository {
     /** Khoá dòng OTP và tài khoản chủ để kiểm tra trong transaction. */
     public Optional<OtpWithUser> findOtpForUpdate(UUID otpId) {
         return jdbc.sql("""
-                        SELECT o.id, o.user_id, o.purpose, o.phone, o.client_key, o.code_hash, o.attempts,
+                        SELECT o.id, o.user_id, o.purpose, o.client_key, o.code_hash, o.attempts,
                                o.sent_at, o.expires_at, o.consumed_at
                         FROM otp_verification o
-                        WHERE o.id = :id
+                        WHERE o.id = :id AND o.purpose IN ('VERIFY', 'RESET')
                         FOR UPDATE OF o
                         """)
                 .param("id", otpId)
@@ -304,17 +284,6 @@ public class AuthRepository {
                         """)
                 .param("user", userId).param("purpose", purpose.name())
                 .query(UUID.class).optional();
-    }
-
-    public Optional<OtpRecord> latestOtp(UUID userId, OtpPurpose purpose) {
-        return jdbc.sql("""
-                        SELECT id, user_id, purpose, phone, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
-                        FROM otp_verification
-                        WHERE user_id = :user AND purpose = CAST(:purpose AS otp_purpose) AND delivered
-                        ORDER BY sent_at DESC, id DESC LIMIT 1
-                        """)
-                .param("user", userId).param("purpose", purpose.name())
-                .query(AuthRepository::otp).optional();
     }
 
     public void markOtpDelivered(UUID id) {
@@ -388,78 +357,15 @@ public class AuthRepository {
                 .update();
     }
 
-    /** Khoá phạm vi gửi ngay cả khi user chưa có phiên; băm số trước khi đưa vào khoá. */
-    public void lockPhoneOtpScope(String scope) {
-        long key = UUID.nameUUIDFromBytes(("phone-otp:" + scope).getBytes(StandardCharsets.UTF_8))
-                .getMostSignificantBits();
-        jdbc.sql("SELECT pg_advisory_xact_lock(:key)").param("key", key).query((rs, row) -> true).single();
-    }
-
-    /** Thời điểm các lần gửi SMS gần nhất của user, mới nhất trước. */
-    public List<OffsetDateTime> recentPhoneSendsByUser(UUID userId, OffsetDateTime since, int limit) {
-        return jdbc.sql("""
-                SELECT sent_at FROM otp_verification
-                WHERE user_id = :user AND purpose = 'PHONE' AND sent_at > :since
-                ORDER BY sent_at DESC LIMIT :limit
-                """).param("user", userId).param("since", since).param("limit", limit)
-                .query(OffsetDateTime.class).list();
-    }
-
-    /** Thời điểm các lần gửi SMS gần nhất của một IP đã băm, trên mọi user và số đích. */
-    public List<OffsetDateTime> recentPhoneSendsByClient(UUID clientKey, OffsetDateTime since, int limit) {
-        return jdbc.sql("""
-                SELECT sent_at FROM otp_verification
-                WHERE purpose = 'PHONE' AND client_key = :clientKey AND sent_at > :since
-                ORDER BY sent_at DESC LIMIT :limit
-                """).param("clientKey", clientKey).param("since", since).param("limit", limit)
-                .query(OffsetDateTime.class).list();
-    }
-
-    /** Thời điểm các lần gửi SMS gần nhất tới một số, trên mọi user. */
-    public List<OffsetDateTime> recentPhoneSendsByPhone(String phone, OffsetDateTime since, int limit) {
-        return jdbc.sql("""
-                SELECT sent_at FROM otp_verification
-                WHERE purpose = 'PHONE' AND phone = :phone AND sent_at > :since
-                ORDER BY sent_at DESC LIMIT :limit
-                """).param("phone", phone).param("since", since).param("limit", limit)
-                .query(OffsetDateTime.class).list();
-    }
-
-    /** Kiểm tra số đã xác minh của người khác. */
-    public boolean isPhoneVerifiedByOther(UUID userId, String phone) {
-        return jdbc.sql("""
-                SELECT EXISTS (SELECT 1 FROM user_account
-                WHERE phone = :phone AND phone_verified_at IS NOT NULL AND id <> :user)
-                """).param("phone", phone).param("user", userId).query(Boolean.class).single();
-    }
-
-    /** Ghi số E.164 đã xác minh; unique index quyết định chủ sở hữu khi tranh chấp. */
-    public AuthUser verifyPhone(UUID userId, String phone, OffsetDateTime now) {
-        return jdbc.sql("""
-                UPDATE user_account SET phone = :phone, phone_verified_at = :now, updated_at = :now WHERE id = :id
-                RETURNING
-                        """ + ACCOUNT_COLUMNS)
-                .param("phone", phone).param("now", now).param("id", userId)
-                .query(this::account).single();
-    }
-
-    /** Đọc cờ xác minh SĐT cho cổng giữ ghế; user không tồn tại trả false. */
-    public boolean isPhoneVerified(UUID userId) {
-        return jdbc.sql("""
-                SELECT EXISTS (SELECT 1 FROM user_account
-                WHERE id = :id AND phone IS NOT NULL AND phone_verified_at IS NOT NULL)
-                """).param("id", userId).query(Boolean.class).single();
-    }
-
     private static OtpRecord otp(ResultSet rs, int row) throws SQLException {
         return new OtpRecord(rs.getObject("id", UUID.class), rs.getObject("user_id", UUID.class),
-                OtpPurpose.valueOf(rs.getString("purpose")), rs.getString("phone"),
+                OtpPurpose.valueOf(rs.getString("purpose")),
                 rs.getObject("client_key", UUID.class), rs.getString("code_hash"), rs.getInt("attempts"),
                 rs.getObject("sent_at", OffsetDateTime.class), rs.getObject("expires_at", OffsetDateTime.class),
                 rs.getObject("consumed_at", OffsetDateTime.class));
     }
 
-    public enum OtpPurpose { VERIFY, RESET, PHONE }
+    public enum OtpPurpose { VERIFY, RESET }
 
     public record RotatedSession(UUID id, OffsetDateTime expiresAt, AuthUser account) {
     }
@@ -471,7 +377,6 @@ public class AuthRepository {
             UUID id,
             UUID userId,
             OtpPurpose purpose,
-            String phone,
             UUID clientKey,
             String codeHash,
             int attempts,

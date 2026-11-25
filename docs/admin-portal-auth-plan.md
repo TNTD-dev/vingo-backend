@@ -2,7 +2,7 @@
 
 ## 1. Auth hiện tại
 
-- `POST /api/v1/auth/login` xác thực email/SĐT và mật khẩu bằng Argon2, kiểm tra trạng thái tài khoản và giới hạn thử sai. Tạo session, lưu hash refresh token, cấp JWT và trả user có role.
+- `POST /api/v1/auth/login` xác thực email và mật khẩu bằng Argon2, kiểm tra trạng thái tài khoản và giới hạn thử sai. Tạo session, lưu hash refresh token, cấp JWT và trả user có role.
 - Controller trả access token, refresh token, expires_in, user trong JSON, đồng thời đặt cookie refresh HttpOnly.
 - JWT có `sub` là user ID, `role` là BUYER/ADMIN, `sid` là session ID; hạn access token cấu hình 15 phút.
 - Google login dùng redirect/callback OIDC, chỉ chấp nhận tài khoản BUYER ACTIVE; callback đặt cookie refresh và chuyển về frontend. Frontend gọi refresh để lấy JWT Vingo.
