@@ -75,6 +75,7 @@ class SearchApiMapper {
     }
 
     EventDetail toEventDetail(EventDetailResult r) {
+        var tiers = r.priceTiers().stream().map(this::toPriceTier).toList();
         EventDetail detail = new EventDetail()
                 .id(r.id())
                 .title(r.title())
@@ -86,7 +87,8 @@ class SearchApiMapper {
                 .league(r.league())
                 .round(r.round())
                 .maxTicketsPerOrder(r.maxTicketsPerOrder())
-                .priceTiers(r.priceTiers().stream().map(this::toPriceTier).toList())
+                .priceTiers(tiers)
+                .ticketTypes(tiers)
                 .showtimes(r.showtimes().stream().map(this::toShowtime).toList());
         URI poster = r.posterUrl() == null ? null : parsePoster(r.posterUrl(), r.id());
         if (poster != null) {
@@ -129,8 +131,12 @@ class SearchApiMapper {
         SeatMapZonesInner zone = new SeatMapZonesInner()
                 .zoneId(z.zoneId())
                 .name(z.name())
-                .kind(SeatMapZonesInner.KindEnum.fromValue(z.kind().name()));
-        z.tier().ifPresent(t -> zone.tier(toPriceTier(t)));
+                .kind(SeatMapZonesInner.KindEnum.fromValue(z.kind().name()))
+                .skuId(z.skuId());
+        z.tier().ifPresent(t -> {
+            PriceTier tier = toPriceTier(t);
+            zone.tier(tier).ticketType(tier);
+        });
         if (z.kind() == ZoneKind.STANDING) {
             zone.seatsLeft(z.seatsLeft());
         } else {
@@ -142,6 +148,10 @@ class SearchApiMapper {
     private SeatMapZonesInnerSeatsInner toSeat(SeatResult s) {
         return new SeatMapZonesInnerSeatsInner()
                 .seatId(s.seatId())
+                .skuId(s.skuId())
+                .ticketTypeId(s.ticketTypeId())
+                .tier(s.tier())
+                .price(s.price())
                 .row(s.row())
                 .number(s.number())
                 .status(SeatStatus.fromValue(s.status().name()));
@@ -152,8 +162,12 @@ class SearchApiMapper {
                 .zoneId(z.zoneId())
                 .code(z.code())
                 .name(z.name())
+                .skuId(z.skuId())
                 .seatsLeft(z.seatsLeft());
-        z.tier().ifPresent(t -> zone.tier(toPriceTier(t)));
+        z.tier().ifPresent(t -> {
+            PriceTier tier = toPriceTier(t);
+            zone.tier(tier).ticketType(tier);
+        });
         return zone;
     }
 
@@ -168,7 +182,7 @@ class SearchApiMapper {
     }
 
     private PriceTier toPriceTier(PriceTierResult r) {
-        return new PriceTier().id(r.id()).name(r.name()).price(r.price()).color(r.color());
+        return new PriceTier().id(r.id()).ticketTypeId(r.id()).name(r.name()).price(r.price()).color(r.color());
     }
 
     private Venue toVenue(VenueResult r) {

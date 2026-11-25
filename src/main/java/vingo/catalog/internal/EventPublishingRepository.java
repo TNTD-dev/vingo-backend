@@ -49,9 +49,9 @@ public class EventPublishingRepository {
                         OR EXISTS (
                             SELECT 1 FROM zone z
                             LEFT JOIN event_zone ez ON ez.zone_id = z.id AND ez.event_id = :event
-                            LEFT JOIN sku sk ON sk.id = ez.sku_id AND sk.event_id = :event
+                            LEFT JOIN ticket_type tt ON tt.id = ez.ticket_type_id AND tt.event_id = :event
                             WHERE z.seat_map_id = m.id
-                              AND (sk.id IS NULL OR NOT EXISTS (SELECT 1 FROM sku_price sp WHERE sp.sku_id = sk.id))
+                              AND (tt.id IS NULL OR NOT EXISTS (SELECT 1 FROM ticket_type_price ttp WHERE ttp.ticket_type_id = tt.id))
                         )
                     )
                 )

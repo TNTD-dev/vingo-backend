@@ -124,7 +124,7 @@ class BookingCorrectionsTest extends BookingTestSupport {
                     Duration.ofDays(1), Duration.ofDays(1).plusHours(2)));
         }
         catalog.showtime(event, Window.finished());
-        jdbc.sql("INSERT INTO sku (event_id, name, color) VALUES (:event, 'Unassigned', '#0000FF')")
+        jdbc.sql("INSERT INTO ticket_type (event_id, name, color) VALUES (:event, 'Unassigned', '#0000FF')")
                 .param("event", event.id()).update();
         String token = buyerToken(catalog.buyer());
         UUID id = orderId(holdOk(token, showtime.id(), seats(event.seat(1))));

@@ -83,6 +83,10 @@ public class EventRepository {
     }
 
     public void selectLayout(UUID event, UUID layout) {
+        jdbc.sql("DELETE FROM sku WHERE event_id = :event AND seat_map_id <> :layout")
+                .param("event", event)
+                .param("layout", layout)
+                .update();
         jdbc.sql("DELETE FROM event_zone WHERE event_id = :event AND seat_map_id <> :layout")
                 .param("event", event)
                 .param("layout", layout)
@@ -93,12 +97,19 @@ public class EventRepository {
                 .update();
     }
 
+    public int countSkus(UUID event) {
+        return jdbc.sql("SELECT count(*) FROM sku WHERE event_id = :event")
+                .param("event", event)
+                .query(Integer.class)
+                .single();
+    }
+
     public List<ZonePriceChange> findZonePrices(UUID event) {
-        return jdbc.sql("SELECT zone_id, sku_id, display_name FROM event_zone WHERE event_id = :event ORDER BY zone_id")
+        return jdbc.sql("SELECT zone_id, ticket_type_id, display_name FROM event_zone WHERE event_id = :event ORDER BY zone_id")
                 .param("event", event)
                 .query((rs, row) -> new ZonePriceChange(
                         rs.getObject("zone_id", UUID.class),
-                        rs.getObject("sku_id", UUID.class),
+                        rs.getObject("ticket_type_id", UUID.class),
                         rs.getString("display_name")))
                 .list();
     }
@@ -226,15 +237,15 @@ public class EventRepository {
         var skus = jdbc.sql("""
                 SELECT s.id, s.name, s.color,
                        COALESCE(
-                           (SELECT sp.price FROM sku_price sp
-                            WHERE sp.sku_id = s.id AND sp.effective_from <= :now
+                           (SELECT sp.price FROM ticket_type_price sp
+                            WHERE sp.ticket_type_id = s.id AND sp.effective_from <= :now
                             ORDER BY sp.effective_from DESC LIMIT 1),
-                           (SELECT sp.price FROM sku_price sp
-                            WHERE sp.sku_id = s.id
+                           (SELECT sp.price FROM ticket_type_price sp
+                            WHERE sp.ticket_type_id = s.id
                             ORDER BY sp.effective_from ASC LIMIT 1),
                            0
                        ) AS current_price
-                FROM sku s
+                FROM ticket_type s
                 WHERE s.event_id = :id
                 ORDER BY current_price, s.name, s.id
                 """)
@@ -254,9 +265,9 @@ public class EventRepository {
         }
 
         var priceRows = jdbc.sql("""
-                SELECT sp.id, sp.sku_id, sp.price, sp.effective_from, sp.created_by, sp.reason, sp.created_at
-                FROM sku_price sp
-                JOIN sku s ON s.id = sp.sku_id
+                SELECT sp.id, sp.ticket_type_id AS sku_id, sp.price, sp.effective_from, sp.created_by, sp.reason, sp.created_at
+                FROM ticket_type_price sp
+                JOIN ticket_type s ON s.id = sp.ticket_type_id
                 WHERE s.event_id = :id
                 ORDER BY sp.effective_from DESC, sp.created_at DESC
                 """)

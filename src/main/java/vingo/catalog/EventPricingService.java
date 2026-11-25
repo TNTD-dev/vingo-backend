@@ -221,7 +221,7 @@ public class EventPricingService {
     }
 
     @Transactional
-    public void putZonePrices(UUID eventId, List<ZonePriceChange> input) {
+    public EventDetails.ZoneSkuPreviewResult putZonePrices(UUID eventId, List<ZonePriceChange> input) {
         OffsetDateTime now = lockEditableEvent(eventId);
         if (input == null) {
             throw invalid("Thiếu danh sách giá khu.");
@@ -232,16 +232,51 @@ public class EventPricingService {
             if (input.isEmpty()) {
                 pricing.replaceZonePrices(eventId, null, List.of());
                 finishChange(eventId, now, "Đã xóa giá khu");
-                return;
+                return new EventDetails.ZoneSkuPreviewResult(eventId, 0, 0, 0, List.of());
             }
             throw invalid("Sự kiện chưa chọn sơ đồ ghế.");
         }
 
-        Set<UUID> allowedZones = pricing.findUsedZoneIds(eventId);
-        Set<UUID> allowedTiers = new HashSet<>();
-        events.findPriceTiers(eventId, now).forEach(tier -> allowedTiers.add(tier.id()));
+        var preview = buildZoneSkuPreview(eventId, now, input);
+        pricing.replaceZonePrices(eventId, seatMapId, input);
+        finishChange(eventId, now, "Đã cập nhật giá cho khu");
+        return preview;
+    }
+
+    @Transactional(readOnly = true)
+    public EventDetails.ZoneSkuPreviewResult previewZonePrices(UUID eventId, List<ZonePriceChange> input) {
+        events.findById(eventId)
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy sự kiện."));
+        if (input == null) {
+            throw invalid("Thiếu danh sách giá khu.");
+        }
+        OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        UUID seatMapId = pricing.findEventSeatMapId(eventId).orElse(null);
+        if (seatMapId == null) {
+            if (input.isEmpty()) {
+                return new EventDetails.ZoneSkuPreviewResult(eventId, 0, 0, 0, List.of());
+            }
+            throw invalid("Sự kiện chưa chọn sơ đồ ghế.");
+        }
+        return buildZoneSkuPreview(eventId, now, input);
+    }
+
+    private EventDetails.ZoneSkuPreviewResult buildZoneSkuPreview(
+            UUID eventId,
+            OffsetDateTime now,
+            List<ZonePriceChange> input
+    ) {
+        Map<UUID, EventPricingRepository.ZoneShape> zonesById = new HashMap<>();
+        pricing.findLayoutZoneShapes(eventId).forEach(z -> zonesById.put(z.id(), z));
+
+        Map<UUID, EventDetails.Tier> tiersById = new HashMap<>();
+        events.findPriceTiers(eventId, now).forEach(tier -> tiersById.put(tier.id(), tier));
 
         Set<UUID> submittedZones = new HashSet<>();
+        List<EventDetails.ZoneSkuItemResult> items = new ArrayList<>();
+        int seatedSkus = 0;
+        int standingSkus = 0;
+
         for (var item : input) {
             if (item == null || item.zoneId() == null || item.priceTierId() == null) {
                 throw invalid("Mỗi dòng phải có zone_id và price_tier_id.");
@@ -253,15 +288,38 @@ public class EventPricingService {
             if (!submittedZones.add(item.zoneId())) {
                 throw invalid("Một khu xuất hiện nhiều lần.");
             }
-            if (!allowedZones.contains(item.zoneId())) {
+            var zone = zonesById.get(item.zoneId());
+            if (zone == null) {
                 throw invalid("Khu không thuộc sơ đồ của sự kiện.");
             }
-            if (!allowedTiers.contains(item.priceTierId())) {
+            var tier = tiersById.get(item.priceTierId());
+            if (tier == null) {
                 throw invalid("Hạng giá không thuộc sự kiện.");
             }
+            String zoneName = item.displayName() == null ? zone.name() : item.displayName().strip();
+            int skuCount = zone.seatCount();
+            if ("SEATED".equals(zone.kind())) {
+                seatedSkus += skuCount;
+            } else {
+                standingSkus += skuCount;
+            }
+            items.add(new EventDetails.ZoneSkuItemResult(
+                    zone.id(),
+                    zoneName,
+                    zone.kind(),
+                    tier.id(),
+                    tier.name(),
+                    tier.price(),
+                    skuCount
+            ));
         }
 
-        pricing.replaceZonePrices(eventId, seatMapId, input);
-        finishChange(eventId, now, "Đã cập nhật giá cho khu");
+        return new EventDetails.ZoneSkuPreviewResult(
+                eventId,
+                seatedSkus + standingSkus,
+                seatedSkus,
+                standingSkus,
+                List.copyOf(items)
+        );
     }
 }

@@ -140,13 +140,14 @@ class PgSearchService implements SearchService {
                     missingSeats++;
                     state = SeatState.BLOCKED;
                 }
-                seats.add(new SeatResult(s.id(), s.row(), s.number(), state));
+                seats.add(new SeatResult(
+                        s.id(), s.skuId(), s.ticketTypeId(), s.tierName(), s.price(), s.row(), s.number(), state));
             }
             StandingStock standing = z.kind() == ZoneKind.STANDING ? stock.get(z.id()) : null;
             if (standing != null && standing.missing()) {
                 missingStocks++;
             }
-            result.add(new SeatmapZoneResult(z.id(), z.name(), z.kind(), Optional.ofNullable(z.tier()),
+            result.add(new SeatmapZoneResult(z.id(), z.name(), z.kind(), z.skuId(), Optional.ofNullable(z.tier()),
                     standing == null ? 0 : standing.seatsLeft(), seats));
         }
         warnMissing(showtimeId, missingSeats, missingStocks);

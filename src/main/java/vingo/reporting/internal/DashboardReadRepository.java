@@ -31,7 +31,7 @@ public class DashboardReadRepository {
 
     public java.util.Map<String,String> tierNames() {
         var names=new java.util.LinkedHashMap<String,String>();
-        jdbc.sql("SELECT p.id,e.title,p.name FROM sku p JOIN event e ON e.id=p.event_id")
+        jdbc.sql("SELECT p.id,e.title,p.name FROM ticket_type p JOIN event e ON e.id=p.event_id")
                 .query((rs,n) -> { names.put(rs.getObject("id",UUID.class).toString(),rs.getString("title")+" · "+rs.getString("name")); return true; }).list();
         return names;
     }

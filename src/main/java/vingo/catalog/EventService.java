@@ -234,7 +234,8 @@ public class EventService {
                 java.util.List.copyOf(repository.findPriceTiers(eventId, now)),
                 java.util.List.copyOf(repository.findShowtimes(eventId)),
                 repository.findSelection(eventId).orElse(null),
-                repository.findZonePrices(eventId)
+                repository.findZonePrices(eventId),
+                repository.countSkus(eventId)
         );
     }
 

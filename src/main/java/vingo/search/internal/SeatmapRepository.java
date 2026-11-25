@@ -38,7 +38,7 @@ class SeatmapRepository {
      * {@link #countZones}. {@code stockMissing} là true khi khu đứng chưa có dòng {@code standing_inventory}.
      * {@code missingSeats} là số ghế của khu ngồi thiếu dòng {@code seat_inventory} (chỉ {@link #countZones} điền).
      */
-    record ZoneRow(UUID id, String code, String name, ZoneKind kind, Optional<PriceTierResult> tier, int seatsLeft,
+    record ZoneRow(UUID id, String code, String name, ZoneKind kind, UUID skuId, Optional<PriceTierResult> tier, int seatsLeft,
             boolean stockMissing, int missingSeats) {
     }
 
@@ -50,11 +50,14 @@ class SeatmapRepository {
     }
 
     /** Một khu của layout; {@code seats} rỗng với khu đứng. */
-    record LayoutZone(UUID id, String name, ZoneKind kind, PriceTierResult tier, List<LayoutSeat> seats) {
+    record LayoutZone(UUID id, String name, ZoneKind kind, UUID skuId, PriceTierResult tier, List<LayoutSeat> seats) {
     }
 
-    /** Ghế của layout. */
-    record LayoutSeat(UUID id, String row, int number) {
+    /** Ghế của layout kèm lựa chọn bán (sku), hạng vé (ticket_type) và giá có hiệu lực. */
+    record LayoutSeat(UUID id, UUID skuId, UUID ticketTypeId, String tierName, Long price, String row, int number) {
+        LayoutSeat(UUID id, String row, int number) {
+            this(id, null, null, null, null, row, number);
+        }
     }
 
     /** Tồn kho khu đứng; {@code missing} là true khi chưa có dòng {@code standing_inventory}. */
@@ -116,17 +119,19 @@ class SeatmapRepository {
      * {@code number}. Hai câu truy vấn, không phụ thuộc trạng thái ghế nên cache được.
      */
     SeatmapLayout findLayout(ShowtimeRef showtime, OffsetDateTime now) {
-        record ZoneBase(UUID id, String name, ZoneKind kind, PriceTierResult tier) {
+        record ZoneBase(UUID id, String name, ZoneKind kind, UUID skuId, PriceTierResult tier) {
         }
         List<ZoneBase> zones = jdbc.sql("""
                         SELECT z.id, COALESCE(ez.display_name, z.name) AS name, z.kind,
-                               sk.id AS tier_id, sk.name AS tier_name, sp.price, sk.color
+                               sk.id AS sku_id,
+                               tt.id AS tier_id, tt.name AS tier_name, sp.price, tt.color
                         FROM zone z
                         JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
-                        LEFT JOIN sku sk ON sk.id = ez.sku_id
+                        LEFT JOIN ticket_type tt ON tt.id = ez.ticket_type_id
+                        LEFT JOIN sku sk ON sk.event_id = :eventId AND sk.zone_id = z.id AND sk.ticket_type_id = tt.id
                         LEFT JOIN LATERAL (
-                            SELECT price FROM sku_price
-                            WHERE sku_id = sk.id AND effective_from <= :now
+                            SELECT price FROM ticket_type_price
+                            WHERE ticket_type_id = tt.id AND effective_from <= :now
                             ORDER BY effective_from DESC
                             LIMIT 1
                         ) sp ON true
@@ -138,28 +143,45 @@ class SeatmapRepository {
                 .param("now", now)
                 .query((rs, n) -> new ZoneBase(
                         rs.getObject("id", UUID.class), rs.getString("name"), ZoneKind.valueOf(rs.getString("kind")),
+                        rs.getObject("sku_id", UUID.class),
                         tier(rs).orElse(null)))
                 .list();
         Map<UUID, List<LayoutSeat>> seatsByZone = new HashMap<>();
         jdbc.sql("""
-                        SELECT s.zone_id, s.id, s.row_label, s.number
+                        SELECT s.zone_id, s.id, s.row_label, s.number,
+                               sk.id AS sku_id, tt.id AS ticket_type_id, tt.name AS tier_name, sp.price
                         FROM zone z
                         JOIN seat s ON s.zone_id = z.id
                         JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
+                        LEFT JOIN sku sk ON sk.event_id = :eventId AND sk.seat_id = s.id AND sk.ticket_type_id = ez.ticket_type_id
+                        LEFT JOIN ticket_type tt ON tt.id = COALESCE(sk.ticket_type_id, ez.ticket_type_id)
+                        LEFT JOIN LATERAL (
+                            SELECT price FROM ticket_type_price
+                            WHERE ticket_type_id = tt.id AND effective_from <= :now
+                            ORDER BY effective_from DESC
+                            LIMIT 1
+                        ) sp ON true
                         WHERE z.seat_map_id = :layoutId AND z.kind = 'SEATED'
                         ORDER BY z.name, z.id, s.row_label, s.number
                         """)
                 .param("layoutId", showtime.seatLayoutId())
                 .param("eventId", showtime.eventId())
+                .param("now", now)
                 .query((rs, n) -> {
                     seatsByZone.computeIfAbsent(rs.getObject("zone_id", UUID.class), k -> new ArrayList<>())
                             .add(new LayoutSeat(
-                                    rs.getObject("id", UUID.class), rs.getString("row_label"), rs.getInt("number")));
+                                    rs.getObject("id", UUID.class),
+                                    rs.getObject("sku_id", UUID.class),
+                                    rs.getObject("ticket_type_id", UUID.class),
+                                    rs.getString("tier_name"),
+                                    rs.getObject("price", Long.class),
+                                    rs.getString("row_label"),
+                                    rs.getInt("number")));
                     return null;
                 })
                 .list();
         return new SeatmapLayout(zones.stream()
-                .map(z -> new LayoutZone(z.id(), z.name(), z.kind(), z.tier(),
+                .map(z -> new LayoutZone(z.id(), z.name(), z.kind(), z.skuId(), z.tier(),
                         seatsByZone.getOrDefault(z.id(), List.of())))
                 .toList());
     }
@@ -218,17 +240,19 @@ class SeatmapRepository {
     List<ZoneRow> countZones(ShowtimeRef showtime, OffsetDateTime now) {
         return jdbc.sql("""
                         SELECT z.id, COALESCE(ez.display_name, z.name) AS name, z.kind,
-                               sk.id AS tier_id, sk.name AS tier_name, sp.price, sk.color,
+                               sk.id AS sku_id,
+                               tt.id AS tier_id, tt.name AS tier_name, sp.price, tt.color,
                                z.code, st.zone_id IS NULL AS stock_missing,
                                CASE WHEN z.kind = 'STANDING' THEN COALESCE(st.capacity - st.sold - st.held, 0)
                                     ELSE COUNT(ss.seat_id) FILTER (WHERE %s) END AS seats_left,
                                COUNT(s.id) FILTER (WHERE ss.seat_id IS NULL) AS missing_seats
                         FROM zone z
                         JOIN event_zone ez ON ez.event_id = :eventId AND ez.zone_id = z.id
-                        LEFT JOIN sku sk ON sk.id = ez.sku_id
+                        LEFT JOIN ticket_type tt ON tt.id = ez.ticket_type_id
+                        LEFT JOIN sku sk ON sk.event_id = :eventId AND sk.zone_id = z.id AND sk.ticket_type_id = tt.id
                         LEFT JOIN LATERAL (
-                            SELECT price FROM sku_price
-                            WHERE sku_id = sk.id AND effective_from <= :now
+                            SELECT price FROM ticket_type_price
+                            WHERE ticket_type_id = tt.id AND effective_from <= :now
                             ORDER BY effective_from DESC
                             LIMIT 1
                         ) sp ON true
@@ -236,7 +260,7 @@ class SeatmapRepository {
                         LEFT JOIN seat s ON s.zone_id = z.id AND z.kind = 'SEATED'
                         LEFT JOIN seat_inventory ss ON ss.showtime_id = :showtimeId AND ss.seat_id = s.id
                         WHERE z.seat_map_id = :layoutId
-                        GROUP BY z.id, z.name, ez.display_name, z.kind, sk.id, sk.name, sp.price, sk.color,
+                        GROUP BY z.id, z.name, ez.display_name, z.kind, sk.id, tt.id, tt.name, sp.price, tt.color,
                                  st.zone_id, st.capacity, st.sold, st.held
                         ORDER BY z.name, z.id
                         """.formatted(FREE_SEAT_SQL))
@@ -247,7 +271,8 @@ class SeatmapRepository {
                 .query((rs, n) -> {
                     ZoneKind kind = ZoneKind.valueOf(rs.getString("kind"));
                     return new ZoneRow(
-                            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"), kind, tier(rs),
+                            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"), kind,
+                            rs.getObject("sku_id", UUID.class), tier(rs),
                             rs.getInt("seats_left"), kind == ZoneKind.STANDING && rs.getBoolean("stock_missing"),
                             rs.getInt("missing_seats"));
                 }).list();
