@@ -63,7 +63,7 @@ BEGIN
                       ELSE names[1+(n-1)%array_length(names,1)] || CASE WHEN n>16 THEN ' '||n ELSE '' END END;
         INSERT INTO user_account(id,email,full_name,password_hash,role,email_verified_at,admin_locked,
                                  locked_until,deleted_at,created_at,updated_at)
-        VALUES(pg_temp.demo_id(n),'demo.'||lpad(n::text,2,'0')||'@example.test',name_,credential,
+        VALUES(pg_temp.demo_id(n),'demo.'||lpad(n::text,2,'0')||'@example.test',name_,CASE WHEN n<>30 THEN credential END,
             CASE WHEN n>30 THEN 'ADMIN'::user_role ELSE 'BUYER'::user_role END,
             CASE WHEN n NOT IN (25,26,27) THEN now()-interval '75 days' END,
             n=28,CASE WHEN n=29 THEN now()+interval '15 minutes' END,

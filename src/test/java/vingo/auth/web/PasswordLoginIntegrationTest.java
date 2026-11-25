@@ -53,8 +53,6 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
         String buyerPhone = CatalogFixture.uniquePhone();
         UUID buyerId = insertUser(buyerEmail.toLowerCase(), buyerPhone, "Buyer User",
                 passwordEncoder.encode(PASSWORD), Role.BUYER, "ACTIVE", null, null);
-        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE id = :id")
-                .param("now", OffsetDateTime.now(clock)).param("id", buyerId).update();
 
         var emailLogin = client.post().uri(LOGIN)
                 .body(new LoginRequest("  " + buyerEmail.toUpperCase() + "  ", PASSWORD))
@@ -77,7 +75,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden();
 
-        // Cả số từng được xác minh trên hệ thống cũ cũng chỉ là thông tin liên hệ.
+        // Số điện thoại chỉ là thông tin liên hệ.
         client.post().uri(LOGIN).body(new LoginRequest(buyerPhone, PASSWORD))
                 .exchange().expectStatus().isUnauthorized().expectBody()
                 .jsonPath("$.code").isEqualTo("INVALID_CREDENTIALS");
@@ -246,10 +244,10 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void unverifiedPhone_returns401ForPhone_butAllowsEmailLogin() {
+    void contactPhone_returns401ForPhone_butAllowsEmailLogin() {
         String email = UUID.randomUUID() + "@phone-login.test";
         String phone = CatalogFixture.uniquePhone();
-        UUID user = insertUser(email, phone, "Unverified phone", passwordEncoder.encode(PASSWORD),
+        UUID user = insertUser(email, phone, "Contact phone", passwordEncoder.encode(PASSWORD),
                 Role.BUYER, "ACTIVE", null, null);
         client.post().uri(LOGIN).body(new LoginRequest(phone, PASSWORD))
                 .exchange().expectStatus().isUnauthorized().expectBody()
@@ -261,7 +259,7 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void duplicateUnverifiedPhones_allowEachEmailLogin_andReturn401InsteadOf500ForPhone() {
+    void duplicateContactPhones_allowEachEmailLogin_andReturn401InsteadOf500ForPhone() {
         String phone = CatalogFixture.uniquePhone();
         String firstEmail = UUID.randomUUID() + "@phone-login.test";
         String secondEmail = UUID.randomUUID() + "@phone-login.test";
@@ -289,20 +287,54 @@ class PasswordLoginIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void updateMe_allowsSharingContactPhone_andClearsLegacyTimestamp() {
+    void updateMe_allowsSharingAndClearingContactPhone() {
         UUID buyer = catalog.buyer();
         UUID other = catalog.buyer();
-        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE id IN (:buyer, :other)")
-                .param("now", OffsetDateTime.now(clock)).param("buyer", buyer).param("other", other).update();
         String contact = jdbc.sql("SELECT phone FROM user_account WHERE id = :id")
                 .param("id", other).query(String.class).single();
 
-        client.patch().uri("/api/v1/me").headers(h -> h.setBearerAuth(tokenFor(buyer, Role.BUYER)))
+        String token = tokenFor(buyer, Role.BUYER);
+        client.patch().uri("/api/v1/me").headers(h -> h.setBearerAuth(token))
                 .body(new UpdateMeRequest().phone(contact))
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.phone").isEqualTo(contact);
 
-        assertThat(jdbc.sql("SELECT phone_verified_at IS NULL FROM user_account WHERE id = :id")
+        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE id IN (:buyer, :other) AND phone = :phone")
+                .param("buyer", buyer).param("other", other).param("phone", contact).query(Integer.class).single()).isEqualTo(2);
+        client.patch().uri("/api/v1/me").headers(h -> h.setBearerAuth(token))
+                .body(new UpdateMeRequest().fullName("Updated name"))
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.phone").isEqualTo(contact);
+        client.patch().uri("/api/v1/me").headers(h -> h.setBearerAuth(token))
+                .body(new UpdateMeRequest().phone(""))
+                .exchange().expectStatus().isOk();
+        assertThat(jdbc.sql("SELECT phone IS NULL FROM user_account WHERE id = :id")
                 .param("id", buyer).query(Boolean.class).single()).isTrue();
+    }
+
+    @Test
+    void deleteMe_clearsPersonalDataAndDevices_andRevokesSessions() {
+        UUID buyer = catalog.buyer();
+        jdbc.sql("UPDATE user_account SET google_sub = :sub, avatar_url = 'https://example.invalid/avatar' WHERE id = :id")
+                .param("sub", UUID.randomUUID().toString()).param("id", buyer).update();
+        String token = tokenFor(buyer, Role.BUYER);
+        jdbc.sql("""
+                INSERT INTO user_device (user_id, device_hash, created_at, last_seen_at)
+                VALUES (:id, :hash, :now, :now)
+                """).param("id", buyer).param("hash", TokenSecrets.hash("test-device"))
+                .param("now", OffsetDateTime.now(clock)).update();
+
+        client.delete().uri("/api/v1/me").headers(h -> h.setBearerAuth(token))
+                .exchange().expectStatus().isNoContent();
+
+        assertThat(jdbc.sql("""
+                SELECT deleted_at IS NOT NULL AND password_hash IS NULL AND google_sub IS NULL
+                    AND phone IS NULL AND avatar_url IS NULL AND email = 'deleted+' || id || '@invalid.local'
+                FROM user_account WHERE id = :id
+                """).param("id", buyer).query(Boolean.class).single()).isTrue();
+        assertThat(jdbc.sql("SELECT count(*) FROM user_device WHERE user_id = :id")
+                .param("id", buyer).query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM login_session WHERE user_id = :id")
+                .param("id", buyer).query(Integer.class).single()).isZero();
+        expectRevoked(token);
     }
 
     @Test
