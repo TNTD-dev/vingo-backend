@@ -328,6 +328,21 @@ class SearchEventsTest extends IntegrationTest {
     }
 
     @Test
+    void searchEvents_ignoresConfiguredZoneWithoutSkuWhenFilteringAndDisplayingPrice() {
+        UUID event = fixtures.event().title("Khu thiếu SKU")
+                .tier("Thường", 100_000)
+                .tier("VIP", 800_000)
+                .showtime(s -> s.seated(5, "VIP").standing(50, "Thường"))
+                .create().id();
+        jdbc.sql("DELETE FROM sku WHERE event_id = :event AND zone_kind = 'STANDING'")
+                .param("event", event).update();
+
+        assertThat(findByTitle(search(), "Khu thiếu SKU").path("price_from").asLong())
+                .isEqualTo(800_000);
+        assertThat(search("price_max", "100000").path("data")).isEmpty();
+    }
+
+    @Test
     void searchEvents_priceFromIgnoresUnassignedTiers() {
         fixtures.event().title("Nhiều hạng giá")
                 .tier("Rẻ chưa gán", 100_000)

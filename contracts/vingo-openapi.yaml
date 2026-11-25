@@ -715,7 +715,9 @@ paths:
                         zone_id: { type: string, format: uuid }
                         code: { type: string, description: Mã khu để liên kết với SVG. }
                         name: { type: string, description: Tên khu hiển thị theo sự kiện. }
+                        sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) của khu đối với khu đứng; null đối với khu ngồi (sku nằm trên từng ghế).' }
                         tier: { $ref: '#/components/schemas/PriceTier' }
+                        ticket_type: { $ref: '#/components/schemas/TicketType' }
                         seats_left: { type: integer }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
@@ -1954,9 +1956,9 @@ paths:
     put:
       operationId: putPriceTiers
       tags: [Admin Catalog]
-      summary: Đặt toàn bộ hạng giá của sự kiện
+      summary: Đặt toàn bộ hạng vé (ticket_type) của sự kiện
       description: >
-        Admin đặt toàn bộ danh sách hạng giá.
+        Admin đặt toàn bộ danh sách hạng vé (ticket_type).
         Event phải là DRAFT hoặc PUBLISHED, không có đơn
         và không có suất đã công bố (SCHEDULED) đã tới giờ mở bán.
         Suất DRAFT chưa bán được nên không khóa, kể cả khi đã qua sale_opens_at.
@@ -1980,9 +1982,9 @@ paths:
                 $ref: '#/components/schemas/PriceTierInput'
       responses:
         '200':
-          description: Đã lưu danh sách hạng giá.
+          description: Đã lưu danh sách hạng vé (ticket_type).
         '400':
-          description: Dữ liệu hạng giá hoặc tham chiếu không hợp lệ.
+          description: Dữ liệu hạng vé hoặc tham chiếu không hợp lệ.
           content:
             application/problem+json:
               schema:
@@ -2013,9 +2015,9 @@ paths:
     post:
       operationId: addSkuPrice
       tags: [Admin Catalog]
-      summary: Đổi giá hoặc hẹn giờ đổi giá cho hạng vé (chỉ INSERT sku_price)
+      summary: Đổi giá hoặc hẹn giờ đổi giá cho hạng vé (chỉ INSERT ticket_type_price)
       description: >
-        Thêm phiên bản giá mới cho hạng vé (SKU). Cho phép cả sau khi mở bán;
+        Thêm phiên bản giá mới cho hạng vé (ticket_type). Cho phép cả sau khi mở bán;
         event đã huỷ trả 409 EVENT_LOCKED. effective_from mặc định là now();
         đặt ở tương lai để hẹn giờ đổi giá. Giá chốt theo thời điểm giữ chỗ.
       parameters:
@@ -2028,7 +2030,7 @@ paths:
             schema: { $ref: '#/components/schemas/SkuPriceInput' }
       responses:
         '201':
-          description: Đã thêm phiên bản giá.
+          description: Đã thêm phiên bản giá của hạng vé.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SkuPrice' }
@@ -2045,16 +2047,18 @@ paths:
     put:
       operationId: putZonePrices
       tags: [Admin Catalog]
-      summary: Gán hạng vé cho từng khu (mỗi khu một hạng)
+      summary: Gán hạng vé (ticket_type) cho từng khu và sinh lựa chọn bán (sku)
       description: >
-        Admin thay toàn bộ danh sách gán hạng giá cho khu.
+        Admin thay toàn bộ danh sách gán hạng vé (ticket_type) cho khu và sinh
+        các lựa chọn bán (sku: 1 SKU cho mỗi cặp ghế + hạng ở khu ngồi, 1 SKU cho
+        mỗi cặp khu + hạng ở khu đứng) trong cùng giao dịch. Gửi lại cùng cấu hình
+        cho ra cùng tập SKU.
         Áp dụng cùng quy tắc khóa như PUT price-tiers:
         event DRAFT hoặc PUBLISHED, chưa có đơn và không có
         suất đã công bố (SCHEDULED) đã tới giờ mở bán.
         Mỗi zone_id chỉ xuất hiện một lần.
-        Khu phải thuộc layout đã chọn của sự kiện. Sự kiện cũ chưa có layout chung
-        dùng các layout của những suất chưa hủy.
-        Hạng giá phải thuộc đúng sự kiện.
+        Khu phải thuộc layout đã chọn của sự kiện.
+        Hạng vé (ticket_type_id / price_tier_id) phải thuộc đúng sự kiện.
         Cho phép cấu hình chưa đủ khu trước bước công bố.
         Toàn bộ thay đổi trong cùng transaction; lỗi thì rollback.
         Search làm mới cache sau commit.
@@ -2068,7 +2072,11 @@ paths:
               items:
                 $ref: '#/components/schemas/ZonePriceInput'
       responses:
-        '200': { description: OK }
+        '200':
+          description: Đã lưu cấu hình khu và sinh SKU; trả về thông tin xem trước số SKU.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ZoneSkuPreview' }
         '400':
           description: Dữ liệu khu hoặc tham chiếu hạng giá không hợp lệ.
           content:
@@ -2097,6 +2105,35 @@ paths:
                 status: 409
                 code: EVENT_LOCKED
                 detail: Sự kiện đã bắt đầu bán, có đơn hoặc không còn cho chỉnh sửa.
+  /admin/events/{event_id}/zone-prices/preview:
+    post:
+      operationId: previewZonePrices
+      tags: [Admin Catalog]
+      summary: Xem trước số lựa chọn bán (sku) sẽ được tạo khi gán hạng vé cho khu
+      description: >
+        Tính trước tổng số SKU (ghế ngồi và khu đứng) và chi tiết theo từng khu
+        khi áp dụng cấu hình gán hạng vé (ticket_type) cho khu mà không ghi vào DB.
+        Kiểm tra khu thuộc sơ đồ đã chọn của sự kiện và hạng vé thuộc đúng sự kiện.
+        Ví dụ: khu A có 10 ghế VIP và khu B có 15 ghế Standard → trả tổng 25 SKU.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/ZonePriceInput'
+      responses:
+        '200':
+          description: Kết quả xem trước số SKU được tạo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ZoneSkuPreview' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /admin/events/{event_id}/publish:
     post:
       operationId: publishEvent
@@ -3417,23 +3454,32 @@ components:
             venue: { $ref: '#/components/schemas/Venue' }
             zone_prices:
               type: array
-              description: Cấu hình khu lưu trên server, chỉ trả ở API quản trị.
+              description: Cấu hình gán hạng vé (ticket_type) cho khu lưu trên server, chỉ trả ở API quản trị.
               items: { $ref: '#/components/schemas/ZonePriceInput' }
             price_tiers:
               type: array
+              description: Danh sách hạng vé (ticket_type) và giá hiệu lực của sự kiện.
               items: { $ref: '#/components/schemas/PriceTier' }
+            ticket_types:
+              type: array
+              description: Danh sách hạng vé (ticket_type) và giá hiệu lực của sự kiện.
+              items: { $ref: '#/components/schemas/TicketType' }
+            sku_count:
+              type: integer
+              description: Tổng số lựa chọn bán (sku) đã sinh cho sự kiện (chỉ trả ở API quản trị).
             showtimes:
               type: array
               items: { $ref: '#/components/schemas/Showtime' }
     PriceTierInput:
       type: object
+      description: Đầu vào tạo hoặc cập nhật hạng vé (ticket_type) và mức giá hiệu lực của hạng.
       required: [name, price]
       properties:
         id:
           type: string
           format: uuid
           description: >
-            ID hạng giá hiện có của sự kiện khi cập nhật.
+            ID hạng vé (ticket_type) hiện có của sự kiện khi cập nhật.
             Nếu không gửi, dùng lại hạng cùng tên sau khi bỏ
             khoảng trắng hoặc tạo mới nếu chưa có.
         name:
@@ -3447,28 +3493,59 @@ components:
           format: int64
           minimum: 0
           maximum: 4611686018427387
-          description: Giá một vé, đơn vị VND.
+          description: Giá một vé theo hạng (ticket_type), đơn vị VND.
           example: 500000
         color:
           type: string
           pattern: '^#[0-9A-Fa-f]{6}$'
           example: '#C8A2C8'
+    TicketTypeInput:
+      $ref: '#/components/schemas/PriceTierInput'
 
     ZonePriceInput:
       type: object
-      required: [zone_id, price_tier_id]
+      description: Gán hạng vé cho một khu để sinh SKU. Gửi ticket_type_id hoặc price_tier_id. Nếu gửi cả hai, chúng phải cùng giá trị.
+      required: [zone_id]
       properties:
         zone_id:
           type: string
           format: uuid
-          description: Khu thuộc layout của sự kiện; dữ liệu cũ dùng layout từ các suất chưa hủy.
+          description: Khu thuộc layout của sự kiện.
         display_name: { type: string, minLength: 1, maxLength: 200, description: Tên khu riêng của sự kiện. Bỏ trống để dùng tên gốc. }
         price_tier_id:
           type: string
           format: uuid
-          description: Hạng giá thuộc đúng sự kiện.
+          deprecated: true
+          description: Tên trường tương thích cho ticket_type_id.
+        ticket_type_id:
+          type: string
+          format: uuid
+          description: ID hạng vé (ticket_type) thuộc đúng sự kiện (tương đương price_tier_id).
+    ZoneSkuPreviewItem:
+      type: object
+      required: [zone_id, zone_name, kind, ticket_type_id, ticket_type_name, price, sku_count]
+      properties:
+        zone_id: { type: string, format: uuid }
+        zone_name: { type: string }
+        kind: { type: string, enum: [SEATED, STANDING] }
+        ticket_type_id: { type: string, format: uuid }
+        ticket_type_name: { type: string }
+        price: { type: integer, format: int64, description: Giá hiệu lực hiện tại của hạng vé (VND). }
+        sku_count: { type: integer, minimum: 0, description: 'Số SKU được tạo cho khu này (khu ngồi = số ghế, khu đứng = 1).' }
+    ZoneSkuPreview:
+      type: object
+      required: [event_id, total_sku_count, seated_sku_count, standing_sku_count, zones]
+      properties:
+        event_id: { type: string, format: uuid }
+        total_sku_count: { type: integer, minimum: 0, description: Tổng số lựa chọn bán (sku) được tạo cho sự kiện. }
+        seated_sku_count: { type: integer, minimum: 0, description: Số SKU vé ngồi (1 SKU cho mỗi cặp ghế + hạng). }
+        standing_sku_count: { type: integer, minimum: 0, description: Số SKU vé đứng (1 SKU cho mỗi cặp khu + hạng). }
+        zones:
+          type: array
+          items: { $ref: '#/components/schemas/ZoneSkuPreviewItem' }
     SkuPriceInput:
       type: object
+      description: Đầu vào đặt hoặc hẹn giờ đổi giá cho hạng vé (ticket_type_price).
       required: [price]
       properties:
         price:
@@ -3476,7 +3553,7 @@ components:
           format: int64
           minimum: 0
           maximum: 4611686018427387
-          description: Giá mới (VND).
+          description: Giá mới của hạng vé (VND).
         effective_from:
           type: [string, 'null']
           format: date-time
@@ -3484,29 +3561,51 @@ components:
         reason:
           type: [string, 'null']
           maxLength: 500
+    TicketTypePriceInput:
+      $ref: '#/components/schemas/SkuPriceInput'
     SkuPrice:
       type: object
-      required: [id, sku_id, price, effective_from, created_by, created_at]
+      description: Một phiên bản giá trong lịch sử giá của hạng vé (ticket_type_price).
+      required: [id, sku_id, ticket_type_id, price, effective_from, created_by, created_at]
       properties:
         id: { type: string, format: uuid }
-        sku_id: { type: string, format: uuid }
+        sku_id: { type: string, format: uuid, deprecated: true, description: Tên trường tương thích cho ticket_type_id. }
+        ticket_type_id: { type: string, format: uuid, description: ID hạng vé sở hữu phiên bản giá này. }
         price: { type: integer, format: int64, minimum: 0, maximum: 4611686018427387 }
         effective_from: { type: string, format: date-time }
         created_by: { type: string, format: uuid }
         reason: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
+    TicketTypePrice:
+      $ref: '#/components/schemas/SkuPrice'
     PriceTier:
       type: object
+      description: Hạng vé (ticket_type) của sự kiện kèm giá có hiệu lực theo hạng.
       required: [name, price]
       properties:
-        id: { type: string, format: uuid }
+        id: { type: string, format: uuid, description: ID hạng vé (ticket_type). }
+        ticket_type_id: { type: string, format: uuid, description: ID hạng vé (ticket_type). }
         name: { type: string }
-        price: { type: integer, format: int64, minimum: 0, description: Giá hiện hành tại thời điểm đọc }
+        price: { type: integer, format: int64, minimum: 0, description: Giá có hiệu lực của hạng vé tại thời điểm đọc }
         color: { type: string, example: '#C8A2C8' }
         prices:
           type: array
-          description: Lịch sử và lịch hẹn đổi giá (chỉ trả ở API quản trị).
+          description: Lịch sử và lịch hẹn đổi giá theo hạng vé (ticket_type_price, chỉ trả ở API quản trị).
           items: { $ref: '#/components/schemas/SkuPrice' }
+    TicketType:
+      $ref: '#/components/schemas/PriceTier'
+    Sku:
+      type: object
+      description: Lựa chọn bán (sku) gắn sự kiện + hạng vé (ticket_type) + ghế cụ thể (vé ngồi) hoặc khu (vé đứng).
+      required: [id, event_id, ticket_type_id, price]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        ticket_type_id: { type: string, format: uuid }
+        ticket_type_name: { type: string }
+        seat_id: { type: [string, 'null'], format: uuid }
+        zone_id: { type: [string, 'null'], format: uuid }
+        price: { type: integer, format: int64, minimum: 0, description: Giá có hiệu lực hiện hành lấy từ hạng vé (ticket_type_price). }
     ShowtimeInput:
       type: object
       properties:
@@ -3539,7 +3638,9 @@ components:
               zone_id: { type: string, format: uuid }
               name: { type: string }
               kind: { type: string, enum: [SEATED, STANDING] }
+              sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) đối với khu STANDING; null đối với khu SEATED.' }
               tier: { $ref: '#/components/schemas/PriceTier' }
+              ticket_type: { $ref: '#/components/schemas/TicketType' }
               seats_left: { type: integer, description: Chỉ với STANDING }
               seats:
                 type: array
@@ -3547,6 +3648,10 @@ components:
                   type: object
                   properties:
                     seat_id: { type: string, format: uuid }
+                    sku_id: { type: [string, 'null'], format: uuid, description: ID lựa chọn bán (sku) của ghế. }
+                    ticket_type_id: { type: [string, 'null'], format: uuid, description: ID hạng vé (ticket_type) của ghế. }
+                    tier: { type: [string, 'null'], description: Tên hạng vé của lựa chọn bán. }
+                    price: { type: [integer, 'null'], format: int64, description: Giá có hiệu lực của lựa chọn bán theo hạng vé. }
                     row: { type: string }
                     number: { type: integer }
                     seat_type: { type: string, enum: [STANDARD, COUPLE, WHEELCHAIR] }
@@ -3559,6 +3664,8 @@ components:
       type: object
       description: |
         Gửi đúng một trong hai dạng: seat_ids cho khu ngồi hoặc zone_id + quantity cho khu đứng.
+        Hệ thống phân giải lựa chọn bán (sku) từ ghế hoặc khu đã chọn, kiểm tra hạng vé (ticket_type),
+        lấy giá có hiệu lực (ticket_type_price) và giữ tồn trong cùng giao dịch với việc tạo đơn.
         Gửi cả hai dạng, không gửi dạng nào, zone_id thiếu quantity hoặc quantity thiếu zone_id → 400 VALIDATION_ERROR.
         seat_ids nếu gửi thì không được rỗng; service kiểm tra, rỗng → 400 VALIDATION_ERROR.
         Ghế đôi tự giữ kèm ghế cặp.
@@ -3575,12 +3682,15 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
+        sku_id: { type: [string, 'null'], format: uuid, description: ID lựa chọn bán (sku) đã chọn lúc giữ chỗ. }
+        ticket_type_id: { type: [string, 'null'], format: uuid, description: ID hạng vé (ticket_type) của lựa chọn bán. }
         zone: { type: string }
         row: { type: [string, 'null'] }
         number: { type: [integer, 'null'] }
         seat_id: { type: [string, 'null'], format: uuid }
-        tier: { type: string }
-        unit_price: { type: integer, format: int64 }
+        tier: { type: string, description: Tên hạng vé (ticket_type). }
+        ticket_type: { type: string, description: Tên hạng vé (ticket_type). }
+        unit_price: { type: integer, format: int64, description: Giá một vé đã chốt lúc giữ chỗ (VND). }
         quantity: { type: integer, minimum: 1, description: 'Số vé của dòng: ghế ngồi luôn 1, khu đứng là số chỗ đã giữ' }
     Order:
       type: object
@@ -3665,10 +3775,14 @@ components:
         event: { $ref: '#/components/schemas/EventSummary' }
         showtime: { $ref: '#/components/schemas/Showtime' }
         venue: { $ref: '#/components/schemas/Venue' }
+        sku_id: { type: [string, 'null'], format: uuid, description: ID lựa chọn bán (sku) của vé. }
+        ticket_type_id: { type: [string, 'null'], format: uuid, description: ID hạng vé (ticket_type) của vé. }
         zone: { type: string }
         row: { type: [string, 'null'] }
         number: { type: [integer, 'null'] }
-        tier: { type: string }
+        tier: { type: string, description: Tên hạng vé (ticket_type). }
+        ticket_type: { type: string, description: Tên hạng vé (ticket_type). }
+        unit_price: { type: [integer, 'null'], format: int64, description: Số tiền một vé đã chốt lúc giữ chỗ (VND). }
         used_at: { type: [string, 'null'], format: date-time }
     CheckinResult:
       type: object

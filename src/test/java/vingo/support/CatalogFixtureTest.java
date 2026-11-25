@@ -40,7 +40,7 @@ class CatalogFixtureTest extends IntegrationTest {
                 .param("showtime", showtime.id()).query(Boolean.class).single()).isTrue();
         assertThat(jdbc.sql("""
                         SELECT sp.price FROM event_zone p
-                        JOIN sku_price sp ON sp.sku_id = p.sku_id
+                        JOIN ticket_type_price sp ON sp.ticket_type_id = p.ticket_type_id
                         JOIN zone z ON z.id = p.zone_id
                         WHERE p.event_id = :event ORDER BY z.name
                         """)

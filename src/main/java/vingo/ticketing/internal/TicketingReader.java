@@ -44,15 +44,32 @@ public class TicketingReader {
                                COALESCE(e.poster_desktop_url, e.poster_mobile_url) AS poster_url,
                                v.id AS venue_id, v.name AS venue_name, v.address, v.city,
                                COALESCE(ez.display_name, z.name) AS zone_name,
-                               seat.row_label, seat.number::integer AS number, sk.name AS tier_name,
+                               seat.row_label, seat.number::integer AS number,
+                               COALESCE(os.sku_id, ost.sku_id) AS sku_id,
+                               tt.id AS ticket_type_id,
+                               tt.name AS tier_name,
+                               COALESCE(os.unit_price, ost.unit_price) AS unit_price,
                                (SELECT min(sp2.price)
                                 FROM event_zone ez2
+                                JOIN zone z2 ON z2.id = ez2.zone_id AND z2.seat_map_id = ez2.seat_map_id
                                 JOIN LATERAL (
-                                    SELECT price FROM sku_price
-                                    WHERE sku_id = ez2.sku_id AND effective_from <= :now
+                                    SELECT price FROM ticket_type_price
+                                    WHERE ticket_type_id = ez2.ticket_type_id AND effective_from <= :now
                                     ORDER BY effective_from DESC LIMIT 1
                                 ) sp2 ON true
-                                WHERE ez2.event_id = e.id) AS price_from,
+                                WHERE ez2.event_id = e.id
+                                  AND EXISTS (
+                                      SELECT 1 FROM sku sk2
+                                      WHERE sk2.event_id = e.id
+                                        AND sk2.ticket_type_id = ez2.ticket_type_id
+                                        AND (
+                                            (z2.kind = 'SEATED' AND EXISTS (
+                                                SELECT 1 FROM seat se2
+                                                WHERE se2.id = sk2.seat_id AND se2.zone_id = z2.id
+                                            ))
+                                            OR (z2.kind = 'STANDING' AND sk2.zone_id = z2.id)
+                                        )
+                                  )) AS price_from,
                                (SELECT s2.starts_at FROM showtime s2
                                 WHERE s2.event_id = e.id AND e.status = 'PUBLISHED'
                                   AND s2.cancelled_at IS NULL AND s2.starts_at >= :now
@@ -71,8 +88,8 @@ public class TicketingReader {
                         JOIN zone z ON z.id = COALESCE(t.zone_id, seat.zone_id)
                         LEFT JOIN order_seat os ON os.order_id = t.order_id AND os.seat_id = t.seat_id
                         LEFT JOIN order_standing ost ON ost.order_id = t.order_id AND ost.zone_id = t.zone_id
-                        JOIN sku_price sp ON sp.id = COALESCE(os.sku_price_id, ost.sku_price_id)
-                        JOIN sku sk ON sk.id = sp.sku_id
+                        JOIN ticket_type_price ttp ON ttp.id = COALESCE(os.ticket_type_price_id, ost.ticket_type_price_id)
+                        JOIN ticket_type tt ON tt.id = ttp.ticket_type_id
                         LEFT JOIN event_zone ez ON ez.event_id = e.id AND ez.zone_id = z.id
                         WHERE t.id = ANY(:ids)
                         """)
@@ -120,6 +137,7 @@ public class TicketingReader {
                                     rs.getObject("sale_opens_at", OffsetDateTime.class),
                                     rs.getObject("sale_closes_at", OffsetDateTime.class),
                                     rs.getObject("ends_at", OffsetDateTime.class), now).name()));
+                    String tierName = rs.getString("tier_name");
                     return new Ticket()
                             .id(ticketId)
                             .code(rs.getString("code"))
@@ -129,10 +147,14 @@ public class TicketingReader {
                             .event(event)
                             .showtime(showtime)
                             .venue(venue)
+                            .skuId(rs.getObject("sku_id", UUID.class))
+                            .ticketTypeId(rs.getObject("ticket_type_id", UUID.class))
                             .zone(rs.getString("zone_name"))
                             .row(rs.getString("row_label"))
                             .number(rs.getObject("number", Integer.class))
-                            .tier(rs.getString("tier_name"))
+                            .tier(tierName)
+                            .ticketType(tierName)
+                            .unitPrice(rs.getObject("unit_price", Long.class))
                             .usedAt(rs.getObject("used_at", OffsetDateTime.class));
                 })
                 .list();

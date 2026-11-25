@@ -47,7 +47,8 @@ public final class CatalogFixtures {
     /** Xoá toàn bộ dữ liệu catalog, booking và các bảng phụ thuộc. Giữ nguyên {@code user_account}. */
     public void reset() {
         jdbc.sql("""
-                TRUNCATE standing_inventory, seat_inventory, event_zone, sku_price, sku, showtime, event,
+                TRUNCATE standing_inventory, seat_inventory, event_zone,
+                         ticket_type_price, ticket_type, sku, showtime, event,
                          seat, zone, seat_map, venue_map, venue CASCADE
                 """).update();
     }
@@ -369,10 +370,10 @@ public final class CatalogFixtures {
         }
 
         private UUID insertTier(UUID eventId, String name, long price, UUID createdBy) {
-            UUID skuId = jdbc.sql("INSERT INTO sku (event_id, name, color) VALUES (:e, :n, '#336699') RETURNING id")
+            UUID skuId = jdbc.sql("INSERT INTO ticket_type (event_id, name, color) VALUES (:e, :n, '#336699') RETURNING id")
                     .param("e", eventId).param("n", name)
                     .query(UUID.class).single();
-            jdbc.sql("INSERT INTO sku_price (sku_id, price, effective_from, created_by) VALUES (:s, :p, :now, :u)")
+            jdbc.sql("INSERT INTO ticket_type_price (ticket_type_id, price, effective_from, created_by) VALUES (:s, :p, :now, :u)")
                     .param("s", skuId).param("p", price).param("now", utc(clock.instant()).minusDays(30))
                     .param("u", createdBy)
                     .update();
@@ -490,7 +491,7 @@ public final class CatalogFixtures {
     }
 
     private void insertZonePrice(UUID eventId, UUID layoutId, UUID zoneId, UUID skuId) {
-        jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id) VALUES (:e, :l, :z, :t)")
+        jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, ticket_type_id) VALUES (:e, :l, :z, :t)")
                 .param("e", eventId).param("l", layoutId).param("z", zoneId).param("t", skuId).update();
     }
 

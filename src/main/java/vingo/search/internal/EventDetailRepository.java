@@ -79,10 +79,10 @@ class EventDetailRepository {
     List<PriceTierResult> findPriceTiers(UUID eventId, OffsetDateTime now) {
         return jdbc.sql("""
                         SELECT s.id, s.name, COALESCE(sp.price, 0) AS price, s.color
-                        FROM sku s
+                        FROM ticket_type s
                         LEFT JOIN LATERAL (
-                            SELECT price FROM sku_price
-                            WHERE sku_id = s.id AND effective_from <= :now
+                            SELECT price FROM ticket_type_price
+                            WHERE ticket_type_id = s.id AND effective_from <= :now
                             ORDER BY effective_from DESC LIMIT 1
                         ) sp ON true
                         WHERE s.event_id = :id

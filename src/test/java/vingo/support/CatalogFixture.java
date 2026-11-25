@@ -80,31 +80,31 @@ public class CatalogFixture {
                 .param("maxTickets", spec.maxTicketsPerOrder()).query(UUID.class).single();
         UUID createdBy = buyer();
         UUID vipSkuId = jdbc.sql("""
-                        INSERT INTO sku (event_id, name, color)
+                        INSERT INTO ticket_type (event_id, name, color)
                         VALUES (:event, 'VIP', '#FF0000') RETURNING id
                         """)
                 .param("event", eventId).query(UUID.class).single();
         UUID gaSkuId = jdbc.sql("""
-                        INSERT INTO sku (event_id, name, color)
+                        INSERT INTO ticket_type (event_id, name, color)
                         VALUES (:event, 'GA', '#00FF00') RETURNING id
                         """)
                 .param("event", eventId).query(UUID.class).single();
         jdbc.sql("""
-                        INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                        INSERT INTO ticket_type_price (ticket_type_id, price, effective_from, created_by)
                         VALUES (:vipSku, :vipPrice, :now, :createdBy), (:gaSku, :gaPrice, :now, :createdBy)
                         """)
                 .param("vipSku", vipSkuId).param("vipPrice", VIP_PRICE)
                 .param("gaSku", gaSkuId).param("gaPrice", GA_PRICE)
                 .param("now", now().minusDays(30)).param("createdBy", createdBy).update();
         jdbc.sql("""
-                        INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id)
+                        INSERT INTO event_zone (event_id, seat_map_id, zone_id, ticket_type_id)
                         VALUES (:event, :layout, :seatedZone, :vipSku), (:event, :layout, :standingZone, :gaSku)
                         """)
                 .param("event", eventId).param("layout", layoutId)
                 .param("seatedZone", seatedZoneId).param("vipSku", vipSkuId)
                 .param("standingZone", standingZoneId).param("gaSku", gaSkuId).update();
         if (splitZones) {
-            jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, sku_id) VALUES (:e, :l, :z, :p)")
+            jdbc.sql("INSERT INTO event_zone (event_id, seat_map_id, zone_id, ticket_type_id) VALUES (:e, :l, :z, :p)")
                     .param("e", eventId).param("l", layoutId).param("z", secondZone).param("p", vipSkuId).update();
         }
         return new Event(eventId, venueId, layoutId, seatedZoneId, standingZoneId,

@@ -49,11 +49,15 @@ class CatalogFixturesTest extends IntegrationTest {
         assertThat(count("seat")).isEqualTo(10);
         assertThat(count("seat_inventory")).isEqualTo(20);
         assertThat(count("event_zone")).isEqualTo(2);
-        assertThat(count("sku")).isEqualTo(3); // VIP, Chưa gán, Mặc định (khu đứng)
+        assertThat(count("ticket_type")).isEqualTo(3); // VIP, Chưa gán, Mặc định (khu đứng)
+        assertThat(jdbc.sql("SELECT count(*) FROM sku WHERE seat_id IS NOT NULL").query(Integer.class).single())
+                .isEqualTo(10);
+        assertThat(jdbc.sql("SELECT count(*) FROM sku WHERE zone_id IS NOT NULL").query(Integer.class).single())
+                .isEqualTo(1);
         assertThat(jdbc.sql("SELECT count(*) FROM seat_inventory WHERE status = 'SOLD'").query(Integer.class).single())
                 .isEqualTo(10);
         assertThat(jdbc.sql("SELECT sum(sold) FROM standing_inventory").query(Integer.class).single()).isEqualTo(2);
-        assertThat(jdbc.sql("SELECT count(*) FROM event_zone WHERE sku_id = :t")
+        assertThat(jdbc.sql("SELECT count(*) FROM event_zone WHERE ticket_type_id = :t")
                 .param("t", created.tierIds().get("Chưa gán")).query(Integer.class).single()).isZero();
     }
 

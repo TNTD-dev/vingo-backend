@@ -42,7 +42,7 @@ class AdminEventAcceptanceTest extends IntegrationTest {
         client.put().uri("/api/v1/admin/events/{id}/price-tiers",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(List.of(Map.of("name","Admission","price",100000)))
                 .exchange().expectStatus().isOk();
-        UUID tier=jdbc.sql("SELECT id FROM sku WHERE event_id=:id").param("id",event).query(UUID.class).single();
+        UUID tier=jdbc.sql("SELECT id FROM ticket_type WHERE event_id=:id").param("id",event).query(UUID.class).single();
         client.put().uri("/api/v1/admin/events/{id}/zone-prices",event).headers(h->h.setBearerAuth(token))
                 .contentType(MediaType.APPLICATION_JSON).body(List.of(
                         Map.of("zone_id",layout.seatedZoneId(),"price_tier_id",tier),

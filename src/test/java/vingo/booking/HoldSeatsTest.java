@@ -367,6 +367,20 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     @Test
+    void holdSeats_keepsInventoryIndependentAcrossShowtimesUsingSameSeat() {
+        var otherShowtime = catalog.showtime(showtime.event(), Window.onSale());
+        UUID seat = showtime.event().seat(1);
+
+        UUID firstOrder = orderId(holdOk(token, showtime.id(), seats(seat)));
+        assertAvailable(otherShowtime, seat);
+
+        UUID secondOrder = orderId(holdOk(token, otherShowtime.id(), seats(seat)));
+        assertThat(firstOrder).isNotEqualTo(secondOrder);
+        assertThat(seatState(showtime.id(), seat).orderId()).isEqualTo(firstOrder);
+        assertThat(seatState(otherShowtime.id(), seat).orderId()).isEqualTo(secondOrder);
+    }
+
+    @Test
     void holdSeats_usesCurrentPrice_whenNextPriceIsScheduledInFuture() {
         UUID eventId = showtime.event().id();
         UUID vipSkuId = skuIdFor(eventId, "VIP");
@@ -415,18 +429,18 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     private UUID skuIdFor(UUID eventId, String name) {
-        return jdbc.sql("SELECT id FROM sku WHERE event_id = :event AND name = :name")
+        return jdbc.sql("SELECT id FROM ticket_type WHERE event_id = :event AND name = :name")
                 .param("event", eventId).param("name", name).query(UUID.class).single();
     }
 
     private UUID latestSkuPriceId(UUID skuId) {
-        return jdbc.sql("SELECT id FROM sku_price WHERE sku_id = :sku ORDER BY effective_from DESC LIMIT 1")
+        return jdbc.sql("SELECT id FROM ticket_type_price WHERE ticket_type_id = :sku ORDER BY effective_from DESC LIMIT 1")
                 .param("sku", skuId).query(UUID.class).single();
     }
 
     private UUID insertSkuPrice(UUID skuId, long price, OffsetDateTime effectiveFrom, UUID createdBy) {
         return jdbc.sql("""
-                        INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                        INSERT INTO ticket_type_price (ticket_type_id, price, effective_from, created_by)
                         VALUES (:sku, :price, :effectiveFrom, :createdBy)
                         RETURNING id
                         """)
@@ -438,18 +452,18 @@ class HoldSeatsTest extends BookingTestSupport {
     }
 
     private OrderPriceRow orderSeatPrice(UUID orderId) {
-        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_seat WHERE order_id = :order")
+        return jdbc.sql("SELECT ticket_type_price_id, unit_price FROM order_seat WHERE order_id = :order")
                 .param("order", orderId)
                 .query((rs, row) -> new OrderPriceRow(
-                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                        rs.getObject("ticket_type_price_id", UUID.class), rs.getLong("unit_price")))
                 .single();
     }
 
     private OrderPriceRow orderStandingPrice(UUID orderId) {
-        return jdbc.sql("SELECT sku_price_id, unit_price FROM order_standing WHERE order_id = :order")
+        return jdbc.sql("SELECT ticket_type_price_id, unit_price FROM order_standing WHERE order_id = :order")
                 .param("order", orderId)
                 .query((rs, row) -> new OrderPriceRow(
-                        rs.getObject("sku_price_id", UUID.class), rs.getLong("unit_price")))
+                        rs.getObject("ticket_type_price_id", UUID.class), rs.getLong("unit_price")))
                 .single();
     }
 
