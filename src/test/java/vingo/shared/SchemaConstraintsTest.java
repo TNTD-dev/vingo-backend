@@ -1,10 +1,8 @@
 package vingo.shared;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -89,45 +87,9 @@ class SchemaConstraintsTest extends IntegrationTest {
                 .update();
     }
 
-    @Test
-    void users_allowDuplicateUnverifiedPhone_evenWhenAnotherUserVerifiedIt() {
-        UUID owner = catalog.buyer();
-        String phone = jdbc.sql("SELECT phone FROM user_account WHERE id = :id")
-                .param("id", owner).query(String.class).single();
-        for (int i = 0; i < 2; i++) {
-            jdbc.sql("UPDATE user_account SET phone = :phone, phone_verified_at = NULL WHERE id = :id")
-                    .param("phone", phone).param("id", catalog.buyer()).update();
-        }
-        assertThat(jdbc.sql("SELECT count(*) FROM user_account WHERE phone = :phone")
-                .param("phone", phone).query(Integer.class).single()).isEqualTo(3);
-    }
-
-    @Test
-    void users_rejectTwoVerifiedOwnersOfOnePhone() {
-        UUID first = catalog.buyer();
-        UUID second = catalog.buyer();
-        assertThatThrownBy(() -> jdbc.sql("UPDATE user_account SET phone = (SELECT phone FROM user_account WHERE id = :first) WHERE id = :second")
-                .param("first", first).param("second", second).update())
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void users_rejectVerifiedTimestampWithoutPhone() {
-        UUID user = catalog.buyer();
-        assertThatThrownBy(() -> jdbc.sql("UPDATE user_account SET phone = NULL WHERE id = :id")
-                .param("id", user).update()).isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void otpSession_requiresPhoneForPhonePurpose() {
-        UUID user = catalog.buyer();
-        assertThatThrownBy(() -> insertOtp(user, "PHONE", null))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
     @ParameterizedTest
     @ValueSource(strings = {"VERIFY", "RESET"})
-    void otpSession_rejectsPhoneForOtherPurposes(String purpose) {
+    void emailOtp_rejectsPhoneNumber(String purpose) {
         UUID user = catalog.buyer();
         assertThatThrownBy(() -> insertOtp(user, purpose, "+84912345678"))
                 .isInstanceOf(DataIntegrityViolationException.class);

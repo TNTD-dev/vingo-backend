@@ -142,12 +142,12 @@ DELETE FROM otp_verification   WHERE user_id IN (SELECT pg_temp.sid(n) FROM gene
 -- ------------------------------------------------------------------ Users và phiên
 -- Mật khẩu Vingo@2026 (Argon2).
 
-INSERT INTO user_account (id, email, phone, full_name, password_hash, role, email_verified_at, phone_verified_at, admin_locked) VALUES
-    (pg_temp.sid(1), 'admin@vingo.local',  '+84900000001', 'Admin Vingo',        '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'ADMIN', now(), now(), false),
-    (pg_temp.sid(2), 'buyer@vingo.local',  '+84900000002', 'Nguyễn Văn Mua',     '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), now(), false),
-    (pg_temp.sid(3), 'buyer2@vingo.local', '+84900000003', 'Trần Thị Khác',      '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), now(), false),
-    (pg_temp.sid(4), 'buyer3@vingo.local', '+84900000004', 'Lê Văn Chưa Hồ Sơ',  '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), now(), false),
-    (pg_temp.sid(5), 'locked@vingo.local', '+84900000005', 'Phạm Bị Khoá',       '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), now(), true)
+INSERT INTO user_account (id, email, phone, full_name, password_hash, role, email_verified_at, admin_locked) VALUES
+    (pg_temp.sid(1), 'admin@vingo.local',  '+84900000001', 'Admin Vingo',        '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'ADMIN', now(), false),
+    (pg_temp.sid(2), 'buyer@vingo.local',  '+84900000002', 'Nguyễn Văn Mua',     '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), false),
+    (pg_temp.sid(3), 'buyer2@vingo.local', '+84900000003', 'Trần Thị Khác',      '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), false),
+    (pg_temp.sid(4), 'buyer3@vingo.local', '+84900000004', 'Lê Văn Chưa Hồ Sơ',  '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), false),
+    (pg_temp.sid(5), 'locked@vingo.local', '+84900000005', 'Phạm Bị Khoá',       '$argon2id$v=19$m=16384,t=2,p=1$RcFCYFjO41/Yy1aVhfrhFA$DxphoNYrGaJkZEoh8AXZB6TmW/8MPSGalW7lpf0bNMw', 'BUYER', now(), true)
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     phone = EXCLUDED.phone,
@@ -155,7 +155,7 @@ ON CONFLICT (id) DO UPDATE SET
     password_hash = EXCLUDED.password_hash,
     role = EXCLUDED.role,
     email_verified_at = EXCLUDED.email_verified_at,
-    phone_verified_at = EXCLUDED.phone_verified_at,
+    phone_verified_at = NULL,
     admin_locked = EXCLUDED.admin_locked,
     deleted_at = NULL,
     failed_login_count = 0,

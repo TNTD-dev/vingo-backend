@@ -36,7 +36,6 @@
             "INVALID_CREDENTIALS",
             "ACCOUNT_LOCKED",
             "EMAIL_TAKEN",
-            "PHONE_TAKEN",
             "OTP_INVALID",
             "OTP_EXPIRED",
             "OTP_TOO_MANY_ATTEMPTS",
@@ -47,7 +46,6 @@
             "ORDER_STATE_INVALID",
             "HOLD_EXPIRED",
             "PROFILE_REQUIRED",
-            "PHONE_VERIFICATION_REQUIRED",
             "MAX_TICKETS_EXCEEDED",
             "IDEMPOTENCY_CONFLICT",
             "TICKET_NOT_VALID",
@@ -178,37 +176,6 @@
         }
       }
     },
-    "PhoneOtpRequest": {
-      "type": "object",
-      "required": [
-        "phone"
-      ],
-      "properties": {
-        "phone": {
-          "type": "string",
-          "description": "Số di động Việt Nam; bỏ khoảng trắng, dấu chấm, gạch ngang trước khi kiểm ^(\\+84|84|0)(3|5|7|8|9)[0-9]{8}$. Lưu dạng +84 và 9 số cuối.\n",
-          "pattern": "^[\\s.-]*(\\+[\\s.-]*8[\\s.-]*4|8[\\s.-]*4|0)[\\s.-]*[35789]([\\s.-]*[0-9]){8}[\\s.-]*$",
-          "example": "0912 345 678"
-        }
-      }
-    },
-    "PhoneVerifyRequest": {
-      "type": "object",
-      "required": [
-        "otp_session_id",
-        "otp"
-      ],
-      "properties": {
-        "otp_session_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "otp": {
-          "type": "string",
-          "pattern": "^[0-9]{6}$"
-        }
-      }
-    },
     "OtpSession": {
       "type": "object",
       "properties": {
@@ -223,8 +190,7 @@
         "channel": {
           "type": "string",
           "enum": [
-            "EMAIL",
-            "SMS"
+            "EMAIL"
           ]
         }
       }
@@ -294,10 +260,6 @@
         },
         "phone": {
           "type": "string"
-        },
-        "phone_verified": {
-          "type": "boolean",
-          "description": "Luôn được backend trả về; true khi số điện thoại đã xác minh bằng SMS OTP"
         },
         "full_name": {
           "type": "string"

@@ -6,12 +6,9 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.context.annotation.Profile;
@@ -37,20 +34,8 @@ import vingo.shared.security.SecurityConfig;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles({"api", "test"})
-@Import({TestcontainersConfig.class, TestClockConfig.class, IntegrationTest.ApiClientConfig.class,
-        IntegrationTest.SmsConfig.class})
+@Import({TestcontainersConfig.class, TestClockConfig.class, IntegrationTest.ApiClientConfig.class})
 public abstract class IntegrationTest {
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class SmsConfig {
-        // Chế độ demo dùng DemoSmsSender thật của ứng dụng.
-        @Bean
-        @Primary
-        @ConditionalOnProperty(name = "vingo.sms.provider", havingValue = "speedsms", matchIfMissing = true)
-        RecordingSmsSender recordingSmsSender() {
-            return new RecordingSmsSender();
-        }
-    }
 
     /** Chỉ API cần client HTTP; worker vẫn dùng chung DB/Testcontainers của base. */
     @TestConfiguration(proxyBeanMethods = false)
@@ -99,8 +84,8 @@ public abstract class IntegrationTest {
     /** Tạo user trong DB và trả access token hợp lệ của user đó. */
     protected String tokenFor(Role role) {
         UUID userId = jdbc.sql("""
-                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone, phone_verified_at)
-                        VALUES (:email, 'Test User', 'x', :role::user_role, :now, :phone, :now) RETURNING id
+                        INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone)
+                        VALUES (:email, 'Test User', 'x', :role::user_role, :now, :phone) RETURNING id
                         """)
                 .param("email", UUID.randomUUID() + "@test.vingo")
                 .param("role", role.name())

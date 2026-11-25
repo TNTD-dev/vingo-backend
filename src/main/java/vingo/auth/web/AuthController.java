@@ -107,7 +107,7 @@ class AuthController implements AuthApi {
                 .build();
     }
 
-    /** Đăng nhập bằng email/SĐT và mật khẩu, cấp TokenPair và đặt cookie refresh. */
+    /** Đăng nhập bằng email và mật khẩu, cấp TokenPair và đặt cookie refresh. */
     @Override
     public ResponseEntity<TokenPair> login(LoginRequest body) {
         var session = auth.login(body.getIdentifier(), body.getPassword(), body.getDevice());
@@ -174,7 +174,6 @@ class AuthController implements AuthApi {
 
     private static User toApiUser(AuthUser account) {
         return new User().id(account.id()).email(account.email()).phone(account.phone())
-                .phoneVerified(account.phoneVerified())
                 .fullName(account.fullName()).avatarUrl(account.avatar())
                 .role(User.RoleEnum.fromValue(account.role().name()))
                 .emailVerified(!"UNVERIFIED".equals(account.status()));

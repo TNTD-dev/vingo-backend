@@ -38,7 +38,8 @@ paths:
     post:
       operationId: register
       tags: [Auth]
-      summary: Đăng ký, tạo user UNVERIFIED và gửi OTP
+      summary: Đăng ký, tạo user UNVERIFIED và gửi OTP email
+      description: Tạo tài khoản bằng email. Số điện thoại được lưu làm thông tin liên hệ và có thể dùng chung.
       security: []
       requestBody:
         required: true
@@ -53,10 +54,11 @@ paths:
               schema: { $ref: '#/components/schemas/OtpSession' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '409':
-          description: Email hoặc SĐT đã tồn tại (code EMAIL_TAKEN, PHONE_TAKEN)
+          description: Email đã tồn tại (EMAIL_TAKEN)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Email đã tồn tại, status: 409, code: EMAIL_TAKEN }
   /auth/otp/verify:
     post:
       operationId: verifyOtp
@@ -123,13 +125,9 @@ paths:
     post:
       operationId: login
       tags: [Auth]
-      summary: Đăng nhập bằng email/SĐT và mật khẩu
+      summary: Đăng nhập bằng email và mật khẩu
       description: |
-        Identifier chứa @ được tra theo email như hiện tại. Nếu không, chuẩn hoá số di động Việt Nam
-        sang E.164 và chỉ tra tài khoản có số điện thoại đã xác minh. Chấp nhận 09..., 84... và +84...
-        sau khi bỏ khoảng trắng, dấu chấm và gạch ngang. Tài khoản chưa xác minh SĐT dùng email để đăng nhập.
-        Số không hợp lệ, chưa xác minh hoặc sai mật khẩu đều trả 401 INVALID_CREDENTIALS,
-        không tiết lộ tài khoản có tồn tại hay không; ví dụ {"status":401,"code":"INVALID_CREDENTIALS"}.
+        Tra tài khoản theo email, không phân biệt hoa thường. Định danh không phải email hoặc sai mật khẩu đều trả 401 INVALID_CREDENTIALS.
       security: []
       requestBody:
         required: true
@@ -139,7 +137,7 @@ paths:
               type: object
               required: [identifier, password]
               properties:
-                identifier: { type: string, description: Email hoặc số điện thoại }
+                identifier: { type: string, description: Email đăng nhập }
                 password: { type: string, format: password }
                 device: { type: string, description: Tên thiết bị để quản lý phiên }
       responses:
@@ -153,6 +151,11 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sai thông tin đăng nhập
+                status: 401
+                code: INVALID_CREDENTIALS
+                detail: Email hoặc mật khẩu không đúng
         '423':
           description: Tài khoản bị khoá tạm vì sai nhiều lần (ACCOUNT_LOCKED)
           content:
@@ -332,6 +335,7 @@ paths:
       operationId: updateMe
       tags: [Me]
       summary: Sửa tên, số điện thoại hoặc đổi mật khẩu
+      description: Cập nhật hồ sơ của tài khoản hiện tại. Số điện thoại liên hệ có thể trùng với tài khoản khác.
       requestBody:
         required: true
         content:
@@ -362,105 +366,6 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
               example: { title: Trạng thái không hợp lệ, status: 409, code: ACTION_STATE_INVALID, detail: Không thể xóa ADMIN hoạt động cuối cùng. }
-  /me/phone/otp:
-    post:
-      operationId: requestPhoneOtp
-      tags: [Me]
-      summary: Gửi SMS OTP xác minh số điện thoại của tài khoản hiện tại
-      description: |
-        Yêu cầu đăng nhập (BUYER hoặc ADMIN). Bỏ khoảng trắng, dấu chấm, gạch ngang rồi kiểm
-        regex ^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$; lưu số dạng E.164 (+84 và 9 số cuối).
-        Số đã được người khác xác minh trả 409 PHONE_TAKEN; số mới chỉ được khai báo vẫn dùng được.
-        Mỗi user cách nhau ít nhất 60 giây giữa hai lần gửi, tối đa 5 tin/24 giờ/user,
-        5 tin/24 giờ/số điện thoại và 20 tin/24 giờ/IP. Vượt giới hạn trả 429 RATE_LIMITED
-        kèm Retry-After (giây còn lại). Gửi lại làm mới cùng phiên PHONE chưa consume,
-        đặt lại attempts và hạn dùng, mã cũ không còn hiệu lực. Không đổi số đã xác minh của user trước khi OTP đúng.
-        Nhà cung cấp SMS lỗi trả 503 SERVICE_UNAVAILABLE; lần gửi vẫn tính vào giới hạn.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PhoneOtpRequest' }
-      responses:
-        '200':
-          description: Đã tạo hoặc làm mới phiên PHONE và gửi SMS OTP
-          headers:
-            X-Demo-Otp:
-              required: false
-              description: |
-                Chỉ có khi backend chạy SMS_PROVIDER=demo (môi trường demo/thực tập, không dữ liệu thật);
-                chế độ thường không bao giờ trả header này.
-              schema: { type: string, pattern: '^[0-9]{6}$' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/OtpSession' }
-              example: { otp_session_id: '0197f100-0000-7000-8000-000000000001', expires_at: '2026-11-18T10:05:00Z', channel: SMS }
-        '400':
-          description: VALIDATION_ERROR - số di động Việt Nam không hợp lệ
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Số điện thoại Việt Nam không hợp lệ. }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409':
-          description: PHONE_TAKEN - số đã được người khác xác minh
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Số điện thoại đã tồn tại, status: 409, code: PHONE_TAKEN }
-        '429':
-          description: RATE_LIMITED - chưa hết cooldown hoặc vượt giới hạn gửi SMS
-          headers:
-            Retry-After: { schema: { type: integer }, example: 60 }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Gọi quá nhanh, status: 429, code: RATE_LIMITED }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
-  /me/phone/verify:
-    post:
-      operationId: verifyPhoneOtp
-      tags: [Me]
-      summary: Xác minh SMS OTP và cập nhật số điện thoại E.164
-      description: |
-        Chỉ xác minh phiên PHONE thuộc đúng user đang đăng nhập. Phiên không tồn tại, của người khác,
-        sai purpose, đã consume hoặc sai mã trả OTP_INVALID; mã sai tăng attempts.
-        Phiên hết hạn trả OTP_EXPIRED; đã đủ maxAttempts trả OTP_TOO_MANY_ATTEMPTS.
-        Mã đúng consume phiên, cập nhật phone và thời điểm xác minh trong cùng transaction,
-        trả User với phone_verified=true. Nếu người khác vừa xác minh cùng số, trả 409 PHONE_TAKEN.
-        UUID hoặc mã không đúng 6 chữ số trả 400 VALIDATION_ERROR. Không tiết lộ phiên của người khác.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PhoneVerifyRequest' }
-      responses:
-        '200':
-          description: Số điện thoại đã được xác minh
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/User' }
-        '400':
-          description: OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS hoặc VALIDATION_ERROR
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              examples:
-                invalid:
-                  value: { title: OTP không đúng, status: 400, code: OTP_INVALID }
-                expired:
-                  value: { title: OTP đã hết hạn, status: 400, code: OTP_EXPIRED }
-                attempts:
-                  value: { title: Nhập sai OTP quá số lần, status: 400, code: OTP_TOO_MANY_ATTEMPTS }
-                validation:
-                  value: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409':
-          description: PHONE_TAKEN - người khác đã xác minh số này
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Số điện thoại đã tồn tại, status: 409, code: PHONE_TAKEN }
   /me/stream:
     get:
       operationId: streamMyEvents
@@ -728,8 +633,7 @@ paths:
       summary: Giữ ghế 10 phút và tạo đơn PENDING (tất cả hoặc không)
       description: |
         Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
-        BUYER phải có số điện thoại đã xác minh, nếu không trả 422 PHONE_VERIFICATION_REQUIRED
-        trước khi ghi idempotency key hoặc tạo đơn. ADMIN được miễn điều kiện xác minh số điện thoại.
+        JWT yêu cầu tài khoản đã xác minh email.
         Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
         Nếu khách đã có đơn PENDING còn hạn cho suất này → 409 ORDER_STATE_INVALID; muốn đổi ghế thì huỷ rồi giữ lại.
         Vượt max_tickets_per_order của sự kiện (tính cả ghế cặp) → 422 MAX_TICKETS_EXCEEDED.
@@ -749,6 +653,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
@@ -776,13 +681,11 @@ paths:
                     code: NOT_ENOUGH_STOCK
                     seats_left: 2
         '422':
-          description: MAX_TICKETS_EXCEEDED hoặc PHONE_VERIFICATION_REQUIRED (BUYER chưa xác minh số điện thoại)
+          description: Vượt số vé tối đa mỗi đơn (MAX_TICKETS_EXCEEDED)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-              examples:
-                phoneVerificationRequired:
-                  value: { title: Chưa xác minh số điện thoại để giữ ghế, status: 422, code: PHONE_VERIFICATION_REQUIRED }
+              example: { title: Vượt số vé tối đa mỗi đơn, status: 422, code: MAX_TICKETS_EXCEEDED }
         '429': { $ref: '#/components/responses/RateLimited' }
   /orders:
     get:
@@ -2804,6 +2707,7 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+          example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR }
     Unauthorized:
       description: UNAUTHORIZED
       content:
@@ -2851,9 +2755,9 @@ components:
         code:
           type: string
           enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
-                 EMAIL_TAKEN, PHONE_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
+                 EMAIL_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
                  SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
-                 PROFILE_REQUIRED, PHONE_VERIFICATION_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
+                 PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
                  VENUE_IN_USE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
                  SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
         errors:
@@ -2920,30 +2824,13 @@ components:
         email: { type: string, format: email }
         phone: { type: string, pattern: '^\+?[0-9]{9,15}$' }
         password: { type: string, minLength: 8 }
-    PhoneOtpRequest:
-      type: object
-      required: [phone]
-      properties:
-        phone:
-          type: string
-          description: >
-            Số di động Việt Nam; bỏ khoảng trắng, dấu chấm, gạch ngang trước khi kiểm
-            ^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$. Lưu dạng +84 và 9 số cuối.
-          pattern: '^[\s.-]*(\+[\s.-]*8[\s.-]*4|8[\s.-]*4|0)[\s.-]*[35789]([\s.-]*[0-9]){8}[\s.-]*$'
-          example: '0912 345 678'
-    PhoneVerifyRequest:
-      type: object
-      required: [otp_session_id, otp]
-      properties:
-        otp_session_id: { type: string, format: uuid }
-        otp: { type: string, pattern: '^[0-9]{6}$' }
     OtpSession:
       type: object
       required: [otp_session_id]
       properties:
         otp_session_id: { type: string, format: uuid }
         expires_at: { type: string, format: date-time }
-        channel: { type: string, enum: [EMAIL, SMS] }
+        channel: { type: string, enum: [EMAIL] }
     TokenPair:
       type: object
       required: [access_token, refresh_token, expires_in, user]
@@ -2967,7 +2854,6 @@ components:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         phone: { type: string }
-        phone_verified: { type: boolean, description: Luôn được backend trả về; true khi số điện thoại đã xác minh bằng SMS OTP }
         full_name: { type: string }
         avatar_url: { type: string, format: uri }
         role: { type: string, enum: [BUYER, ADMIN] }
@@ -3621,7 +3507,6 @@ components:
         role: { type: string, enum: [BUYER, ADMIN] }
         status: { type: string, enum: [UNVERIFIED, ACTIVE, LOCKED, DELETED], description: Trạng thái suy ra tại thời điểm đọc }
         email_verified_at: { type: [string, 'null'], format: date-time }
-        phone_verified_at: { type: [string, 'null'], format: date-time }
         admin_locked: { type: boolean }
         has_password: { type: boolean }
         locked_until: { type: [string, 'null'], format: date-time }

@@ -95,24 +95,6 @@ vingo:
       resend-window: ${AUTH_OTP_RESEND_WINDOW:PT15M}
       register-max-per-window: ${AUTH_OTP_REGISTER_MAX:10}
       register-window: ${AUTH_OTP_REGISTER_WINDOW:PT1M}
-    phone-otp:
-      resend-cooldown: ${AUTH_PHONE_OTP_RESEND_COOLDOWN:PT60S}
-      user-max-per-window: ${AUTH_PHONE_OTP_USER_MAX:5}
-      phone-max-per-window: ${AUTH_PHONE_OTP_PHONE_MAX:5}
-      ip-max-per-window: ${AUTH_PHONE_OTP_IP_MAX:20}
-      window: ${AUTH_PHONE_OTP_WINDOW:PT24H}
-  # SMS OTP xác minh số điện thoại. provider: speedsms (gọi SpeedSMS, tốn tiền), log (chỉ profile local/test,
-  # không gọi ra ngoài, in mã ra log) hoặc demo (không gửi SMS, trả mã trong header X-Demo-Otp; chỉ để demo, không dữ liệu thật). SpeedSMS không có chế độ thử: gọi thật là gửi thật.
-  sms:
-    provider: ${SMS_PROVIDER:speedsms}
-    # true: vẫn gọi SpeedSMS nhưng in thêm mã OTP ra log (chỉ profile local/test, nơi khác app không khởi động).
-    log-code: ${SMS_LOG_CODE:false}
-    speedsms:
-      base-url: ${SPEEDSMS_BASE_URL:https://api.speedsms.vn/index.php}
-      access-token: ${SPEEDSMS_ACCESS_TOKEN:}
-      # 2 = đầu số ngẫu nhiên, 3 = brandname riêng (cần SPEEDSMS_SENDER), 4 = brandname mặc định Verify/Notify
-      sms-type: ${SPEEDSMS_SMS_TYPE:4}
-      sender: ${SPEEDSMS_SENDER:}
   mail:
     api-key: ${MAIL_API_KEY:}
     from: ${MAIL_FROM:no-reply@vingo.local}

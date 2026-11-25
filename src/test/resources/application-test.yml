@@ -3,17 +3,8 @@ vingo:
   # (mỗi bộ property khác nhau là Spring dựng thêm một context, làm CI chậm).
   google:
     enabled: false
-  sms:
-    # Cố định provider cho test: biến môi trường SMS_PROVIDER=demo trên máy/CI không được làm hỏng các test dùng RecordingSmsSender. DemoOtpApiTest tự ghi đè bằng @TestPropertySource.
-    provider: speedsms
   auth:
     secure-cookies: false
-    phone-otp:
-      resend-cooldown: PT60S
-      user-max-per-window: 5
-      phone-max-per-window: 5
-      ip-max-per-window: 20
-      window: PT24H
     login:
       max-attempts: 3
       # Ghi rõ để biến môi trường AUTH_LOGIN_* trên máy chạy test không ghi đè được.

@@ -176,7 +176,7 @@ booking/
 
 | Module | Người | Làm gì |
 |---|---|---|
-| `auth` | Luân | Đăng ký, đăng nhập, OTP, đăng nhập Google, token |
+| `auth` | Luân | Đăng ký và xác minh email bằng OTP, đăng nhập bằng email và mật khẩu hoặc qua Google, cấp token |
 | `catalog` | Luân | Sân, sơ đồ ghế, sự kiện, suất diễn, giá |
 | `payment` | Luân | Tạo link VNPay, nhận IPN, đối soát querydr |
 | `search` | Đức | Tìm sự kiện (gõ không dấu vẫn ra), sơ đồ ghế, số chỗ còn |
@@ -334,10 +334,6 @@ Lưu ý: trang return của VNPay **chỉ để hiển thị**. Trạng thái đ
 | `VNPAY_RETURN_URL` | `https://<web-domain>/payment/result` | Trang return |
 | `MAIL_API_KEY` | | Nhà cung cấp email |
 | `MAIL_FROM` | `no-reply@<domain>` | |
-| `SPEEDSMS_ACCESS_TOKEN` | (token SpeedSMS) | SMS OTP xác minh SĐT; trống thì xin OTP trả 503. Xem [xác minh SĐT](docs/phone-verification.md) |
-| `SPEEDSMS_SMS_TYPE` | `4` | `2` đầu số ngẫu nhiên, `3` brandname riêng (thêm `SPEEDSMS_SENDER`), `4` brandname mặc định |
-| `SMS_PROVIDER`, `SMS_LOG_CODE` | `log` / `true` | Chỉ cho profile `local`: in mã OTP ra log, đặt ở server thì app không khởi động |
-| `SMS_PROVIDER=demo` | (không đặt) | Demo/thực tập: không gửi SMS, trả mã OTP trong header `X-Demo-Otp`. Không đặt ở production |
 | `SENTRY_DSN` | | Báo lỗi |
 
 Không commit `.env*` (trừ `.env.example`). Secret production lưu trong GitHub Secrets.
@@ -432,6 +428,5 @@ curl https://<domain>/actuator/health
 | Board kiến trúc gốc | Các hình vẽ gốc trên Excalidraw | [Architecture Ticket System](https://app.excalidraw.com/s/1PR0Jqn44kd/4ANPdM39rZd) |
 | Kế hoạch dự án | Sprint, phân công, tech stack, cấu trúc repo | [Vingo – Kế hoạch dự án](https://claude.ai/artifact/FjHzP5DeyDodd5aossroqk) |
 | Quy tắc code | Bắt buộc đọc trước khi code | [`CLAUDE.md`](CLAUDE.md) |
-| Xác minh SĐT bằng SMS OTP | Luật nghiệp vụ, API, giới hạn gửi SMS, cấu hình SpeedSMS, thử trên máy local, deploy, xử lý sự cố | [`docs/phone-verification.md`](docs/phone-verification.md) |
 
 Bản online là bản mới nhất. Khi kiến trúc thay đổi, cập nhật lại `docs/architecture.html` trong cùng PR.
