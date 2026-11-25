@@ -58,7 +58,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-              example: { status: 409, code: EMAIL_TAKEN }
+              example: { title: Email đã tồn tại, status: 409, code: EMAIL_TAKEN }
   /auth/otp/verify:
     post:
       operationId: verifyOtp
@@ -151,6 +151,11 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                title: Sai thông tin đăng nhập
+                status: 401
+                code: INVALID_CREDENTIALS
+                detail: Email hoặc mật khẩu không đúng
         '423':
           description: Tài khoản bị khoá tạm vì sai nhiều lần (ACCOUNT_LOCKED)
           content:
@@ -2702,6 +2707,7 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+          example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR }
     Unauthorized:
       description: UNAUTHORIZED
       content:
