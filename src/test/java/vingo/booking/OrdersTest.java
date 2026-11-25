@@ -53,7 +53,7 @@ class OrdersTest extends BookingTestSupport {
                 WHERE event_id = :event AND zone_id = :zone
                 """).param("event", event.id()).param("zone", event.seatedZoneId()).update();
         jdbc.sql("""
-                INSERT INTO sku_price (sku_id, price, effective_from, created_by)
+                INSERT INTO ticket_type_price (ticket_type_id, price, effective_from, created_by)
                 VALUES (:sku, 1, :now, :user)
                 """).param("sku", event.vipPriceTierId()).param("now", catalog.now()).param("user", buyer).update();
 
@@ -270,9 +270,9 @@ class OrdersTest extends BookingTestSupport {
                 .param("price", VIP_PRICE).param("created", catalog.now().minusMinutes(minutesAgo))
                 .param("id", id).update();
         jdbc.sql("""
-                        INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
-                        SELECT :order, :showtime, :seat, sp.id, sp.price FROM sku_price sp
-                        WHERE sp.sku_id = :sku AND sp.price = :price
+                        INSERT INTO order_seat (order_id, showtime_id, seat_id, ticket_type_price_id, unit_price)
+                        SELECT :order, :showtime, :seat, sp.id, sp.price FROM ticket_type_price sp
+                        WHERE sp.ticket_type_id = :sku AND sp.price = :price
                         """)
                 .param("order", id).param("showtime", showtime.id())
                 .param("seat", showtime.event().seat(seatNumber)).param("sku", showtime.event().vipPriceTierId())

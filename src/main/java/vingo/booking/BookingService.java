@@ -484,7 +484,7 @@ public class BookingService {
         }
         long total = 0;
         for (var item : items) {
-            if (item.skuPriceId() == null) {
+            if (item.skuId() == null || item.ticketTypeId() == null || item.skuPriceId() == null) {
                 throw new DomainException(ErrorCode.SHOWTIME_NOT_ON_SALE, "Suất diễn chưa có giá cho khu này");
             }
             total = Math.addExact(total, Math.multiplyExact(item.unitPrice(), item.quantity()));

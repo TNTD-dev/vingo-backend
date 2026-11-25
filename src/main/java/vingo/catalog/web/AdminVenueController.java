@@ -49,6 +49,8 @@ import vingo.api.model.Venue;
 import vingo.api.model.VenueCreateInput;
 import vingo.api.model.VenueInput;
 import vingo.api.model.ZonePriceInput;
+import vingo.api.model.ZoneSkuPreview;
+import vingo.api.model.ZoneSkuPreviewItem;
 import vingo.catalog.EventDetails;
 import vingo.shared.security.CurrentUser;
 import vingo.catalog.EventPublishingService;
@@ -335,11 +337,23 @@ class AdminVenueController implements AdminCatalogApi {
         var header = result.header();
         var data = header.data();
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        var priceTiers = result.priceTiers().stream()
+                .map(tier -> new PriceTier()
+                        .id(tier.id())
+                        .ticketTypeId(tier.id())
+                        .name(tier.name())
+                        .price(tier.price())
+                        .color(tier.color())
+                        .prices(tier.prices().stream().map(AdminVenueController::toSkuPrice).toList()))
+                .toList();
 
         return new EventDetail()
                 .seatLayoutId(result.selection() == null ? null : result.selection().layoutId())
                 .zonePrices(result.zonePrices().stream().map(price -> new ZonePriceInput()
-                        .zoneId(price.zoneId()).priceTierId(price.priceTierId()).displayName(price.displayName())).toList())
+                        .zoneId(price.zoneId())
+                        .priceTierId(price.priceTierId())
+                        .ticketTypeId(price.priceTierId())
+                        .displayName(price.displayName())).toList())
                 .id(header.id())
                 .status(EventStatus.fromValue(header.status()))
                 .title(data.title())
@@ -352,14 +366,9 @@ class AdminVenueController implements AdminCatalogApi {
                 .posterMobileUrl(data.posterMobileUrl())
                 .posterDesktopUrl(data.posterDesktopUrl())
                 .maxTicketsPerOrder(data.maxTicketsPerOrder())
-                .priceTiers(result.priceTiers().stream()
-                        .map(tier -> new PriceTier()
-                                .id(tier.id())
-                                .name(tier.name())
-                                .price(tier.price())
-                                .color(tier.color())
-                                .prices(tier.prices().stream().map(AdminVenueController::toSkuPrice).toList()))
-                        .toList())
+                .priceTiers(priceTiers)
+                .ticketTypes(priceTiers)
+                .skuCount(result.skuCount())
                 .showtimes(result.showtimes().stream()
                         .map(session -> toAdminShowtime(session, now))
                         .toList());
@@ -369,6 +378,7 @@ class AdminVenueController implements AdminCatalogApi {
         return new SkuPrice()
                 .id(p.id())
                 .skuId(p.skuId())
+                .ticketTypeId(p.skuId())
                 .price(p.price())
                 .effectiveFrom(p.effectiveFrom())
                 .createdBy(p.createdBy())
@@ -514,10 +524,26 @@ class AdminVenueController implements AdminCatalogApi {
     }
 
     @Override
-    public ResponseEntity<Void> putZonePrices(
+    public ResponseEntity<ZoneSkuPreview> putZonePrices(
             UUID eventId,
             List<ZonePriceInput> input
     ) {
+        var changes = toZonePriceChanges(input);
+        var preview = eventPricing.putZonePrices(eventId, changes);
+        return ResponseEntity.ok(toZoneSkuPreview(preview));
+    }
+
+    @Override
+    public ResponseEntity<ZoneSkuPreview> previewZonePrices(
+            UUID eventId,
+            List<ZonePriceInput> input
+    ) {
+        var changes = toZonePriceChanges(input);
+        var preview = eventPricing.previewZonePrices(eventId, changes);
+        return ResponseEntity.ok(toZoneSkuPreview(preview));
+    }
+
+    private static List<ZonePriceChange> toZonePriceChanges(List<ZonePriceInput> input) {
         if (input == null
                 || input.stream().anyMatch(Objects::isNull)) {
             throw new DomainException(
@@ -525,18 +551,39 @@ class AdminVenueController implements AdminCatalogApi {
                     "Danh sách giá khu không hợp lệ."
             );
         }
-
-        var changes = input.stream()
-                .map(item -> new ZonePriceChange(
-                        item.getZoneId(),
-                        item.getPriceTierId(),
-                        item.getDisplayName()
-                ))
+        return input.stream()
+                .map(item -> {
+                    if (item.getTicketTypeId() != null && item.getPriceTierId() != null
+                            && !item.getTicketTypeId().equals(item.getPriceTierId())) {
+                        throw new DomainException(ErrorCode.VALIDATION_ERROR,
+                                "ticket_type_id và price_tier_id phải cùng giá trị.");
+                    }
+                    UUID tierId = item.getTicketTypeId() != null ? item.getTicketTypeId() : item.getPriceTierId();
+                    return new ZonePriceChange(
+                            item.getZoneId(),
+                            tierId,
+                            item.getDisplayName()
+                    );
+                })
                 .toList();
+    }
 
-        eventPricing.putZonePrices(eventId, changes);
-
-        return ResponseEntity.ok().build();
+    private static ZoneSkuPreview toZoneSkuPreview(EventDetails.ZoneSkuPreviewResult preview) {
+        return new ZoneSkuPreview()
+                .eventId(preview.eventId())
+                .totalSkuCount(preview.totalSkuCount())
+                .seatedSkuCount(preview.seatedSkuCount())
+                .standingSkuCount(preview.standingSkuCount())
+                .zones(preview.zones().stream()
+                        .map(z -> new ZoneSkuPreviewItem()
+                                .zoneId(z.zoneId())
+                                .zoneName(z.zoneName())
+                                .kind(ZoneSkuPreviewItem.KindEnum.fromValue(z.kind()))
+                                .ticketTypeId(z.ticketTypeId())
+                                .ticketTypeName(z.ticketTypeName())
+                                .price(z.price())
+                                .skuCount(z.skuCount()))
+                        .toList());
     }
     @Override
     public ResponseEntity<Void> blockSeats(UUID id, BlockSeatsRequest input) {

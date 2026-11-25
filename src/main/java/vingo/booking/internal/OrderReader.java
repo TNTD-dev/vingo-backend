@@ -81,12 +81,25 @@ public class OrderReader {
                                v.name AS venue_name, v.city,
                                (SELECT min(sp.price)
                                 FROM event_zone ez
+                                JOIN zone z ON z.id = ez.zone_id AND z.seat_map_id = ez.seat_map_id
                                 JOIN LATERAL (
-                                    SELECT price FROM sku_price
-                                    WHERE sku_id = ez.sku_id AND effective_from <= :now
+                                    SELECT price FROM ticket_type_price
+                                    WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= :now
                                     ORDER BY effective_from DESC LIMIT 1
                                 ) sp ON true
-                                WHERE ez.event_id = e.id) AS price_from,
+                                WHERE ez.event_id = e.id
+                                  AND EXISTS (
+                                      SELECT 1 FROM sku sk
+                                      WHERE sk.event_id = e.id
+                                        AND sk.ticket_type_id = ez.ticket_type_id
+                                        AND (
+                                            (z.kind = 'SEATED' AND EXISTS (
+                                                SELECT 1 FROM seat se
+                                                WHERE se.id = sk.seat_id AND se.zone_id = z.id
+                                            ))
+                                            OR (z.kind = 'STANDING' AND sk.zone_id = z.id)
+                                        )
+                                  )) AS price_from,
                                (SELECT s2.starts_at FROM showtime s2
                                 WHERE s2.event_id = e.id AND e.status = 'PUBLISHED'
                                   AND s2.cancelled_at IS NULL AND s2.starts_at >= :now
@@ -169,39 +182,49 @@ public class OrderReader {
 
         Map<UUID, List<OrderItem>> itemsByOrder = new HashMap<>();
         jdbc.sql("""
-                        SELECT os.order_id, os.seat_id AS item_id, os.seat_id, os.unit_price, 1 AS quantity,
+                        SELECT os.order_id, os.seat_id AS item_id, os.seat_id, os.sku_id,
+                               COALESCE(os.ticket_type_id, ttp.ticket_type_id) AS ticket_type_id,
+                               os.unit_price, 1 AS quantity,
                                COALESCE(ez.display_name, z.name) AS zone_name,
-                               s.row_label, s.number::integer AS number, sk.name AS tier_name
+                               s.row_label, s.number::integer AS number,
+                               tt.name AS tier_name
                         FROM order_seat os
                         JOIN showtime st ON st.id = os.showtime_id
                         JOIN seat s ON s.id = os.seat_id
                         JOIN zone z ON z.id = s.zone_id
-                        JOIN sku_price sp ON sp.id = os.sku_price_id
-                        JOIN sku sk ON sk.id = sp.sku_id
+                        JOIN ticket_type_price ttp ON ttp.id = os.ticket_type_price_id
+                        JOIN ticket_type tt ON tt.id = COALESCE(os.ticket_type_id, ttp.ticket_type_id)
                         LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
                         WHERE os.order_id = ANY(:ids)
                         UNION ALL
-                        SELECT ost.order_id, ost.zone_id AS item_id, NULL::uuid AS seat_id, ost.unit_price, ost.quantity::integer,
+                        SELECT ost.order_id, ost.zone_id AS item_id, NULL::uuid AS seat_id, ost.sku_id,
+                               COALESCE(ost.ticket_type_id, ttp.ticket_type_id) AS ticket_type_id,
+                               ost.unit_price, ost.quantity::integer,
                                COALESCE(ez.display_name, z.name) AS zone_name,
-                               NULL::text AS row_label, NULL::integer AS number, sk.name AS tier_name
+                               NULL::text AS row_label, NULL::integer AS number,
+                               tt.name AS tier_name
                         FROM order_standing ost
                         JOIN showtime st ON st.id = ost.showtime_id
                         JOIN zone z ON z.id = ost.zone_id
-                        JOIN sku_price sp ON sp.id = ost.sku_price_id
-                        JOIN sku sk ON sk.id = sp.sku_id
+                        JOIN ticket_type_price ttp ON ttp.id = ost.ticket_type_price_id
+                        JOIN ticket_type tt ON tt.id = COALESCE(ost.ticket_type_id, ttp.ticket_type_id)
                         LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
                         WHERE ost.order_id = ANY(:ids)
                         ORDER BY order_id, zone_name, row_label, number, item_id
                         """)
                 .param("ids", new SqlArrayValue("uuid", ids))
                 .query((rs, row) -> {
+                    String tierName = rs.getString("tier_name");
                     var item = new OrderItem()
                             .id(rs.getObject("item_id", UUID.class))
+                            .skuId(rs.getObject("sku_id", UUID.class))
+                            .ticketTypeId(rs.getObject("ticket_type_id", UUID.class))
                             .zone(rs.getString("zone_name"))
                             .row(rs.getString("row_label"))
                             .number(rs.getObject("number", Integer.class))
                             .seatId(rs.getObject("seat_id", UUID.class))
-                            .tier(rs.getString("tier_name"))
+                            .tier(tierName)
+                            .ticketType(tierName)
                             .unitPrice(rs.getLong("unit_price"))
                             .quantity(rs.getInt("quantity"));
                     itemsByOrder.computeIfAbsent(rs.getObject("order_id", UUID.class), id -> new ArrayList<>())

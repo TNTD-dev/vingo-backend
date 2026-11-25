@@ -9,9 +9,38 @@ public record EventDetails(
         List<Tier> priceTiers,
         List<Session> showtimes,
         LayoutSelection selection,
-        List<ZonePriceChange> zonePrices
+        List<ZonePriceChange> zonePrices,
+        int skuCount
 ) {
+    public EventDetails(
+            Header header,
+            List<Tier> priceTiers,
+            List<Session> showtimes,
+            LayoutSelection selection,
+            List<ZonePriceChange> zonePrices
+    ) {
+        this(header, priceTiers, showtimes, selection, zonePrices, 0);
+    }
+
     public record LayoutSelection(UUID venueId, UUID layoutId) {}
+
+    public record ZoneSkuPreviewResult(
+            UUID eventId,
+            int totalSkuCount,
+            int seatedSkuCount,
+            int standingSkuCount,
+            List<ZoneSkuItemResult> zones
+    ) {}
+
+    public record ZoneSkuItemResult(
+            UUID zoneId,
+            String zoneName,
+            String kind,
+            UUID ticketTypeId,
+            String ticketTypeName,
+            long price,
+            int skuCount
+    ) {}
 
     public record Header(
             UUID id,

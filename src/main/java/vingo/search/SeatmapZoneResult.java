@@ -12,7 +12,18 @@ public record SeatmapZoneResult(
         UUID zoneId,
         String name,
         ZoneKind kind,
+        UUID skuId,
         Optional<PriceTierResult> tier,
         int seatsLeft,
         List<SeatResult> seats) {
+
+    public SeatmapZoneResult(
+            UUID zoneId,
+            String name,
+            ZoneKind kind,
+            Optional<PriceTierResult> tier,
+            int seatsLeft,
+            List<SeatResult> seats) {
+        this(zoneId, name, kind, null, tier, seatsLeft, seats);
+    }
 }

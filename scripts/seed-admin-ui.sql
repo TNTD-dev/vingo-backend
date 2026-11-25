@@ -174,15 +174,15 @@ BEGIN
             event_status_,10,now()-interval '80 days',now()-n*interval '1 hour',layout_id_);
         FOR z IN 1..CASE WHEN n%2=1 THEN 2 ELSE 3 END LOOP
             tier_id_:=pg_temp.demo_id(31000+n*10+z);
-            INSERT INTO sku(id,event_id,name,color)
+            INSERT INTO ticket_type(id,event_id,name,color)
             VALUES(tier_id_,event_id_,(ARRAY['VIP','Phổ thông','GA'])[z],
                 (ARRAY['#6366f1','#3b82f6','#f59e0b'])[z]);
-            INSERT INTO sku_price(id,sku_id,price,effective_from,created_by,reason)
+            INSERT INTO ticket_type_price(id,ticket_type_id,price,effective_from,created_by,reason)
             VALUES(pg_temp.demo_id(32000+n*10+z),tier_id_,
                 CASE WHEN n%2=1 THEN (ARRAY[350000,180000,100000])[z]
                      ELSE (ARRAY[900000,450000,250000])[z] END,
                 now()-interval '80 days',pg_temp.demo_id(31),'[DEMO] Giá mở bán');
-            INSERT INTO event_zone(event_id,zone_id,seat_map_id,sku_id,display_name)
+            INSERT INTO event_zone(event_id,zone_id,seat_map_id,ticket_type_id,display_name)
             VALUES(event_id_,pg_temp.demo_id(10000+venue_n*100+layout_slot*10+z),layout_id_,tier_id_,
                 (ARRAY['Khán đài A · VIP','Khán đài B · Phổ thông','Khu đứng GA'])[z]);
         END LOOP;
@@ -243,10 +243,10 @@ BEGIN
         zone_n:=CASE WHEN event_n%2=0 AND n%3=0 THEN 3 ELSE 1+n%2 END;
         zone_id_:=pg_temp.demo_id(10000+venue_n*100+layout_slot*10+zone_n);
         tier_id_:=pg_temp.demo_id(31000+event_n*10+zone_n);
-        SELECT id,price INTO STRICT price_id_,price_ FROM sku_price WHERE sku_id=tier_id_;
+        SELECT id,price INTO STRICT price_id_,price_ FROM ticket_type_price WHERE ticket_type_id=tier_id_;
         q:=CASE WHEN zone_n=3 THEN 3 ELSE 2 END; total_:=q*price_;
         IF zone_n=3 THEN
-            INSERT INTO order_standing(order_id,showtime_id,zone_id,sku_price_id,quantity,unit_price)
+            INSERT INTO order_standing(order_id,showtime_id,zone_id,ticket_type_price_id,quantity,unit_price)
             VALUES(order_id_,show_id_,zone_id_,price_id_,q,price_);
             IF order_status_ IN ('PAID','PENDING') THEN
                 UPDATE standing_inventory SET sold=sold+CASE WHEN order_status_='PAID' THEN q ELSE 0 END,
@@ -261,7 +261,7 @@ BEGIN
                 WHERE ss.showtime_id=show_id_ AND s.zone_id=zone_id_ AND ss.status='AVAILABLE'
                 ORDER BY s.row_label,s.number LIMIT 1
                 OFFSET CASE WHEN order_status_ IN ('PAID','PENDING') THEN 0 ELSE j-1 END;
-                INSERT INTO order_seat(order_id,showtime_id,seat_id,sku_price_id,unit_price)
+                INSERT INTO order_seat(order_id,showtime_id,seat_id,ticket_type_price_id,unit_price)
                 VALUES(order_id_,show_id_,seat_id_,price_id_,price_);
                 IF order_status_ IN ('PAID','PENDING') THEN
                     UPDATE seat_inventory SET status=CASE WHEN order_status_='PAID' THEN 'SOLD'::seat_status ELSE 'HELD'::seat_status END,

@@ -46,12 +46,12 @@ class SchemaConstraintsTest extends IntegrationTest {
     void ticket_rejectsSecondLiveTicket_forSameSeatAndShowtime() {
         UUID order = insertPendingOrder(catalog.buyer());
         jdbc.sql("""
-                        INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
+                        INSERT INTO order_seat (order_id, showtime_id, seat_id, ticket_type_price_id, unit_price)
                         SELECT :o, si.showtime_id, si.seat_id, sp.id, sp.price
                         FROM seat_inventory si
                         JOIN showtime sh ON sh.id = si.showtime_id
                         JOIN event_zone ez ON ez.event_id = sh.event_id AND ez.zone_id = si.zone_id
-                        JOIN sku_price sp ON sp.sku_id = ez.sku_id
+                        JOIN ticket_type_price sp ON sp.ticket_type_id = ez.ticket_type_id
                         WHERE si.showtime_id = :s AND si.seat_id = :seat AND sp.effective_from <= :now
                         ORDER BY sp.effective_from DESC LIMIT 1
                         """)

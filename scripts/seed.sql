@@ -77,13 +77,13 @@ DECLARE st uuid; ev uuid;
 BEGIN
     SELECT o.showtime_id, s.event_id INTO st, ev FROM ticket_order o JOIN showtime s ON s.id = o.showtime_id WHERE o.id = ord;
 
-    INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
+    INSERT INTO order_seat (order_id, showtime_id, seat_id, ticket_type_price_id, unit_price)
     SELECT ord, st, se.id, sp.id, sp.price
     FROM seat se
     JOIN event_zone ez ON ez.event_id = ev AND ez.zone_id = z
     JOIN LATERAL (
-        SELECT id, price FROM sku_price
-        WHERE sku_id = ez.sku_id AND effective_from <= now()
+        SELECT id, price FROM ticket_type_price
+        WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= now()
         ORDER BY effective_from DESC LIMIT 1
     ) sp ON true
     WHERE se.zone_id = z AND se.row_label = r AND se.number BETWEEN a AND b;
@@ -107,12 +107,12 @@ DECLARE st uuid; ev uuid;
 BEGIN
     SELECT o.showtime_id, s.event_id INTO st, ev FROM ticket_order o JOIN showtime s ON s.id = o.showtime_id WHERE o.id = ord;
 
-    INSERT INTO order_standing (order_id, showtime_id, zone_id, sku_price_id, quantity, unit_price)
+    INSERT INTO order_standing (order_id, showtime_id, zone_id, ticket_type_price_id, quantity, unit_price)
     SELECT ord, st, z, sp.id, qty, sp.price
     FROM event_zone ez
     JOIN LATERAL (
-        SELECT id, price FROM sku_price
-        WHERE sku_id = ez.sku_id AND effective_from <= now()
+        SELECT id, price FROM ticket_type_price
+        WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= now()
         ORDER BY effective_from DESC LIMIT 1
     ) sp ON true
     WHERE ez.event_id = ev AND ez.zone_id = z;
@@ -132,7 +132,7 @@ END $$;
 
 TRUNCATE ticket_scan, ticket, payment_gateway_log, payment, order_status_history,
          order_seat, order_standing, seat_inventory, standing_inventory, ticket_order,
-         event_zone, sku_price, sku, showtime, event,
+         event_zone, ticket_type_price, sku, ticket_type, showtime, event,
          seat, zone, seat_map, venue_map, venue CASCADE;
 
 DELETE FROM login_session      WHERE user_id IN (SELECT pg_temp.sid(n) FROM generate_series(1, 5) n);
@@ -308,7 +308,7 @@ INSERT INTO event (id, title, description, category, home_team, away_team, leagu
      'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/2012-13_Europa_League_final_-_Chelsea_FC_vs._SL_Benfica%2C_Amsterdam_ArenA%2C_kick-off.jpg/960px-2012-13_Europa_League_final_-_Chelsea_FC_vs._SL_Benfica%2C_Amsterdam_ArenA%2C_kick-off.jpg',
      10, pg_temp.sid(126), 'PUBLISHED');
 
-INSERT INTO sku (id, event_id, name, color) VALUES
+INSERT INTO ticket_type (id, event_id, name, color) VALUES
     (pg_temp.sid(301), pg_temp.sid(201), 'Hạng A',  '#E4572E'),
     (pg_temp.sid(302), pg_temp.sid(201), 'Hạng B',  '#F3A712'),
     (pg_temp.sid(303), pg_temp.sid(201), 'Đứng',    '#4C956C'),
@@ -328,7 +328,7 @@ INSERT INTO sku (id, event_id, name, color) VALUES
     (pg_temp.sid(371), pg_temp.sid(210), 'GA',      '#D35400'),
     (pg_temp.sid(372), pg_temp.sid(210), 'Fanzone', '#27AE60');
 
-INSERT INTO sku_price (id, sku_id, price, effective_from, created_by, reason) VALUES
+INSERT INTO ticket_type_price (id, ticket_type_id, price, effective_from, created_by, reason) VALUES
     (pg_temp.sid(301), pg_temp.sid(301),  500000, now() - interval '30 days', pg_temp.sid(1), 'Giá mở bán'),
     (pg_temp.sid(302), pg_temp.sid(302),  350000, now() - interval '30 days', pg_temp.sid(1), 'Giá mở bán'),
     (pg_temp.sid(303), pg_temp.sid(303),  200000, now() - interval '30 days', pg_temp.sid(1), 'Giá mở bán'),
@@ -349,7 +349,7 @@ INSERT INTO sku_price (id, sku_id, price, effective_from, created_by, reason) VA
     (pg_temp.sid(372), pg_temp.sid(372),  100000, now() - interval '30 days', pg_temp.sid(1), 'Giá mở bán');
 
 -- E1 cố ý không gán giá cho VIP Box (134) để test "suất chưa có giá cho khu này".
-INSERT INTO event_zone (event_id, zone_id, seat_map_id, sku_id) VALUES
+INSERT INTO event_zone (event_id, zone_id, seat_map_id, ticket_type_id) VALUES
     (pg_temp.sid(201), pg_temp.sid(131), pg_temp.sid(121), pg_temp.sid(301)),
     (pg_temp.sid(201), pg_temp.sid(132), pg_temp.sid(121), pg_temp.sid(302)),
     (pg_temp.sid(201), pg_temp.sid(133), pg_temp.sid(121), pg_temp.sid(303)),
@@ -431,15 +431,15 @@ SELECT pg_temp.sid(1000 + n),
        'PUBLISHED', 10
 FROM generate_series(1, 15) n;
 
-INSERT INTO sku (id, event_id, name, color)
+INSERT INTO ticket_type (id, event_id, name, color)
 SELECT pg_temp.sid(2000 + n), pg_temp.sid(1000 + n), 'Vé chung', '#34495E'
 FROM generate_series(1, 15) n;
 
-INSERT INTO sku_price (id, sku_id, price, effective_from, created_by, reason)
+INSERT INTO ticket_type_price (id, ticket_type_id, price, effective_from, created_by, reason)
 SELECT pg_temp.sid(2000 + n), pg_temp.sid(2000 + n), 100000 * ((n - 1) % 5 + 1), now() - interval '30 days', pg_temp.sid(1), 'Giá mở bán'
 FROM generate_series(1, 15) n;
 
-INSERT INTO event_zone (event_id, zone_id, seat_map_id, sku_id)
+INSERT INTO event_zone (event_id, zone_id, seat_map_id, ticket_type_id)
 SELECT pg_temp.sid(1000 + n), z.id, z.seat_map_id, pg_temp.sid(2000 + n)
 FROM generate_series(1, 15) n
 JOIN zone z ON z.seat_map_id = (ARRAY[pg_temp.sid(123), pg_temp.sid(125), pg_temp.sid(122)])[(n - 1) % 3 + 1];

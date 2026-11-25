@@ -354,16 +354,21 @@ public class BookingRepository {
 
     public List<HoldItem> seatItems(UUID showtimeId, Collection<UUID> seatIds, OffsetDateTime now) {
         return jdbc.sql("""
-                        SELECT si.seat_id, si.zone_id, sp.id AS sku_price_id, sp.price
+                        SELECT si.seat_id, si.zone_id, sk.id AS sku_id,
+                               ez.ticket_type_id,
+                               ttp.id AS ticket_type_price_id, ttp.price
                         FROM seat_inventory si
                         JOIN showtime st ON st.id = si.showtime_id
                         JOIN zone z ON z.id = si.zone_id AND z.seat_map_id = st.seat_map_id
                         LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
+                        LEFT JOIN sku sk ON sk.event_id = st.event_id
+                                        AND sk.ticket_type_id = ez.ticket_type_id
+                                        AND sk.seat_id = si.seat_id
                         LEFT JOIN LATERAL (
-                            SELECT id, price FROM sku_price
-                            WHERE sku_id = ez.sku_id AND effective_from <= :now
+                            SELECT id, price FROM ticket_type_price
+                            WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= :now
                             ORDER BY effective_from DESC LIMIT 1
-                        ) sp ON true
+                        ) ttp ON true
                         WHERE si.showtime_id = :showtime AND si.seat_id = ANY(:ids) AND z.kind = 'SEATED'
                         ORDER BY si.seat_id
                         """)
@@ -373,7 +378,9 @@ public class BookingRepository {
                 .query((rs, row) -> new HoldItem(
                         rs.getObject("seat_id", UUID.class),
                         rs.getObject("zone_id", UUID.class),
-                        rs.getObject("sku_price_id", UUID.class),
+                        rs.getObject("sku_id", UUID.class),
+                        rs.getObject("ticket_type_id", UUID.class),
+                        rs.getObject("ticket_type_price_id", UUID.class),
                         1,
                         rs.getLong("price")))
                 .list();
@@ -381,16 +388,21 @@ public class BookingRepository {
 
     public Optional<HoldItem> standingItem(UUID showtimeId, UUID zoneId, int quantity, OffsetDateTime now) {
         return jdbc.sql("""
-                        SELECT z.id AS zone_id, sp.id AS sku_price_id, sp.price
+                        SELECT z.id AS zone_id, sk.id AS sku_id,
+                               ez.ticket_type_id,
+                               ttp.id AS ticket_type_price_id, ttp.price
                         FROM standing_inventory stock
                         JOIN showtime st ON st.id = stock.showtime_id
                         JOIN zone z ON z.id = stock.zone_id AND z.seat_map_id = st.seat_map_id
                         LEFT JOIN event_zone ez ON ez.event_id = st.event_id AND ez.zone_id = z.id
+                        LEFT JOIN sku sk ON sk.event_id = st.event_id
+                                        AND sk.ticket_type_id = ez.ticket_type_id
+                                        AND sk.zone_id = z.id
                         LEFT JOIN LATERAL (
-                            SELECT id, price FROM sku_price
-                            WHERE sku_id = ez.sku_id AND effective_from <= :now
+                            SELECT id, price FROM ticket_type_price
+                            WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= :now
                             ORDER BY effective_from DESC LIMIT 1
-                        ) sp ON true
+                        ) ttp ON true
                         WHERE stock.showtime_id = :showtime AND stock.zone_id = :zone AND z.kind = 'STANDING'
                         """)
                 .param("showtime", showtimeId)
@@ -399,7 +411,9 @@ public class BookingRepository {
                 .query((rs, row) -> new HoldItem(
                         null,
                         rs.getObject("zone_id", UUID.class),
-                        rs.getObject("sku_price_id", UUID.class),
+                        rs.getObject("sku_id", UUID.class),
+                        rs.getObject("ticket_type_id", UUID.class),
+                        rs.getObject("ticket_type_price_id", UUID.class),
                         quantity,
                         rs.getLong("price")))
                 .optional();
@@ -479,24 +493,34 @@ public class BookingRepository {
     public void insertItem(UUID orderId, UUID showtimeId, HoldItem item) {
         if (item.seatId() != null) {
             jdbc.sql("""
-                            INSERT INTO order_seat (order_id, showtime_id, seat_id, sku_price_id, unit_price)
-                            VALUES (:order, :showtime, :seat, :skuPrice, :price)
+                            INSERT INTO order_seat (
+                                order_id, showtime_id, seat_id,
+                                sku_id, ticket_type_id, ticket_type_price_id, unit_price
+                            )
+                            VALUES (:order, :showtime, :seat, :sku, :ticketType, :ticketTypePrice, :price)
                             """)
                     .param("order", orderId)
                     .param("showtime", showtimeId)
                     .param("seat", item.seatId())
-                    .param("skuPrice", item.skuPriceId())
+                    .param("sku", item.skuId(), Types.OTHER)
+                    .param("ticketType", item.ticketTypeId(), Types.OTHER)
+                    .param("ticketTypePrice", item.skuPriceId(), Types.OTHER)
                     .param("price", item.unitPrice())
                     .update();
         } else {
             jdbc.sql("""
-                            INSERT INTO order_standing (order_id, showtime_id, zone_id, sku_price_id, quantity, unit_price)
-                            VALUES (:order, :showtime, :zone, :skuPrice, :quantity, :price)
+                            INSERT INTO order_standing (
+                                order_id, showtime_id, zone_id,
+                                sku_id, ticket_type_id, ticket_type_price_id, quantity, unit_price
+                            )
+                            VALUES (:order, :showtime, :zone, :sku, :ticketType, :ticketTypePrice, :quantity, :price)
                             """)
                     .param("order", orderId)
                     .param("showtime", showtimeId)
                     .param("zone", item.zoneId())
-                    .param("skuPrice", item.skuPriceId())
+                    .param("sku", item.skuId(), Types.OTHER)
+                    .param("ticketType", item.ticketTypeId(), Types.OTHER)
+                    .param("ticketTypePrice", item.skuPriceId(), Types.OTHER)
                     .param("quantity", item.quantity())
                     .param("price", item.unitPrice())
                     .update();
@@ -566,7 +590,19 @@ public class BookingRepository {
 
     public record PendingOrder(UUID id, UUID userId, UUID showtimeId, OffsetDateTime expiresAt) {}
 
-    public record HoldItem(UUID seatId, UUID zoneId, UUID skuPriceId, int quantity, long unitPrice) {}
+    public record HoldItem(
+            UUID seatId,
+            UUID zoneId,
+            UUID skuId,
+            UUID ticketTypeId,
+            UUID skuPriceId,
+            int quantity,
+            long unitPrice
+    ) {
+        public HoldItem(UUID seatId, UUID zoneId, UUID skuPriceId, int quantity, long unitPrice) {
+            this(seatId, zoneId, null, null, skuPriceId, quantity, unitPrice);
+        }
+    }
 
     private record StandingQuantity(UUID zoneId, int quantity) {}
 }

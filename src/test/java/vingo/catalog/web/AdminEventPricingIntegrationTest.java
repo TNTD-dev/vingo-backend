@@ -83,7 +83,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
     }
 
     private List<Long> prices(UUID sku) {
-        return jdbc.sql("SELECT price FROM sku_price WHERE sku_id = :sku ORDER BY effective_from")
+        return jdbc.sql("SELECT price FROM ticket_type_price WHERE ticket_type_id = :sku ORDER BY effective_from")
                 .param("sku", sku).query(Long.class).list();
     }
 
@@ -185,7 +185,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
     private List<UUID> tierIds(UUID eventId) {
         return jdbc.sql("""
-                SELECT id FROM sku
+                SELECT id FROM ticket_type
                 WHERE event_id = :id
                 ORDER BY id
                 """)
@@ -197,14 +197,51 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
     private List<Map<String, Object>> tierRows(UUID eventId) {
         return jdbc.sql("""
                 SELECT s.id, s.event_id, s.name, s.color, sp.price
-                FROM sku s
-                JOIN LATERAL (SELECT price FROM sku_price WHERE sku_id = s.id ORDER BY effective_from DESC LIMIT 1) sp ON true
+                FROM ticket_type s
+                JOIN LATERAL (SELECT price FROM ticket_type_price WHERE ticket_type_id = s.id ORDER BY effective_from DESC LIMIT 1) sp ON true
                 WHERE s.event_id = :id
                 ORDER BY s.id
                 """)
                 .param("id", eventId)
                 .query()
                 .listOfRows();
+    }
+
+    @Test
+    void previewZonePrices_isReadOnlyAndRepeatedSaveKeepsSkuIds() {
+        var event = catalog.event(EventSpec.defaults().withStatus("DRAFT"));
+        var before = zoneRows(event.id());
+        var beforeSkus = skuIds(event.id());
+        var body = List.of(
+                Map.of("zone_id", event.seatedZoneId(), "ticket_type_id", event.vipPriceTierId()),
+                Map.of("zone_id", event.standingZoneId(), "ticket_type_id", event.vipPriceTierId()));
+
+        client.post().uri("/api/v1/admin/events/{id}/zone-prices/preview", event.id())
+                .headers(h -> h.setBearerAuth(token)).contentType(MediaType.APPLICATION_JSON)
+                .body(body).exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.total_sku_count").isEqualTo(beforeSkus.size())
+                .jsonPath("$.standing_sku_count").isEqualTo(1);
+        assertThat(zoneRows(event.id())).isEqualTo(before);
+        assertThat(skuIds(event.id())).containsExactlyElementsOf(beforeSkus);
+
+        put(event.id(), "zone-prices", body).expectStatus().isOk().expectBody()
+                .jsonPath("$.total_sku_count").isEqualTo(beforeSkus.size());
+        var saved = skuIds(event.id());
+        assertThat(saved).hasSameSizeAs(beforeSkus);
+        put(event.id(), "zone-prices", body).expectStatus().isOk();
+        assertThat(skuIds(event.id())).containsExactlyElementsOf(saved);
+
+        put(event.id(), "zone-prices", List.of(Map.of(
+                "zone_id", event.seatedZoneId(), "ticket_type_id", event.vipPriceTierId(),
+                "price_tier_id", event.gaPriceTierId())))
+                .expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+        assertThat(skuIds(event.id())).containsExactlyElementsOf(saved);
+    }
+
+    private List<UUID> skuIds(UUID eventId) {
+        return jdbc.sql("SELECT id FROM sku WHERE event_id = :event ORDER BY id")
+                .param("event", eventId).query(UUID.class).list();
     }
 
     @Test
@@ -239,7 +276,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
 
         assertThat(before).hasSize(2);
         assertThat(before).allSatisfy(row
-                -> assertThat(row.get("sku_id"))
+                -> assertThat(row.get("ticket_type_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
 
@@ -360,7 +397,7 @@ class AdminEventPricingIntegrationTest extends IntegrationTest {
         )).expectStatus().isOk();
 
         assertThat(zoneRows(event.id())).allSatisfy(row
-                -> assertThat(row.get("sku_id"))
+                -> assertThat(row.get("ticket_type_id"))
                         .isEqualTo(event.vipPriceTierId())
         );
     }

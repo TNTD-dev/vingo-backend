@@ -50,7 +50,7 @@ public class TicketEmailRenderer {
                 SELECT t.code, t.status::text AS status, o.code AS order_code, e.title, s.starts_at, v.name AS venue,
                     COALESCE(ez.display_name, z.name) AS zone,
                     CASE WHEN se.id IS NULL THEN 'Khu đứng' ELSE se.row_label || se.number::text END AS seat,
-                    sk.name AS tier
+                    tt.name AS tier
                 FROM ticket t
                 JOIN ticket_order o ON o.id = t.order_id
                 JOIN showtime s ON s.id = t.showtime_id
@@ -61,8 +61,8 @@ public class TicketEmailRenderer {
                 JOIN zone z ON z.id = COALESCE(t.zone_id, se.zone_id)
                 LEFT JOIN order_seat os ON os.order_id = t.order_id AND os.seat_id = t.seat_id
                 LEFT JOIN order_standing ost ON ost.order_id = t.order_id AND ost.zone_id = t.zone_id
-                JOIN sku_price sp ON sp.id = COALESCE(os.sku_price_id, ost.sku_price_id)
-                JOIN sku sk ON sk.id = sp.sku_id
+                JOIN ticket_type_price ttp ON ttp.id = COALESCE(os.ticket_type_price_id, ost.ticket_type_price_id)
+                JOIN ticket_type tt ON tt.id = ttp.ticket_type_id
                 LEFT JOIN event_zone ez ON ez.event_id = e.id AND ez.zone_id = z.id
                 WHERE t.id IN (:ids) AND t.status IN ('ISSUED','USED') AND o.status='PAID'
                 ORDER BY s.starts_at, t.code

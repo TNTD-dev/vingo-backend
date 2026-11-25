@@ -131,12 +131,25 @@ class EventSearchRepository {
         if (c.priceMin() != null || c.priceMax() != null) {
             where.append("""
                      AND EXISTS (SELECT 1 FROM event_zone ez
+                                 JOIN zone z ON z.id = ez.zone_id AND z.seat_map_id = ez.seat_map_id
                                  JOIN LATERAL (
-                                     SELECT price FROM sku_price
-                                     WHERE sku_id = ez.sku_id AND effective_from <= :now
+                                     SELECT price FROM ticket_type_price
+                                     WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= :now
                                      ORDER BY effective_from DESC LIMIT 1
                                  ) pt ON true
-                                 WHERE ez.event_id = e.id""");
+                                 WHERE ez.event_id = e.id
+                                   AND EXISTS (
+                                       SELECT 1 FROM sku sk
+                                       WHERE sk.event_id = e.id
+                                         AND sk.ticket_type_id = ez.ticket_type_id
+                                         AND (
+                                             (z.kind = 'SEATED' AND EXISTS (
+                                                 SELECT 1 FROM seat se
+                                                 WHERE se.id = sk.seat_id AND se.zone_id = z.id
+                                             ))
+                                             OR (z.kind = 'STANDING' AND sk.zone_id = z.id)
+                                         )
+                                   )""");
             if (c.priceMin() != null) {
                 where.append(" AND pt.price >= :price_min");
                 params.put("price_min", c.priceMin());
@@ -193,12 +206,25 @@ class EventSearchRepository {
                     LEFT JOIN LATERAL (
                         SELECT min(pt.price) AS price_from
                         FROM event_zone ez
+                        JOIN zone z ON z.id = ez.zone_id AND z.seat_map_id = ez.seat_map_id
                         JOIN LATERAL (
-                            SELECT price FROM sku_price
-                            WHERE sku_id = ez.sku_id AND effective_from <= :now
+                            SELECT price FROM ticket_type_price
+                            WHERE ticket_type_id = ez.ticket_type_id AND effective_from <= :now
                             ORDER BY effective_from DESC LIMIT 1
                         ) pt ON true
                         WHERE ez.event_id = e.id
+                          AND EXISTS (
+                              SELECT 1 FROM sku sk
+                              WHERE sk.event_id = e.id
+                                AND sk.ticket_type_id = ez.ticket_type_id
+                                AND (
+                                    (z.kind = 'SEATED' AND EXISTS (
+                                        SELECT 1 FROM seat se
+                                        WHERE se.id = sk.seat_id AND se.zone_id = z.id
+                                    ))
+                                    OR (z.kind = 'STANDING' AND sk.zone_id = z.id)
+                                )
+                          )
                     ) pf ON true
                     %s
                     WHERE %s
