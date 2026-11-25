@@ -7,7 +7,9 @@ info:
 
     Quy ước chung
     - Base URL: /api/v1. JSON UTF-8.
-    - Auth: `Authorization: Bearer <access_token>` (JWT 15 phút). Refresh token xoay vòng qua /auth/refresh.
+    - Auth: `Authorization: Bearer <session_token>` hoặc cookie phiên HttpOnly. Khi ghi bằng cookie, gửi Origin của frontend. Hạn phiên mặc định là 7 ngày tính từ lúc đăng nhập.
+    - Đăng nhập thành công ghi nhận cookie thiết bị HttpOnly `__Host-vingo_device` (`vingo_device` khi chạy HTTP local), hạn 1 năm. Cookie này chỉ dùng cho cảnh báo thiết bị mới và được giữ khi đăng xuất.
+    - POST/PUT/PATCH/DELETE từ Origin khác frontend trả 403, kể cả khi chưa đăng nhập. Bearer không cần Origin.
     - Vai trò: BUYER, ADMIN. Endpoint /admin/* chỉ cho ADMIN.
     - Tiền là số nguyên VND. Thời gian ISO 8601 UTC.
     - Lỗi trả `application/problem+json` (RFC 9457) kèm trường `code`.
@@ -31,6 +33,7 @@ tags:
   - name: Admin Reports
 security:
   - bearerAuth: []
+  - sessionCookie: []
 
 paths:
   # ------------------------------------------------------------------ Auth
@@ -63,7 +66,8 @@ paths:
     post:
       operationId: verifyOtp
       tags: [Auth]
-      summary: Xác thực OTP, kích hoạt tài khoản và cấp token
+      summary: Xác thực OTP, kích hoạt tài khoản và mở phiên
+      description: Đặt cookie phiên HttpOnly sau khi xác minh email.
       security: []
       requestBody:
         required: true
@@ -77,10 +81,13 @@ paths:
                 otp: { type: string, pattern: '^[0-9]{6}$' }
       responses:
         '200':
-          description: Thành công
+          description: Thành công, trả cookie phiên HttpOnly
+          headers:
+            Set-Cookie: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
+              schema: { $ref: '#/components/schemas/LoginResult' }
         '400':
           description: OTP sai hoặc hết hạn (OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS)
           content:
@@ -139,13 +146,15 @@ paths:
               properties:
                 identifier: { type: string, description: Email đăng nhập }
                 password: { type: string, format: password }
-                device: { type: string, description: Tên thiết bị để quản lý phiên }
       responses:
         '200':
-          description: Thành công
+          description: Thành công, trả cookie phiên HttpOnly
+          headers:
+            Set-Cookie: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
+              schema: { $ref: '#/components/schemas/LoginResult' }
         '401':
           description: Sai thông tin (INVALID_CREDENTIALS)
           content:
@@ -178,10 +187,13 @@ paths:
                 id_token: { type: string }
       responses:
         '200':
-          description: Thành công
+          description: Thành công, trả cookie phiên HttpOnly
+          headers:
+            Set-Cookie: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPair' }
+              schema: { $ref: '#/components/schemas/LoginResult' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       operationId: startGoogleLogin
@@ -211,57 +223,17 @@ paths:
       operationId: completeGoogleLogin
       tags: [Auth]
       summary: Nhận callback từ Google
-      description: Spring Security xử lý callback. Thành công đặt cookie refresh HttpOnly và chuyển về web với google_login=created hoặc google_login=success. Thất bại chuyển về web với google_login=failed hoặc google_login=email_taken.
+      description: Spring Security xử lý callback. Thành công đặt cookie phiên HttpOnly và chuyển về web với google_login=created hoặc google_login=success. Thất bại chuyển về web với google_login=failed hoặc google_login=email_taken.
       security: []
       responses:
         '302': { description: Chuyển hướng về web }
         '404': { $ref: '#/components/responses/GoogleLoginDisabled' }
-  /auth/refresh:
-    post:
-      operationId: refreshToken
-      tags: [Auth]
-      summary: Cấp access token và xoay vòng refresh token
-      description: Trình duyệt gửi cookie refresh và Origin của web. Client khác có thể gửi refresh_token trong JSON. Với cookie, refresh token mới chỉ được gửi qua Set-Cookie.
-      security: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [refresh_token]
-              properties:
-                refresh_token: { type: string }
-      responses:
-        '200':
-          description: Thành công
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/RefreshResult' }
-        '400':
-          description: Body JSON thiếu refresh_token
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Dữ liệu không hợp lệ, status: 400, code: VALIDATION_ERROR, detail: Có trường không hợp lệ }
-        '401':
-          description: Thiếu refresh token hoặc refresh token không hợp lệ
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Refresh token không hợp lệ hoặc đã hết hạn }
-        '403':
-          description: Origin gửi cookie refresh không được phép
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Không có quyền, status: 403, code: FORBIDDEN, detail: Origin không được phép làm mới phiên }
   /auth/logout:
     post:
       operationId: logout
       tags: [Auth]
       summary: Đăng xuất phiên hiện tại hoặc tất cả thiết bị
-      description: Thu hồi refresh token của phiên trong access token, hoặc tất cả phiên của user. Xoá cookie refresh trên trình duyệt.
+      description: Thu hồi phiên hiện tại hoặc mọi phiên của mình và xoá cookie.
       requestBody:
         content:
           application/json:
@@ -272,11 +244,11 @@ paths:
       responses:
         '204': { description: Đã thu hồi phiên }
         '401':
-          description: Thiếu hoặc sai bearer access token
+          description: Thiếu phiên hoặc phiên không hợp lệ
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Thiếu hoặc sai access token }
+              example: { title: Chưa đăng nhập, status: 401, code: UNAUTHORIZED, detail: Thiếu phiên hoặc phiên không hợp lệ }
   /auth/password/forgot:
     post:
       operationId: forgotPassword
@@ -335,7 +307,7 @@ paths:
       operationId: updateMe
       tags: [Me]
       summary: Sửa tên, số điện thoại hoặc đổi mật khẩu
-      description: Cập nhật hồ sơ của tài khoản hiện tại. Số điện thoại liên hệ có thể trùng với tài khoản khác.
+      description: Cập nhật hồ sơ của tài khoản hiện tại. Số điện thoại liên hệ có thể trùng với tài khoản khác. Đổi mật khẩu thay token trong cookie hiện tại, giữ nguyên hạn phiên ban đầu và thu hồi các phiên khác.
       requestBody:
         required: true
         content:
@@ -366,6 +338,32 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
               example: { title: Trạng thái không hợp lệ, status: 409, code: ACTION_STATE_INVALID, detail: Không thể xóa ADMIN hoạt động cuối cùng. }
+  /me/sessions:
+    get:
+      operationId: listSessions
+      tags: [Me]
+      description: Liệt kê các phiên còn hiệu lực của mình, theo lần hoạt động gần nhất.
+      responses:
+        '200':
+          description: Các thiết bị đang đăng nhập
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SessionInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/sessions/{session_id}:
+    delete:
+      operationId: deleteSession
+      tags: [Me]
+      description: Thu hồi một phiên của mình. Xóa cookie khi thu hồi phiên hiện tại.
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Đã thu hồi phiên }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /me/stream:
     get:
       operationId: streamMyEvents
@@ -374,8 +372,7 @@ paths:
       description: |
         Sự kiện: order.held, order.paid, order.expired, order.needs_review, payment.failed,
         ticket.issued. Chỉ nhận sự kiện của chính người dùng đang đăng nhập.
-        Gửi header Authorization: Bearer <access_token>; trên trình duyệt dùng fetch vì EventSource
-        không gửi được header Authorization. Không đưa token lên query string.
+        Trình duyệt dùng cookie phiên, client khác có thể gửi Bearer. Không đưa token lên query string.
         Nối lại kèm header Last-Event-ID để phát lại sự kiện trong cửa sổ 5 phút, có độ lùi 10 giây:
         sự kiện có thể trùng, client tự khử trùng theo id; không phát lại chính id đã gửi trong header.
         Last-Event-ID hỏng, không phải UUID, không tồn tại, của người khác hoặc quá 5 phút
@@ -383,7 +380,7 @@ paths:
         Không gửi Last-Event-ID thì không phát lại (sự kiện commit sát lúc kết nối vẫn có thể tới);
         client mở stream trước rồi mới tải trạng thái hiện tại bằng REST.
         Server gửi SSE comment ping khoảng mỗi 20 giây để giữ kết nối.
-        Stream đóng khi token hết hạn hoặc khi mở quá 5 kết nối cùng user (đóng kết nối cũ nhất);
+        Stream đóng sau tối đa 15 phút, khi phiên hết hạn hoặc khi mở quá 5 kết nối cùng user (đóng kết nối cũ nhất);
         client nối lại, dùng token mới nếu token đã hết hạn.
       parameters:
         - name: Last-Event-ID
@@ -635,7 +632,7 @@ paths:
       summary: Giữ ghế 10 phút và tạo đơn PENDING (tất cả hoặc không)
       description: |
         Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
-        JWT yêu cầu tài khoản đã xác minh email.
+        Phiên yêu cầu tài khoản đã xác minh email.
         Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
         Nếu khách đã có đơn PENDING còn hạn cho suất này → 409 ORDER_STATE_INVALID; muốn đổi ghế thì huỷ rồi giữ lại.
         Vượt max_tickets_per_order của sự kiện (tính cả ghế cặp) → 422 MAX_TICKETS_EXCEEDED.
@@ -1109,7 +1106,7 @@ paths:
         locked=false chỉ mở tài khoản đã ACTIVE trước khi bị khóa, không xác minh tài khoản UNVERIFIED.
         Đổi quyền chỉ áp dụng tài khoản ACTIVE hoặc LOCKED. Không tự hạ quyền/tự khóa và không làm mất ADMIN ACTIVE cuối cùng.
         Tài khoản DELETED không được sửa. Cấp ADMIN yêu cầu tài khoản đã có mật khẩu vì Google login chỉ hỗ trợ BUYER.
-        Khi có thay đổi, vô hiệu JWT cũ, thu hồi refresh sessions và ghi audit trong cùng transaction; người dùng đăng nhập lại.
+        Khi có thay đổi, thu hồi mọi phiên và ghi audit trong cùng transaction; người dùng đăng nhập lại.
         Gọi lại cùng trạng thái không tạo thêm thay đổi/audit. Không hỗ trợ xóa user hay sửa thông tin cá nhân qua API này.
         Lỗi: 400 VALIDATION_ERROR khi body/ràng buộc trạng thái không hợp lệ; 403 FORBIDDEN khi tự hạ quyền/tự khóa;
         404 NOT_FOUND; 409 ACTION_STATE_INVALID khi ảnh hưởng ADMIN cuối cùng; 401 UNAUTHORIZED.
@@ -2692,7 +2689,12 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-vingo_session
+      description: Dùng vingo_session khi chạy HTTP local.
 
   parameters:
     EventId: { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2754,7 +2756,7 @@ components:
             title: Chưa đăng nhập
             status: 401
             code: UNAUTHORIZED
-            detail: Thiếu hoặc sai access token
+            detail: Thiếu phiên hoặc phiên không hợp lệ
     Forbidden:
       description: FORBIDDEN
       content:
@@ -2868,23 +2870,27 @@ components:
         otp_session_id: { type: string, format: uuid }
         expires_at: { type: string, format: date-time }
         channel: { type: string, enum: [EMAIL] }
-    TokenPair:
+    LoginResult:
       type: object
-      required: [access_token, refresh_token, expires_in, user]
+      required: [user]
       properties:
-        access_token: { type: string }
-        refresh_token: { type: string }
-        expires_in: { type: integer, description: Giây }
         user: { $ref: '#/components/schemas/User' }
-    RefreshResult:
+    SessionInfo:
       type: object
-      required: [access_token, expires_in, user]
+      required: [id, user_agent, last_ip, created_at, last_seen_at, expires_at, current]
       properties:
-        access_token: { type: string }
-        profile_completed: { type: boolean, description: Đã khai báo đủ hồ sơ người mua để thanh toán }
-        refresh_token: { type: string, description: Chỉ có khi refresh token được gửi trong JSON }
-        expires_in: { type: integer, description: Giây }
-        user: { $ref: '#/components/schemas/User' }
+        id: { type: string, format: uuid }
+        user_agent:
+          type: [string, 'null']
+          maxLength: 512
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        last_ip:
+          type: [string, 'null']
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time, description: Lần hoạt động gần nhất để hiển thị trong danh sách thiết bị. }
+        expires_at: { type: string, format: date-time }
+        current: { type: boolean }
     User:
       type: object
       properties:

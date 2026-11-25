@@ -74,11 +74,11 @@ class VenueImportIntegrationTest extends IntegrationTest {
         uploadResponse(client,token,id,rev,bytes(BASE),"text/plain").expectStatus().isEqualTo(415);
         var upload=new vingo.catalog.VenueImportService.Upload("large.svg",new byte[10*1024*1024+1]);
         var service=applicationImports;
+        UUID owner = jdbc.sql("SELECT owner_id FROM venue_import_session WHERE id=:id").param("id",id).query(UUID.class).single();
+        var principal = new vingo.shared.security.AuthenticatedUser(owner, Role.ADMIN, UUID.randomUUID(), catalog.now().plusDays(1));
         org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
-            new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(
-                org.springframework.security.oauth2.jwt.Jwt.withTokenValue("test").header("alg","HS256")
-                    .subject(jdbc.sql("SELECT owner_id FROM venue_import_session WHERE id=:id").param("id",id).query(UUID.class).single().toString())
-                    .claim("role","ADMIN").build(),List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))));
+                org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(principal, null,
+                        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))));
         try { assertThatThrownBy(()->service.upload(id,rev,List.of(upload))).isInstanceOf(vingo.shared.error.DomainException.class)
                 .extracting(ex->((vingo.shared.error.DomainException)ex).code()).isEqualTo(vingo.shared.error.ErrorCode.PAYLOAD_TOO_LARGE); }
         finally {org.springframework.security.core.context.SecurityContextHolder.clearContext();}

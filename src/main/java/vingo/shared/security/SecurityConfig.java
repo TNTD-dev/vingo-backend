@@ -1,31 +1,15 @@
 package vingo.shared.security;
 
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.security.oauth2.core.OAuth2TokenValidator;
-import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
@@ -44,12 +28,14 @@ public class SecurityConfig {
     SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthenticationHandlers handlers) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .logout(logout -> logout.disable())
+                .requestCache(cache -> cache.disable())
                 .cors(Customizer.withDefaults())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST,
                                 API + "/auth/register", API + "/auth/otp/verify", API + "/auth/otp/resend",
-                                API + "/auth/login", API + "/auth/google", API + "/auth/refresh",
+                                API + "/auth/login", API + "/auth/google",
                                 API + "/auth/password/forgot", API + "/auth/password/reset").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 API + "/auth/google", API + "/auth/oauth2/callback/google",
@@ -64,39 +50,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, API + "/checkins").hasRole(Role.ADMIN.name())
                         .requestMatchers(API + "/**").hasAnyRole(Role.BUYER.name(), Role.ADMIN.name())
                         .anyRequest().denyAll())
-                .oauth2ResourceServer(o -> o
-                        .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
-                        .authenticationEntryPoint(handlers)
-                        .accessDeniedHandler(handlers))
                 .exceptionHandling(e -> e.authenticationEntryPoint(handlers).accessDeniedHandler(handlers));
         return http.build();
     }
 
     @Bean
-    JwtDecoder jwtDecoder(JwtProperties props, ObjectProvider<OAuth2TokenValidator<Jwt>> validators) {
-        var decoder = NimbusJwtDecoder.withSecretKey(secretKey(props)).macAlgorithm(MacAlgorithm.HS256).build();
-        var checks = new java.util.ArrayList<OAuth2TokenValidator<Jwt>>();
-        checks.add(JwtValidators.createDefault());
-        validators.orderedStream().forEach(checks::add);
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(checks));
-        return decoder;
-    }
-
-    @Bean
     public PasswordEncoder passwordEncoder() {
         return Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
-    }
-
-    public static SecretKey secretKey(JwtProperties props) {
-        return new SecretKeySpec(props.secret().getBytes(StandardCharsets.UTF_8), "HmacSHA256");
-    }
-
-    private static JwtAuthenticationConverter jwtAuthenticationConverter() {
-        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
-            String role = jwt.getClaimAsString(CurrentUser.ROLE_CLAIM);
-            return role == null ? List.of() : List.of(new SimpleGrantedAuthority("ROLE_" + role));
-        });
-        return converter;
     }
 }

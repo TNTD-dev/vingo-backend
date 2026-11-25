@@ -20,12 +20,15 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
+import vingo.auth.AuthService;
+import vingo.auth.internal.LoginClient;
 import vingo.notifications.internal.*;
 import vingo.support.IntegrationTest;
 import vingo.shared.error.DomainException;
@@ -98,6 +101,31 @@ class NotificationsIntegrationTest extends IntegrationTest {
                     .containsExactly("vingo-logo","vingo-mascot-celebrate");
         });
         assertThat(dispatcher.dispatchOne()).isFalse();
+    }
+    @Test
+    void workerRetriesNewDeviceAlertAfterProviderFailure_withoutInvalidatingLogin(
+            @Autowired AuthService auth, @Autowired PasswordEncoder passwords) {
+        String email = UUID.randomUUID() + "@device.test";
+        String password = "Device-test-password";
+        jdbc.sql("INSERT INTO user_account(email,full_name,password_hash,email_verified_at) VALUES (:email,'Buyer',:hash,now())")
+                .param("email", email).param("hash", passwords.encode(password)).update();
+        sender.failure = new DeliveryException(true, "EMAIL_HTTP_503", 0);
+        auth.login(email, password, new LoginClient("First browser", null, null));
+        var session = auth.login(email, password, new LoginClient("Browser <mobile>", null, null));
+        UUID id = jdbc.sql("SELECT id FROM notification_outbox WHERE recipient=:email AND template='NEW_DEVICE'")
+                .param("email", email).query(UUID.class).single();
+        assertThat(sender.calls.get()).isZero();
+        assertThat(dispatcher.dispatchOne()).isTrue();
+        assertThat(state(id)).isEqualTo("PENDING");
+        assertThat(auth.authenticate(session.token(), "Browser <mobile>", null, false)).isPresent();
+        due(id);
+        sender.failure = null;
+        assertThat(dispatcher.dispatchOne()).isTrue();
+        assertThat(state(id)).isEqualTo("SENT");
+        assertThat(sender.payloads.getLast().html()).contains("Browser &lt;mobile&gt;", "Không xác định",
+                "href=\"http://localhost:3000/forgot-password\"");
+        assertThat(sender.ids).containsExactly(id, id);
+        assertThat(content(id)).doesNotContain(session.token(), session.newDeviceToken());
     }
     /** Ép thư đến hạn để kiểm đủ năm lỗi gửi mà không chờ thời gian thực. */
     @Test

@@ -1,31 +1,24 @@
 package vingo.support;
 
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
+import java.net.HttpCookie;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.context.annotation.Profile;
-import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
-import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import vingo.shared.security.CurrentUser;
-import vingo.shared.security.JwtProperties;
+import vingo.auth.internal.TokenSecrets;
 import vingo.shared.security.Role;
-import vingo.shared.security.SecurityConfig;
 
 /**
  * Base class cho test integration: PostgreSQL 18 thật (Testcontainers), Flyway đã chạy, client gọi API.
@@ -54,9 +47,6 @@ public abstract class IntegrationTest {
     @Autowired
     protected MutableClock clock;
 
-    @Autowired
-    private JwtProperties jwtProperties;
-
     /** Dựng sân, sự kiện, suất, tồn kho cho test booking. */
     protected CatalogFixture catalog;
 
@@ -81,7 +71,7 @@ public abstract class IntegrationTest {
         catalog = new CatalogFixture(jdbc, clock);
     }
 
-    /** Tạo user trong DB và trả access token hợp lệ của user đó. */
+    /** Tạo user trong DB và trả token phiên hợp lệ của user đó. */
     protected String tokenFor(Role role) {
         UUID userId = jdbc.sql("""
                         INSERT INTO user_account (email, full_name, password_hash, role, email_verified_at, phone)
@@ -97,16 +87,20 @@ public abstract class IntegrationTest {
     }
 
     protected String tokenFor(UUID userId, Role role) {
-        var encoder = NimbusJwtEncoder.withSecretKey(SecurityConfig.secretKey(jwtProperties)).build();
-        Instant now = Instant.now();
-        var claims = JwtClaimsSet.builder()
-                .issuer(jwtProperties.issuer())
-                .subject(userId.toString())
-                .claim(CurrentUser.ROLE_CLAIM, role.name())
-                .issuedAt(now)
-                .expiresAt(now.plus(15, ChronoUnit.MINUTES))
-                .build();
-        var header = JwsHeader.with(MacAlgorithm.HS256).build();
-        return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+        // Fixtures remain valid when a scenario advances or resets the business clock.
+        String token = TokenSecrets.generate();
+        var now = catalog.now();
+        jdbc.sql("""
+                INSERT INTO login_session (user_id, token_hash, created_at, last_seen_at, expires_at)
+                VALUES (:id, :hash, :now, :now, :expires)
+                """).param("id", userId).param("hash", TokenSecrets.hash(token))
+                .param("now", now).param("expires", now.plusYears(100)).update();
+        return token;
+    }
+
+    protected static String sessionToken(HttpHeaders headers) {
+        return headers.getOrEmpty(HttpHeaders.SET_COOKIE).stream().flatMap(line -> HttpCookie.parse(line).stream())
+                .filter(cookie -> cookie.getName().equals("vingo_session") || cookie.getName().equals("__Host-vingo_session"))
+                .findFirst().orElseThrow().getValue();
     }
 }

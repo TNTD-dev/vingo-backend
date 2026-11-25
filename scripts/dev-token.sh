@@ -1,42 +1,19 @@
 #!/usr/bin/env bash
-# Tạo access token JWT (HS256) cho user seed, ký bằng JWT_SECRET local. Chỉ dùng trên máy dev.
-#
-#   scripts/dev-token.sh buyer      # buyer@vingo.local  (BUYER)
-#   scripts/dev-token.sh buyer2     # buyer2@vingo.local (BUYER, chủ các đơn "của người khác")
-#   scripts/dev-token.sh buyer3     # buyer3@vingo.local (BUYER, chưa có hồ sơ người mua)
-#   scripts/dev-token.sh admin      # admin@vingo.local  (ADMIN)
-#   TTL_HOURS=1 scripts/dev-token.sh buyer
-#
-# Claim giống AuthService: sub = user id, role, sid = id phiên seed. Secret lấy từ biến môi trường
-# JWT_SECRET, rồi đến JWT_SECRET trong .env.local, không có thì dùng giá trị mặc định của application-local.yml.
+# Mint a fresh local session for a seeded account. Only stdout contains the credential.
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PREFIX="01970000-0000-7000-8000-00000000"
-
+root="$(cd "$(dirname "$0")/.." && pwd)"
 case "${1:-}" in
-  admin)  user="${PREFIX}0001"; role=ADMIN; session="${PREFIX}0701" ;;
-  buyer)  user="${PREFIX}0002"; role=BUYER; session="${PREFIX}0702" ;;
-  buyer2) user="${PREFIX}0003"; role=BUYER; session="${PREFIX}0703" ;;
-  buyer3) user="${PREFIX}0004"; role=BUYER; session="${PREFIX}0704" ;;
-  *) echo "Dùng: $0 admin|buyer|buyer2|buyer3" >&2; exit 2 ;;
+  admin|buyer|buyer2|buyer3) email="$1@vingo.local" ;;
+  *) echo "Usage: $0 admin|buyer|buyer2|buyer3" >&2; exit 2 ;;
 esac
-
-# Cùng thứ tự với Spring: biến môi trường đã export thắng giá trị import từ .env.local.
-secret="${JWT_SECRET:-}"
-if [[ -z "$secret" && -f "$ROOT/.env.local" ]]; then
-  secret="$(grep -E '^JWT_SECRET=' "$ROOT/.env.local" | tail -1 | cut -d= -f2- | sed -E 's/^["'\'']//; s/["'\'']$//' || true)"
-fi
-secret="${secret:-local-dev-secret-change-me-at-least-32-bytes}"
-
-b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-
-now=$(date +%s)
-exp=$((now + ${TTL_HOURS:-12} * 3600))
-header=$(printf '{"alg":"HS256","typ":"JWT"}' | b64url)
-payload=$(printf '{"iss":"vingo","sub":"%s","role":"%s","sid":"%s","iat":%d,"exp":%d}' \
-  "$user" "$role" "$session" "$now" "$exp" | b64url)
-key_hex=$(printf '%s' "$secret" | xxd -p | tr -d '\n')
-signature=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key_hex" -binary | b64url)
-
-echo "$header.$payload.$signature"
+ttl="${AUTH_SESSION_TTL:-P7D}"
+token="$(openssl rand 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+hash="$(printf '%s' "$token" | openssl dgst -sha256 -r | cut -d' ' -f1)"
+docker compose -f "$root/deploy/compose.dev.yaml" exec -T postgres psql -Xq -U vingo -d vingo \
+  -v ON_ERROR_STOP=1 -v email="$email" -v hash="$hash" -v ttl="$ttl" <<'SQL'
+INSERT INTO login_session (user_id, token_hash, expires_at, user_agent)
+VALUES ((SELECT id FROM user_account WHERE email = :'email' AND deleted_at IS NULL
+         AND email_verified_at IS NOT NULL AND NOT admin_locked),
+        :'hash', now() + :'ttl'::interval, 'dev-token.sh');
+SQL
+printf '%s\n' "$token"

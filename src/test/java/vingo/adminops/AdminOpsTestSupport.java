@@ -17,8 +17,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.web.servlet.client.RestTestClient.ResponseSpec;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -28,7 +26,8 @@ import vingo.booking.ReviewReason;
 import vingo.booking.SaleOutcome;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
-import vingo.shared.security.CurrentUser;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import vingo.shared.security.AuthenticatedUser;
 import vingo.shared.security.Role;
 import vingo.support.CatalogFixture.Showtime;
 import vingo.support.IntegrationTest;
@@ -405,9 +404,8 @@ abstract class AdminOpsTestSupport extends IntegrationTest {
     protected void assertServiceRejectsBuyer(Runnable action) {
         var previous = SecurityContextHolder.getContext();
         var context = SecurityContextHolder.createEmptyContext();
-        var jwt = Jwt.withTokenValue("test-buyer").header("alg", "HS256")
-                .subject(buyer.toString()).claim(CurrentUser.ROLE_CLAIM, "BUYER").build();
-        context.setAuthentication(new JwtAuthenticationToken(jwt));
+        var principal = new AuthenticatedUser(buyer, Role.BUYER, UUID.randomUUID(), catalog.now().plusDays(1));
+        context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of()));
         try {
             SecurityContextHolder.setContext(context);
             assertThatThrownBy(action::run).isInstanceOfSatisfying(DomainException.class,

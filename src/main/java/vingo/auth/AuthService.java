@@ -6,7 +6,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 
 import jakarta.validation.Validator;
@@ -15,12 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
-import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
@@ -28,14 +24,16 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
-import vingo.auth.internal.AuthProperties;
+import vingo.auth.internal.LoginClient;
+import vingo.auth.internal.LoginSessions;
 import vingo.auth.internal.AuthRepository;
 import vingo.auth.internal.AuthRepository.OtpPurpose;
 import vingo.auth.internal.AuthRepository.OtpRecord;
 import vingo.auth.internal.AdminAccountRepository;
 import vingo.api.model.AdminAccount;
+import vingo.api.model.SessionInfo;
+import vingo.shared.security.AuthenticatedUser;
 import vingo.api.model.RegisterRequest;
-import vingo.auth.internal.AccountSecurityState;
 import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.LoginProperties;
 import vingo.auth.internal.OtpProperties;
@@ -46,10 +44,6 @@ import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.ratelimit.RateLimitedException;
 import vingo.shared.ratelimit.RateLimiter;
-import vingo.shared.security.CurrentUser;
-import vingo.shared.security.JwtProperties;
-import vingo.shared.security.Role;
-import vingo.shared.security.SecurityConfig;
 
 /**
  * Đăng ký, đăng nhập, OTP email và quản lý tài khoản.
@@ -67,9 +61,7 @@ public class AuthService {
 
     private final AuthRepository accounts;
     private final AdminAccountRepository administration;
-    private final AccountSecurityState securityState;
-    private final JwtProperties jwt;
-    private final AuthProperties authProperties;
+    private final LoginSessions loginSessions;
     private final LoginProperties loginProperties;
     private final OtpProperties otpProperties;
     private final Validator validator;
@@ -78,19 +70,14 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final TransactionTemplate tx;
     private final Clock clock;
-    private final JwtEncoder encoder;
 
-    /** Dùng cùng cấu hình ký JWT mà resource server dùng để xác minh. */
-    AuthService(AuthRepository accounts, AdminAccountRepository administration, JwtProperties jwt, AuthProperties authProperties,
+    AuthService(AuthRepository accounts, AdminAccountRepository administration, LoginSessions loginSessions,
                 LoginProperties loginProperties, OtpProperties otpProperties, Validator validator,
                 NotificationsService notifications, RateLimiter rateLimiter,
-                PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock,
-                AccountSecurityState securityState) {
+                PasswordEncoder passwordEncoder, PlatformTransactionManager txManager, Clock clock) {
         this.accounts = accounts;
         this.administration = administration;
-        this.securityState = securityState;
-        this.jwt = jwt;
-        this.authProperties = authProperties;
+        this.loginSessions = loginSessions;
         this.loginProperties = loginProperties;
         this.otpProperties = otpProperties;
         this.validator = validator;
@@ -99,7 +86,6 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
         this.tx = new TransactionTemplate(txManager);
         this.clock = clock;
-        this.encoder = NimbusJwtEncoder.withSecretKey(SecurityConfig.secretKey(jwt)).build();
     }
 
     /**
@@ -152,10 +138,10 @@ public class AuthService {
     }
 
     /**
-     * Xác thực OTP email, xác minh tài khoản và cấp cặp token.
+     * Xác thực OTP email, xác minh tài khoản và mở phiên.
      */
-    public AuthResponse verifyOtp(UUID otpId, String rawOtp) {
-        VerifyOutcome outcome = tx.execute(status -> verifyOtpInTransaction(otpId, rawOtp));
+    public AuthResponse verifyOtp(UUID otpId, String rawOtp, LoginClient client) {
+        VerifyOutcome outcome = tx.execute(status -> verifyOtpInTransaction(otpId, rawOtp, client));
         if (outcome instanceof VerifyOutcome.Failure(var code, var message)) {
             throw new DomainException(code, message);
         }
@@ -167,7 +153,7 @@ public class AuthService {
         return success.response();
     }
 
-    private VerifyOutcome verifyOtpInTransaction(UUID otpId, String rawOtp) {
+    private VerifyOutcome verifyOtpInTransaction(UUID otpId, String rawOtp, LoginClient client) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         var found = accounts.findOtpForUpdate(otpId);
         if (found.isEmpty()) {
@@ -193,12 +179,7 @@ public class AuthService {
         accounts.consumeOtp(otp.id(), now);
         accounts.activateUser(otp.userId(), now);
         AuthUser activeUser = accounts.findEditableAccount(otp.userId()).orElseThrow().user();
-        String refreshToken = TokenSecrets.generate();
-        OffsetDateTime expiresAt = now.plus(authProperties.refreshTokenTtl());
-        UUID sessionId = accounts.createSession(activeUser.id(), TokenSecrets.hash(refreshToken), expiresAt);
-        String accessToken = issueAccessToken(activeUser.id(), activeUser.role(), sessionId, now);
-        return new VerifyOutcome.Success(new AuthResponse(accessToken, refreshToken, expiresAt,
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), activeUser));
+        return new VerifyOutcome.Success(loginSessions.open(activeUser, now, client));
     }
 
     /**
@@ -384,23 +365,23 @@ public class AuthService {
     }
 
     /**
-     * Xác thực email và mật khẩu, ghi nhận lần sai và cấp cặp token khi hợp lệ.
+     * Xác thực email và mật khẩu, ghi nhận lần sai và mở phiên khi hợp lệ.
      */
-    public AuthResponse login(String identifier, String password, String device) {
+    public AuthResponse login(String identifier, String password, LoginClient client) {
         String email = identifier == null ? "" : identifier.strip();
         if (!StringUtils.hasText(email) || !StringUtils.hasText(password)
                 || !validator.validateValue(RegisterRequest.class, "email", email).isEmpty()) {
             throw invalidCredentials();
         }
 
-        LoginOutcome outcome = tx.execute(status -> authenticateInTransaction(email, password));
+        LoginOutcome outcome = tx.execute(status -> authenticateInTransaction(email, password, client));
         if (outcome instanceof LoginOutcome.Failure(var code, var message)) {
             throw new DomainException(code, message);
         }
         return ((LoginOutcome.Success) outcome).response();
     }
 
-    private LoginOutcome authenticateInTransaction(String email, String rawPassword) {
+    private LoginOutcome authenticateInTransaction(String email, String rawPassword, LoginClient client) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         var found = accounts.findForPasswordLogin(email);
         if (found.isEmpty()) {
@@ -409,7 +390,7 @@ public class AuthService {
 
         var account = found.get();
         var user = account.user();
-        if (securityState.locked(user.id())) {
+        if (account.adminLocked()) {
             return new LoginOutcome.Failure(ErrorCode.ACCOUNT_LOCKED, "Tài khoản đã bị quản trị viên khóa");
         }
         if ("LOCKED".equals(user.status())) {
@@ -428,27 +409,24 @@ public class AuthService {
         }
 
         accounts.clearLoginFailures(user.id(), now);
-        String refreshToken = TokenSecrets.generate();
-        OffsetDateTime expiresAt = now.plus(authProperties.refreshTokenTtl());
-        UUID sessionId = accounts.createSession(user.id(), TokenSecrets.hash(refreshToken), expiresAt);
-        String accessToken = issueAccessToken(user.id(), user.role(), sessionId, now);
-        return new LoginOutcome.Success(new AuthResponse(accessToken, refreshToken, expiresAt,
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), user));
+        return new LoginOutcome.Success(loginSessions.open(user, now, client));
     }
 
-    /** Xoay vòng refresh token và ký access JWT trong một transaction. */
-    @Transactional
-    public AuthResponse refresh(String refreshToken) {
-        if (!StringUtils.hasText(refreshToken) || refreshToken.length() > 512) {
-            throw invalidRefresh();
-        }
-        String nextToken = TokenSecrets.generate();
+    public Optional<AuthenticatedUser> authenticate(String token, String agent, String ip, boolean recordActivity) {
         OffsetDateTime now = OffsetDateTime.now(clock);
-        var session = accounts.rotate(TokenSecrets.hash(refreshToken), TokenSecrets.hash(nextToken), now)
-                .orElseThrow(AuthService::invalidRefresh);
-        String accessToken = issueAccessToken(session.account().id(), session.account().role(), session.id(), now);
-        return new AuthResponse(accessToken, nextToken, session.expiresAt(),
-                Math.toIntExact(jwt.accessTokenTtl().toSeconds()), session.account());
+        return accounts.authenticate(TokenSecrets.hash(token), now, agent, ip, recordActivity);
+    }
+
+    public List<SessionInfo> sessions(AuthenticatedUser user) {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        return accounts.sessions(user.id(), user.sessionId(), now);
+    }
+
+    @Transactional
+    public void deleteSession(UUID userId, UUID sessionId) {
+        if (accounts.revoke(userId, sessionId, false) == 0) {
+            throw new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên");
+        }
     }
 
     /** Đăng xuất: xoá phiên hiện tại, hoặc mọi phiên của user. */
@@ -468,10 +446,11 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthUser updateMe(UUID userId, String fullName, String phone, String currentPassword, String newPassword) {
+    public ProfileUpdate updateMe(AuthenticatedUser principal, String fullName, String phone, String currentPassword, String newPassword) {
+        UUID userId = principal.id();
         var account = accounts.findEditableAccount(userId)
                 .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Không tìm thấy tài khoản"));
-        if (!"ACTIVE".equals(account.user().status())) {
+        if (account.adminLocked() || !("ACTIVE".equals(account.user().status()) || "LOCKED".equals(account.user().status()))) {
             throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không hoạt động");
         }
         boolean changePassword = StringUtils.hasText(newPassword);
@@ -493,7 +472,18 @@ public class AuthService {
                 : StringUtils.hasText(normalizedPhone) ? normalizeAccountPhone(normalizedPhone) : null;
         String hash = changePassword ? passwordEncoder.encode(newPassword) : null;
         accounts.updateAccount(userId, normalizedName, nextPhone, hash, OffsetDateTime.now(clock));
-        return accounts.findEditableAccount(userId).orElseThrow().user();
+        Optional<String> token = Optional.empty();
+        if (changePassword) {
+            String replacement = TokenSecrets.generate();
+            if (!accounts.replaceToken(userId, principal.sessionId(), TokenSecrets.hash(replacement))) {
+                throw new DomainException(ErrorCode.UNAUTHORIZED, "Phiên không còn hiệu lực");
+            }
+            token = Optional.of(replacement);
+        }
+        return new ProfileUpdate(accounts.findEditableAccount(userId).orElseThrow().user(), token);
+    }
+
+    public record ProfileUpdate(AuthUser user, Optional<String> replacementToken) {
     }
 
     @Transactional
@@ -520,28 +510,9 @@ public class AuthService {
         }
     }
 
-    private String issueAccessToken(UUID userId, Role role, UUID sessionId, OffsetDateTime now) {
-        var claims = JwtClaimsSet.builder()
-                .issuer(jwt.issuer())
-                .subject(userId.toString())
-                .claim("av", securityState.version(userId))
-                .claim(CurrentUser.ROLE_CLAIM, role.name())
-                .claim(CurrentUser.SESSION_CLAIM, sessionId.toString())
-                .issuedAt(now.toInstant())
-                .expiresAt(now.plus(jwt.accessTokenTtl()).toInstant())
-                .build();
-        return encoder.encode(JwtEncoderParameters.from(
-                JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
-    }
-
     /** Dùng chung phản hồi cho thông tin đăng nhập không hợp lệ hoặc tài khoản chưa kích hoạt. */
     private static DomainException invalidCredentials() {
         return new DomainException(ErrorCode.INVALID_CREDENTIALS, INVALID_CREDENTIALS_MESSAGE);
-    }
-
-    /** Dùng chung phản hồi cho refresh token sai, hết hạn hoặc đã thu hồi. */
-    private static DomainException invalidRefresh() {
-        return new DomainException(ErrorCode.UNAUTHORIZED, "Refresh token không hợp lệ hoặc đã hết hạn");
     }
 
     private sealed interface LoginOutcome {

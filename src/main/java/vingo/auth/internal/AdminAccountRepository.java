@@ -87,12 +87,12 @@ public class AdminAccountRepository {
                 .query(Long.class).single();
     }
 
-    /** Cập nhật vai trò và cờ khoá; khoá/mở quyền thì thu hồi mọi phiên và tăng auth_version. */
+    /** Cập nhật vai trò và cờ khoá; khoá/mở quyền thì thu hồi mọi phiên. */
     public void update(UUID id, String role, boolean locked, boolean resetLock, OffsetDateTime now) {
         jdbc.sql("""
                 UPDATE user_account SET role = CAST(:role AS user_role), admin_locked = :locked,
                     locked_until = CASE WHEN :resetLock THEN NULL ELSE locked_until END,
-                    auth_version = auth_version + 1, updated_at = :now WHERE id = :id
+                    updated_at = :now WHERE id = :id
                 """)
                 .param("id", id).param("role", role)
                 .param("locked", locked).param("resetLock", resetLock).param("now", now).update();

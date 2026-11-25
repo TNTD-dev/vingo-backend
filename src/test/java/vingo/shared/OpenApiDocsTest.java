@@ -17,7 +17,9 @@ class OpenApiDocsTest extends IntegrationTest {
                 .expectBody()
                 .jsonPath("$.components.securitySchemes.bearerAuth.type").isEqualTo("http")
                 .jsonPath("$.components.securitySchemes.bearerAuth.scheme").isEqualTo("bearer")
-                .jsonPath("$.components.securitySchemes.bearerAuth.bearerFormat").isEqualTo("JWT");
+                .jsonPath("$.components.securitySchemes.bearerAuth.bearerFormat").isEqualTo("opaque")
+                .jsonPath("$.components.securitySchemes.sessionCookie.in").isEqualTo("cookie")
+                .jsonPath("$.components.securitySchemes.sessionCookie.name").isEqualTo("vingo_session");
     }
 
     @Test

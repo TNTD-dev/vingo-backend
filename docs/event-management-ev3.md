@@ -4,7 +4,7 @@ Nhánh triển khai: `feat/create_events-luannt`. Tiếp nối [EV2 — hồ sơ
 
 ## Luồng API
 
-Mọi API dưới đây có tiền tố `/api/v1` và yêu cầu JWT của `ADMIN`.
+Mọi API dưới đây có tiền tố `/api/v1` và yêu cầu token phiên của `ADMIN`.
 
 1. `POST /admin/events` tạo event `DRAFT`, hoặc mở lại bằng `GET /admin/events/{event_id}`.
 2. `GET /admin/venues` chọn sân. Mỗi phần tử có `halls`; sân chưa có hall trả `[]`. Hall được lấy theo cả trang bằng một query, không chạy query cho từng sân. Bộ lọc và cursor của danh sách sân giữ nguyên.

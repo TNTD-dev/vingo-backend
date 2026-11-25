@@ -1,7 +1,5 @@
 package vingo.auth.web;
 
-import java.time.Duration;
-
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -14,18 +12,17 @@ import org.springframework.web.bind.annotation.RestController;
 import vingo.api.AuthApi;
 import vingo.api.model.ForgotPasswordRequest;
 import vingo.api.model.LoginRequest;
+import vingo.api.model.LoginResult;
 import vingo.api.model.LogoutRequest;
 import vingo.api.model.OtpSession;
-import vingo.api.model.RefreshResult;
-import vingo.api.model.RefreshTokenRequest;
 import vingo.api.model.RegisterRequest;
 import vingo.api.model.ResendOtpRequest;
 import vingo.api.model.ResetPasswordRequest;
-import vingo.api.model.TokenPair;
 import vingo.api.model.User;
 import vingo.api.model.VerifyOtpRequest;
 import vingo.auth.AuthService;
 import vingo.auth.AuthUser;
+import vingo.auth.internal.AuthResponse;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.security.CurrentUser;
@@ -37,16 +34,14 @@ class AuthController implements AuthApi {
     private final AuthService auth;
     private final CurrentUser currentUser;
     private final AuthCookies cookies;
-    private final AuthWebConfig web;
     private final HttpServletRequest request;
 
     /** Nối contract auth với nghiệp vụ phiên và xử lý cookie của request. */
     AuthController(AuthService auth, CurrentUser currentUser, AuthCookies cookies,
-                   AuthWebConfig web, HttpServletRequest request) {
+                   HttpServletRequest request) {
         this.auth = auth;
         this.currentUser = currentUser;
         this.cookies = cookies;
-        this.web = web;
         this.request = request;
     }
 
@@ -64,16 +59,10 @@ class AuthController implements AuthApi {
                 .body(response);
     }
 
-    /** Xác thực OTP, kích hoạt tài khoản và cấp cặp token. */
+    /** Xác thực OTP, kích hoạt tài khoản và mở phiên. */
     @Override
-    public ResponseEntity<TokenPair> verifyOtp(VerifyOtpRequest body) {
-        var session = auth.verifyOtp(body.getOtpSessionId(), body.getOtp());
-        var result = new TokenPair(session.accessToken(), session.refreshToken(),
-                session.expiresIn(), toApiUser(session.user()));
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString())
-                .body(result);
+    public ResponseEntity<LoginResult> verifyOtp(VerifyOtpRequest body) {
+        return loggedIn(auth.verifyOtp(body.getOtpSessionId(), body.getOtp(), cookies.loginClient(request)));
     }
 
     /** Gửi lại OTP: mỗi lần gửi là một phiên mới; phiên cũ hết hiệu lực, dùng otp_session_id trong phản hồi. */
@@ -102,21 +91,21 @@ class AuthController implements AuthApi {
     @Override
     public ResponseEntity<Void> resetPassword(ResetPasswordRequest body) {
         auth.resetPassword(body.getOtpSessionId(), body.getOtp(), body.getNewPassword());
-        return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.REFRESH, "", Duration.ZERO).toString())
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.SET_COOKIE, cookies.clearSession().toString())
                 .build();
     }
 
-    /** Đăng nhập bằng email và mật khẩu, cấp TokenPair và đặt cookie refresh. */
+    /** Đăng nhập bằng email và mật khẩu, đặt cookie phiên. */
     @Override
-    public ResponseEntity<TokenPair> login(LoginRequest body) {
-        var session = auth.login(body.getIdentifier(), body.getPassword(), body.getDevice());
-        var result = new TokenPair(session.accessToken(), session.refreshToken(),
-                session.expiresIn(), toApiUser(session.user()));
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString())
-                .body(result);
+    public ResponseEntity<LoginResult> login(LoginRequest body) {
+        return loggedIn(auth.login(body.getIdentifier(), body.getPassword(), cookies.loginClient(request)));
+    }
+
+    private ResponseEntity<LoginResult> loggedIn(AuthResponse session) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .headers(h -> cookies.writeLoginCookies(session, value -> h.add(HttpHeaders.SET_COOKIE, value)))
+                .body(new LoginResult(toApiUser(session.user())));
     }
 
     /** Trả 404 khi trang bắt đầu không được filter OAuth2 tiếp nhận. */
@@ -131,44 +120,13 @@ class AuthController implements AuthApi {
         throw googleUnavailable();
     }
 
-    /** Nhận refresh token qua cookie cùng Origin hợp lệ hoặc body JSON. */
-    @Override
-    public ResponseEntity<RefreshResult> refreshToken(RefreshTokenRequest body) {
-        boolean useCookie = body == null;
-        String refreshToken;
-        if (useCookie) {
-            refreshToken = cookies.read(request, AuthCookies.REFRESH)
-                    .orElseThrow(() -> new DomainException(ErrorCode.UNAUTHORIZED, "Thiếu refresh token"));
-            if (!web.frontendOrigin().equals(request.getHeader(HttpHeaders.ORIGIN))) {
-                throw new DomainException(ErrorCode.FORBIDDEN, "Origin không được phép làm mới phiên");
-            }
-        } else {
-            refreshToken = body.getRefreshToken();
-        }
-
-        var session = auth.refresh(refreshToken);
-        var result = new RefreshResult(session.accessToken(), session.expiresIn(), toApiUser(session.user()));
-        var response = ResponseEntity.ok().cacheControl(CacheControl.noStore());
-        if (useCookie) {
-            response.header(HttpHeaders.SET_COOKIE, cookies.refresh(session.refreshToken(), session.expiresAt()).toString());
-        } else {
-            result.setRefreshToken(session.refreshToken());
-        }
-        return response.body(result);
-    }
-
-    /** Thu hồi phiên theo bearer token và xoá cookie refresh. */
     @Override
     public ResponseEntity<Void> logout(LogoutRequest body) {
         var user = currentUser.require();
         boolean allDevices = body != null && Boolean.TRUE.equals(body.getAllDevices());
-        var sessionId = currentUser.sessionId();
-        if (sessionId.isEmpty() && !allDevices) {
-            throw new DomainException(ErrorCode.UNAUTHORIZED, "Access token không xác định phiên");
-        }
-        auth.logout(user.id(), sessionId.orElse(null), allDevices);
-        return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, cookies.cookie(AuthCookies.REFRESH, "", Duration.ZERO).toString())
+        auth.logout(user.id(), user.sessionId(), allDevices);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.SET_COOKIE, cookies.clearSession().toString())
                 .build();
     }
 

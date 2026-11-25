@@ -8,10 +8,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import vingo.auth.internal.AuthProperties;
+import vingo.auth.internal.AuthResponse;
 import vingo.auth.internal.AuthRepository;
 import vingo.auth.internal.GoogleLoginRequest;
-import vingo.auth.internal.TokenSecrets;
+import vingo.auth.internal.LoginClient;
+import vingo.auth.internal.LoginSessions;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 import vingo.shared.security.Role;
@@ -20,19 +21,19 @@ import vingo.shared.security.Role;
 public class GoogleLoginService {
 
     private final AuthRepository accounts;
-    private final AuthProperties properties;
+    private final LoginSessions sessions;
     private final Clock clock;
 
     /** Nhận kho tài khoản và cấu hình thời hạn phiên Vingo. */
-    GoogleLoginService(AuthRepository accounts, AuthProperties properties, Clock clock) {
+    GoogleLoginService(AuthRepository accounts, LoginSessions sessions, Clock clock) {
         this.accounts = accounts;
-        this.properties = properties;
+        this.sessions = sessions;
         this.clock = clock;
     }
 
     /** Tìm hoặc tạo user theo Google subject rồi lưu phiên trong cùng transaction. */
     @Transactional
-    public GoogleLoginResult login(GoogleLoginRequest identity) {
+    public GoogleLoginResult login(GoogleLoginRequest identity, LoginClient client) {
         if (!StringUtils.hasText(identity.subject()) || !identity.emailVerified()
                 || !StringUtils.hasText(identity.email())) {
             throw new DomainException(ErrorCode.UNAUTHORIZED, "Google chưa xác minh địa chỉ email");
@@ -56,12 +57,9 @@ public class GoogleLoginService {
             throw new DomainException(ErrorCode.UNAUTHORIZED, "Tài khoản không thể đăng nhập bằng Google");
         }
 
-        String refreshToken = TokenSecrets.generate();
-        OffsetDateTime expiresAt = OffsetDateTime.now(clock).plus(properties.refreshTokenTtl());
-        accounts.createSession(account.id(), TokenSecrets.hash(refreshToken), expiresAt);
-        return new GoogleLoginResult(refreshToken, expiresAt, created);
+        return new GoogleLoginResult(sessions.open(account, OffsetDateTime.now(clock), client), created);
     }
 
-    public record GoogleLoginResult(String refreshToken, OffsetDateTime expiresAt, boolean created) {
+    public record GoogleLoginResult(AuthResponse session, boolean created) {
     }
 }

@@ -24,7 +24,21 @@ class SchemaV2MigrationTest {
     void emptyDatabaseMigratesAndLoadsBothSeedsInOrder() throws Exception {
         try (var db = new PostgreSQLContainer("postgres:18-alpine").withDatabaseName("vingo_admin_ui_v2")) {
             db.start();
-            migrations(db).load().migrate();
+            migrations(db).target("20261119.1400").load().migrate();
+            try (var connection = db.createConnection(""); var statement = connection.createStatement()) {
+                statement.executeUpdate("""
+                        WITH account AS (
+                            INSERT INTO user_account (email, full_name, password_hash) VALUES ('old@example.invalid', 'Old', 'fixture') RETURNING id
+                        )
+                        INSERT INTO login_session (user_id, token_hash, expires_at)
+                        SELECT id, 'old-hash', now() + interval '30 days' FROM account
+                        """);
+                migrations(db).load().migrate();
+                try (var rows = statement.executeQuery("SELECT count(*) FROM login_session")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getLong(1)).isZero();
+                }
+            }
             for (String seed : new String[]{"seed.sql", "seed-admin-ui.sql"}) {
                 String script = "/tmp/" + seed;
                 db.copyFileToContainer(MountableFile.forHostPath(Path.of("scripts", seed).toAbsolutePath()), script);

@@ -71,7 +71,6 @@ cd vingo-backend
 # 2. Tạo file môi trường
 cp deploy/.env.example .env.local
 # điền VNPAY_TMN_CODE, VNPAY_HASH_SECRET (sandbox), các giá trị khác để mặc định
-# JWT_SECRET để nguyên dòng comment; nếu bỏ comment thì phải điền chuỗi >= 32 ký tự
 
 # 3. Bật Postgres 18 + Redis
 docker compose -f deploy/compose.dev.yaml up -d
@@ -226,7 +225,7 @@ git tag contract-v0.4.0 && git push origin contract-v0.4.0
 ### Quy ước chung
 
 - Base path `/api/v1`, JSON
-- Xác thực: header `Authorization: Bearer <access_token>`
+- Xác thực: cookie HttpOnly `__Host-vingo_session` (HTTP local dùng `vingo_session`) hoặc `Authorization: Bearer <session_token>`. Request ghi bằng cookie gửi Origin của frontend.
 - Tiền: số nguyên VND. Thời gian: ISO 8601 UTC
 - Lỗi: `application/problem+json` có trường `code` (xem bảng mã lỗi trong `CLAUDE.md`)
 - `Idempotency-Key` bắt buộc khi giữ ghế, tạo thanh toán, xử lý đơn lỗi
@@ -319,14 +318,14 @@ Lưu ý: trang return của VNPay **chỉ để hiển thị**. Trạng thái đ
 | `DB_URL` | `jdbc:postgresql://localhost:5432/vingo` | PostgreSQL |
 | `DB_USER`, `DB_PASSWORD` | `vingo` / `vingo` | |
 | `REDIS_URL` | `redis://localhost:6379` | Cache đọc + rate limit |
-| `JWT_SECRET` | (chuỗi ngẫu nhiên ≥ 32 byte) | Ký access token |
 | `GOOGLE_LOGIN_ENABLED` | `false` | Bật luồng đăng nhập Google |
 | `GOOGLE_CLIENT_ID` | `xxx.apps.googleusercontent.com` | OAuth client loại Web application |
 | `GOOGLE_CLIENT_SECRET` | (biến môi trường) | Đổi authorization code tại backend |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8080/api/v1/auth/oauth2/callback/google` | URI callback đăng ký trên Google Cloud |
-| `AUTH_FRONTEND_RETURN_URL` | `http://localhost:3000/auth/google` | Trang web nhận kết quả và origin được phép refresh |
+| `AUTH_FRONTEND_RETURN_URL` | `http://localhost:3000/auth/google` | Trang web nhận kết quả và Origin được phép ghi bằng cookie |
 | `AUTH_SECURE_COOKIES` | `true` (`false` ở profile local) | Bật cờ Secure trên cookie phiên |
-| `AUTH_REFRESH_TOKEN_TTL` | `P30D` | Thời hạn tối đa của phiên |
+| `AUTH_SESSION_TTL` | `P7D` | Hạn tuyệt đối tính từ lúc đăng nhập. Hoạt động và đổi token đều giữ nguyên hạn ban đầu. |
+| `AUTH_STREAM_MAX` | `PT15M` | Thời lượng mỗi kết nối SSE, tối đa 15 phút |
 | `VNPAY_TMN_CODE` | (từ email sandbox) | Mã website VNPay |
 | `VNPAY_HASH_SECRET` | (từ email sandbox) | Khoá ký HMAC-SHA512 |
 | `VNPAY_PAY_URL` | `https://sandbox.vnpayment.vn/paymentv2/vpcpay.html` | Trang thanh toán |
@@ -346,7 +345,7 @@ Xem [tài liệu triển khai và sơ đồ sequence Google OAuth2](docs/google-
 
 1. Thêm `GOOGLE_LOGIN_ENABLED=true`, `GOOGLE_CLIENT_ID` và `GOOGLE_CLIENT_SECRET` vào `.env.local`. Đăng ký `GOOGLE_REDIRECT_URI` trong **Authorized redirect URIs** của Google Cloud.
 2. Chạy backend với profile `api,local`. Mở `http://localhost:8080/api/v1/auth/google` để bắt đầu.
-3. Trang web cấu hình qua `AUTH_FRONTEND_RETURN_URL` nhận tham số `google_login`. Với `created` hoặc `success`, gọi `POST /api/v1/auth/refresh` không có body với `credentials: 'include'`. Hiển thị thông báo tạo tài khoản khi kết quả là `created`. Với `email_taken`, hướng dẫn người dùng đăng nhập bằng phương thức Vingo hiện có.
+3. Trang web cấu hình qua `AUTH_FRONTEND_RETURN_URL` nhận tham số `google_login`. Với `created` hoặc `success`, gọi `GET /api/v1/me` với `credentials: 'include'`. Hiển thị thông báo tạo tài khoản khi kết quả là `created`. Với `email_taken`, hướng dẫn người dùng đăng nhập bằng phương thức Vingo hiện có.
 
 Frontend và API cần cùng site để trình duyệt gửi cookie `SameSite=Lax`. Khi deploy, cấu hình URL HTTPS cho callback và trang web.
 
@@ -367,14 +366,14 @@ docker compose -f deploy/compose.dev.yaml up -d
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=api,local"
 ```
 
-Mở `http://localhost:8080/api/v1/auth/google` và đăng nhập bằng một tài khoản Google có email chưa dùng trong Vingo. Lần đầu, trình duyệt về trang web với `google_login=created`. Mở lại URL bắt đầu với cùng tài khoản Google để kiểm tra `google_login=success`. Web gọi refresh để nhận `user.id`, `user.avatar_url` nếu có và access token. `user.id` phải giống nhau qua hai lần đăng nhập.
+Mở `http://localhost:8080/api/v1/auth/google` và đăng nhập bằng một tài khoản Google có email chưa dùng trong Vingo. Lần đầu, trình duyệt về trang web với `google_login=created`. Mở lại URL bắt đầu với cùng tài khoản Google để kiểm tra `google_login=success`. Web gọi `GET /api/v1/me` bằng cookie để lấy ID và ảnh đại diện. `user.id` phải giống nhau qua hai lần đăng nhập.
 
 | Triệu chứng | Kiểm tra |
 |---|---|
 | Google báo `redirect_uri_mismatch` | URI đăng ký trên Google Cloud phải trùng scheme, host, port và path trong `GOOGLE_REDIRECT_URI`. |
 | API trả `404` ở trang bắt đầu | Kiểm tra `GOOGLE_LOGIN_ENABLED=true` và profile `api,local`. |
 | Callback chuyển về với `google_login=failed` | Bắt đầu lại từ `/api/v1/auth/google`. Callback cần `code`, `state` và cookie do chính lượt đăng nhập đó tạo. |
-| Refresh trả `401` hoặc `403` | Kiểm tra cookie, `credentials: 'include'` và origin của web. Dùng nhất quán `localhost` cho API và web khi chạy local. |
+| API trả `401` hoặc `403` | Kiểm tra cookie, `credentials: 'include'` và origin của web. Dùng nhất quán `localhost` cho API và web khi chạy local. |
 
 ## Deploy
 
@@ -430,3 +429,13 @@ curl https://<domain>/actuator/health
 | Quy tắc code | Bắt buộc đọc trước khi code | [`CLAUDE.md`](CLAUDE.md) |
 
 Bản online là bản mới nhất. Khi kiến trúc thay đổi, cập nhật lại `docs/architecture.html` trong cùng PR.
+
+
+### Quản lý phiên đăng nhập
+
+Login mật khẩu và xác minh OTP trả `{ user }` và đặt cookie. Google callback đặt cùng cookie trước khi redirect. Backend giữ SHA-256 của token ngẫu nhiên 32 byte. Migration bắt buộc đăng nhập lại trên mọi thiết bị.
+
+- `GET /api/v1/me/sessions` liệt kê thiết bị theo lần hoạt động mới nhất.
+- `DELETE /api/v1/me/sessions/{session_id}` thu hồi một phiên của mình.
+- `POST /api/v1/auth/logout` đăng xuất thiết bị hiện tại. Gửi `{"all_devices":true}` để đăng xuất mọi thiết bị.
+- Đổi mật khẩu qua `PATCH /api/v1/me` thay cookie và thu hồi các phiên khác. Đặt lại mật khẩu qua OTP thu hồi mọi phiên.

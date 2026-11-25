@@ -6,7 +6,7 @@ Luân đã xác nhận Đức chốt hướng contract trong chat. Các thay đ�
 
 ## API đã triển khai
 
-Tất cả đường dẫn có tiền tố `/api/v1`, yêu cầu Bearer JWT của `ADMIN`. Không có token trả `401 UNAUTHORIZED`; token `BUYER` trả `403 FORBIDDEN`.
+Tất cả đường dẫn có tiền tố `/api/v1`, yêu cầu Bearer opaque của `ADMIN`. Không có token trả `401 UNAUTHORIZED`; token `BUYER` trả `403 FORBIDDEN`.
 
 | API | Hành vi |
 |---|---|

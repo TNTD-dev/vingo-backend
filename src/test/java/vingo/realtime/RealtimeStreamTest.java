@@ -18,19 +18,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
-import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import tools.jackson.databind.json.JsonMapper;
-import vingo.shared.security.CurrentUser;
-import vingo.shared.security.JwtProperties;
 import vingo.shared.security.Role;
-import vingo.shared.security.SecurityConfig;
 import vingo.support.IntegrationTest;
 
 class RealtimeStreamTest extends IntegrationTest {
@@ -41,17 +33,15 @@ class RealtimeStreamTest extends IntegrationTest {
     private final RealtimeService realtime;
     private final TransactionTemplate transactions;
     private final JsonMapper json;
-    private final JwtProperties jwt;
     private final int port;
     private final List<SseTestClient> streams = new ArrayList<>();
 
     @Autowired
     RealtimeStreamTest(RealtimeService realtime, PlatformTransactionManager transactionManager,
-                       JsonMapper json, JwtProperties jwt, @Value("${local.server.port}") int port) {
+                       JsonMapper json, @Value("${local.server.port}") int port) {
         this.realtime = realtime;
         this.transactions = new TransactionTemplate(transactionManager);
         this.json = json;
-        this.jwt = jwt;
         this.port = port;
     }
 
@@ -262,7 +252,7 @@ class RealtimeStreamTest extends IntegrationTest {
     }
 
     @Test
-    void stream_closesWhenJwtExpires() throws Exception {
+    void stream_closesWhenSessionExpires() throws Exception {
         UUID user = catalog.buyer();
         Instant expiresAt = clock.instant().plusSeconds(4).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         var stream = connectWithToken(tokenExpiringAt(user, expiresAt), null);
@@ -358,13 +348,24 @@ class RealtimeStreamTest extends IntegrationTest {
         return transactions.execute(status -> realtime.publish(user, RealtimeEventType.ORDER_HELD, payload));
     }
 
+    @Test
+    void revokedLongLivedSessionCannotKeepItsStreamBeyondFifteenMinutes() throws Exception {
+        UUID user = catalog.buyer();
+        String token = tokenFor(user, Role.BUYER);
+        var stream = connectWithToken(token, null);
+        UUID first = publish(user);
+        assertThat(stream.awaitEvent(WAIT).id()).isEqualTo(first);
+        client.post().uri("/api/v1/auth/logout").headers(h -> h.setBearerAuth(token)).exchange().expectStatus().isNoContent();
+        clock.advance(Duration.ofMinutes(15));
+        publish(user);
+        stream.awaitClosed(WAIT);
+    }
+
     private String tokenExpiringAt(UUID user, Instant expiresAt) {
-        var encoder = NimbusJwtEncoder.withSecretKey(SecurityConfig.secretKey(jwt)).build();
-        var claims = JwtClaimsSet.builder()
-                .issuer(jwt.issuer()).subject(user.toString())
-                .claim(CurrentUser.ROLE_CLAIM, Role.BUYER.name())
-                .issuedAt(clock.instant()).expiresAt(expiresAt).build();
-        return encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
-                .getTokenValue();
+        String token = tokenFor(user, Role.BUYER);
+        jdbc.sql("UPDATE login_session SET expires_at = :expiry WHERE token_hash = :hash")
+                .param("expiry", expiresAt.atOffset(java.time.ZoneOffset.UTC))
+                .param("hash", vingo.auth.internal.TokenSecrets.hash(token)).update();
+        return token;
     }
 }

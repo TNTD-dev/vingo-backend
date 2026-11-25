@@ -253,7 +253,7 @@ Chi tiết chức năng và API: [admin-accounts.md](admin-accounts.md).
 - [x] Quyền ADMIN ở backend; BUYER/chưa đăng nhập không được truy cập API quản lý.
 - [x] Response không chứa password hash, Google subject hoặc token.
 - [x] Khóa quản trị không tự hết hạn; đặt lại mật khẩu không tự mở khóa quản trị.
-- [x] Đổi quyền/khóa tăng auth_version, vô hiệu JWT cũ ở request tiếp theo và thu hồi refresh sessions.
+- [x] Đổi quyền/khóa thu hồi mọi phiên trong cùng transaction.
 - [x] Ghi actor, reason, trạng thái trước/sau vào audit cùng transaction với thay đổi tài khoản.
 - [x] Gửi lại cùng trạng thái không tạo thêm thay đổi/audit.
 
@@ -283,8 +283,8 @@ Chi tiết chức năng và API: [admin-accounts.md](admin-accounts.md).
 - [ ] Sao lưu, áp dụng migration auth vào DB đích bằng Flyway và kiểm tra schema trên DBeaver.
 - [ ] Triển khai backend/frontend tương ứng; không cho UI mới gọi backend cũ chưa hỗ trợ API.
 - [ ] Nghiệm thu ADMIN tìm user → cấp ADMIN → người dùng đăng nhập lại → truy cập admin thành công.
-- [ ] Nghiệm thu thu hồi quyền → JWT/refresh cũ không dùng được → đăng nhập lại chỉ có BUYER.
-- [ ] Nghiệm thu khóa → không đăng nhập/refresh/API được; mở khóa → đăng nhập mới thành công.
+- [ ] Nghiệm thu thu hồi quyền → Phiên cũ không dùng được → đăng nhập lại chỉ có BUYER.
+- [ ] Nghiệm thu khóa → không đăng nhập/gọi API được; mở khóa → đăng nhập mới thành công.
 - [ ] Xác nhận không tự khóa/tự hạ quyền, không mất ADMIN hoạt động cuối cùng và không lộ bí mật xác thực.
 - [ ] Ghi kết quả nghiệm thu local/staging và hướng dẫn sử dụng.
 

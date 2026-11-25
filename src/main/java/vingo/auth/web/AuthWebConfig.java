@@ -3,13 +3,20 @@ package vingo.auth.web;
 import java.net.URI;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.util.Assert;
+import org.springframework.web.filter.CorsFilter;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import vingo.auth.AuthService;
 import vingo.auth.internal.AuthProperties;
+import vingo.shared.security.ProblemAuthenticationHandlers;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -31,16 +38,17 @@ class AuthWebConfig implements WebMvcConfigurer {
                 .host(frontend.getHost()).port(port).build().toUriString();
     }
 
-    /** Trả origin dùng để kiểm tra request refresh bằng cookie. */
-    String frontendOrigin() {
-        return frontendOrigin;
+    // Spring Security applies this customizer once to each servlet filter chain (including Google OIDC).
+    @Bean
+    @Profile("!worker")
+    Customizer<HttpSecurity> sessionSecurity(AuthService auth, AuthCookies cookies, ProblemAuthenticationHandlers problems) {
+        return http -> http.addFilterBefore(new SessionAuthenticationFilter(auth, cookies, problems, frontendOrigin),
+                CorsFilter.class);
     }
 
-    /** Cho phép frontend đã cấu hình gửi credential tới refresh và logout. */
+    /** Cho phép frontend đã cấu hình gửi credential tới logout. */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/v1/auth/refresh")
-                .allowedOrigins(frontendOrigin).allowedMethods("POST").allowCredentials(true);
         registry.addMapping("/api/v1/auth/logout")
                 .allowedOrigins(frontendOrigin).allowedMethods("POST").allowCredentials(true);
     }

@@ -32,7 +32,7 @@ import vingo.realtime.internal.RealtimeEventRepository.Event;
 import vingo.shared.error.DomainException;
 import vingo.shared.error.ErrorCode;
 
-/** Quản lý kết nối theo user và một scheduler chung cho heartbeat cùng hạn JWT. */
+/** Quản lý kết nối theo user và một scheduler chung cho heartbeat cùng hạn phiên. */
 @Component
 @Profile("api")
 public class StreamRegistry {
