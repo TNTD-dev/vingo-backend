@@ -224,6 +224,7 @@ public class AuthRepository {
 
     /** Ẩn danh hoá tài khoản: giữ hàng để khoá ngoại của OTP và đơn vẫn đúng, xoá mọi dữ liệu cá nhân. */
     public void deleteAccount(UUID userId, OffsetDateTime now) {
+        jdbc.sql("DELETE FROM attendee_profile WHERE user_id = :id").param("id", userId).update();
         jdbc.sql("DELETE FROM user_device WHERE user_id = :id").param("id", userId).update();
         jdbc.sql("""
                         UPDATE user_account SET email = 'deleted+' || id || '@invalid.local', phone = NULL,

@@ -22,6 +22,7 @@ servers:
 tags:
   - name: Auth
   - name: Me
+  - name: Attendees
   - name: Realtime
   - name: Search
   - name: Booking
@@ -338,6 +339,78 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
               example: { title: Trạng thái không hợp lệ, status: 409, code: ACTION_STATE_INVALID, detail: Không thể xóa ADMIN hoạt động cuối cùng. }
+  /me/attendees:
+    get:
+      operationId: listAttendees
+      tags: [Attendees]
+      description: Liệt kê hồ sơ người đi xem của tài khoản đang đăng nhập, từ cũ đến mới.
+      responses:
+        '200':
+          description: Tối đa 20 hồ sơ của mình.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AttendeeProfile' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createAttendee
+      tags: [Attendees]
+      description: Lưu hồ sơ người đi xem vào sổ của mình để điền sẵn thông tin người nhận vé.
+      requestBody: { $ref: '#/components/requestBodies/AttendeeDetails' }
+      responses:
+        '201':
+          description: Đã tạo hồ sơ.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendeeProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Tài khoản đã có 20 hồ sơ.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { status: 409, code: ACTION_STATE_INVALID, detail: Mỗi tài khoản được lưu tối đa 20 hồ sơ người đi xem. }
+  /me/attendees/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getAttendee
+      tags: [Attendees]
+      description: Đọc một hồ sơ của mình. Trả 404 khi hồ sơ không tồn tại hoặc thuộc tài khoản khác.
+      responses:
+        '200': { $ref: '#/components/responses/Attendee' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: replaceAttendee
+      tags: [Attendees]
+      description: Thay toàn bộ thông tin hồ sơ của mình. Bỏ qua email hoặc phone sẽ xoá giá trị cũ.
+      requestBody: { $ref: '#/components/requestBodies/AttendeeDetails' }
+      responses:
+        '200': { $ref: '#/components/responses/Attendee' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteAttendee
+      tags: [Attendees]
+      description: Xoá vĩnh viễn một hồ sơ người đi xem khỏi sổ của mình.
+      responses:
+        '204':
+          description: Đã xoá hồ sơ.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /me/sessions:
     get:
       operationId: listSessions
@@ -2712,6 +2785,11 @@ components:
       schema: { type: string, format: uuid }
 
   requestBodies:
+    AttendeeDetails:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AttendeeRequest' }
     Reason:
       required: true
       content:
@@ -2723,6 +2801,13 @@ components:
               reason: { type: string, minLength: 3 }
 
   responses:
+    Attendee:
+      description: Hồ sơ người đi xem.
+      headers:
+        Cache-Control: { schema: { type: string, const: no-store } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AttendeeProfile' }
     ServiceUnavailable:
       description: Dịch vụ ngoài không khả dụng (SERVICE_UNAVAILABLE).
       content:
@@ -2901,6 +2986,23 @@ components:
         avatar_url: { type: string, format: uri }
         role: { type: string, enum: [BUYER, ADMIN] }
         email_verified: { type: boolean, description: true khi email đã xác minh }
+    AttendeeRequest:
+      type: object
+      required: [full_name]
+      properties:
+        full_name: { type: string, description: Từ 1 đến 120 ký tự sau khi bỏ khoảng trắng hai đầu. }
+        email: { type: [string, 'null'], format: email, minLength: 1, maxLength: 254 }
+        phone: { type: [string, 'null'], description: Số E.164 hoặc số di động Việt Nam để chuẩn hoá sang E.164. }
+    AttendeeProfile:
+      type: object
+      required: [id, full_name, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string, minLength: 1, maxLength: 120 }
+        email: { type: [string, 'null'], format: email }
+        phone: { type: [string, 'null'], description: Số điện thoại ở định dạng E.164. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Buyer:
       type: object
       required: [full_name, phone, email]

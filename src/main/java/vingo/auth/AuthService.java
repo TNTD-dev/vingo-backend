@@ -95,7 +95,7 @@ public class AuthService {
         rateLimiter.check(clientKey(clientIp), "auth-register",
                 otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
         String normalizedName = fullName == null ? "" : fullName.strip();
-        String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+        String normalizedEmail = normalizeEmail(email);
         String rawPhone = phone == null ? "" : phone.strip();
         String normalizedPhone = normalizeAccountPhone(rawPhone);
         if (!StringUtils.hasText(normalizedName)) {
@@ -253,7 +253,7 @@ public class AuthService {
     public OtpSessionInfo forgotPassword(String email, String clientIp) {
         rateLimiter.check(clientKey(clientIp), "auth-forgot-password",
                 otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
-        String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+        String normalizedEmail = normalizeEmail(email);
         String rawOtp = generateOtp();
         String otpHash = passwordEncoder.encode(rawOtp);
 
@@ -342,7 +342,11 @@ public class AuthService {
                 .orElse(false);
     }
 
-    private static String normalizeAccountPhone(String rawPhone) {
+    static String normalizeEmail(String email) {
+        return email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+    }
+
+    static String normalizeAccountPhone(String rawPhone) {
         return PhoneNumbers.normalize(rawPhone)
                 .or(() -> rawPhone.matches("^\\+[1-9][0-9]{8,14}$") ? java.util.Optional.of(rawPhone) : java.util.Optional.empty())
                 .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR, "Số điện thoại không hợp lệ"));
