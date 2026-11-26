@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * Dựng khu A có 10 ghế, ghế 9–10 là ghế đôi, hạng VIP 500.000đ; khu GA có sức chứa mặc định 5,
+ * Dựng khu A có 10 ghế, hạng VIP 500.000đ; khu GA có sức chứa mặc định 5,
  * hạng GA 200.000đ. Mỗi lần gọi event() hoặc onSaleShowtime() tạo catalog mới vì DB không dọn giữa các test.
  */
 public class CatalogFixture {

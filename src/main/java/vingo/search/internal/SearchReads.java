@@ -76,6 +76,7 @@ class SearchReads {
                 (int) zones.stream().filter(ZoneRow::stockMissing).count());
         return new AvailabilityResult(
                 showtimeId, PgSearchService.statusOf(showtime, now), zones.stream().allMatch(z -> z.seatsLeft() == 0),
-                zones.stream().map(z -> new ZoneAvailabilityResult(z.id(), z.code(), z.name(), z.skuId(), z.tier(), z.seatsLeft())).toList());
+                zones.stream().map(z -> new ZoneAvailabilityResult(
+                        z.id(), z.code(), z.name(), z.kind(), z.skuId(), z.tier(), z.seatsLeft())).toList());
     }
 }

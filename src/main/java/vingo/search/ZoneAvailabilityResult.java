@@ -1,5 +1,6 @@
 package vingo.search;
 
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -8,11 +9,12 @@ public record ZoneAvailabilityResult(
         UUID zoneId,
         String code,
         String name,
+        ZoneKind kind,
         UUID skuId,
         Optional<PriceTierResult> tier,
         int seatsLeft) {
 
-    public ZoneAvailabilityResult(UUID zoneId, String code, String name, Optional<PriceTierResult> tier, int seatsLeft) {
-        this(zoneId, code, name, null, tier, seatsLeft);
+    public ZoneAvailabilityResult {
+        Objects.requireNonNull(kind, "kind");
     }
 }

@@ -20,20 +20,23 @@ import vingo.api.model.SeatMap;
 import vingo.api.model.SeatMapZonesInner;
 import vingo.api.model.SeatMapZonesInnerSeatsInner;
 import vingo.api.model.SeatStatus;
+import vingo.api.model.SeatSuggestion;
+import vingo.api.model.SeatSuggestionSeatsInner;
 import vingo.api.model.Showtime;
 import vingo.api.model.ShowtimeStatus;
 import vingo.api.model.Venue;
+import vingo.api.model.ZoneKind;
 import vingo.search.AvailabilityResult;
 import vingo.search.EventDetailResult;
 import vingo.search.EventSummaryResult;
 import vingo.search.PriceTierResult;
 import vingo.search.SeatResult;
+import vingo.search.SeatSuggestionResult;
 import vingo.search.SeatmapResult;
 import vingo.search.SeatmapZoneResult;
 import vingo.search.ShowtimeResult;
 import vingo.search.VenueResult;
 import vingo.search.ZoneAvailabilityResult;
-import vingo.search.ZoneKind;
 
 /** Chuyển kết quả của {@code SearchService} sang model sinh từ contract. */
 @Component
@@ -119,6 +122,13 @@ class SearchApiMapper {
                 .zones(r.zones().stream().map(this::toSeatMapZone).toList());
     }
 
+    SeatSuggestion toSeatSuggestion(SeatSuggestionResult r) {
+        var seats = r.seats().stream()
+                .map(s -> new SeatSuggestionSeatsInner(s.seatId(), s.row(), s.number(), s.rowRank())).toList();
+        return new SeatSuggestion(r.showtimeId(), r.zoneId(), r.quantity(), seats, r.together(), r.seatsLeft(),
+                r.unitPrice(), r.total(), SeatSuggestion.CurrencyEnum.VND, r.observedAt());
+    }
+
     GetAvailability200Response toAvailability(AvailabilityResult r) {
         return new GetAvailability200Response()
                 .showtimeId(r.showtimeId())
@@ -131,13 +141,13 @@ class SearchApiMapper {
         SeatMapZonesInner zone = new SeatMapZonesInner()
                 .zoneId(z.zoneId())
                 .name(z.name())
-                .kind(SeatMapZonesInner.KindEnum.fromValue(z.kind().name()))
+                .kind(ZoneKind.fromValue(z.kind().name()))
                 .skuId(z.skuId());
         z.tier().ifPresent(t -> {
             PriceTier tier = toPriceTier(t);
             zone.tier(tier).ticketType(tier);
         });
-        if (z.kind() == ZoneKind.STANDING) {
+        if (z.kind() == vingo.search.ZoneKind.STANDING) {
             zone.seatsLeft(z.seatsLeft());
         } else {
             zone.seats(z.seats().stream().map(this::toSeat).toList());
@@ -158,7 +168,7 @@ class SearchApiMapper {
     }
 
     private GetAvailability200ResponseZonesInner toZoneAvailability(ZoneAvailabilityResult z) {
-        GetAvailability200ResponseZonesInner zone = new GetAvailability200ResponseZonesInner()
+        GetAvailability200ResponseZonesInner zone = new GetAvailability200ResponseZonesInner(ZoneKind.fromValue(z.kind().name()))
                 .zoneId(z.zoneId())
                 .code(z.code())
                 .name(z.name())

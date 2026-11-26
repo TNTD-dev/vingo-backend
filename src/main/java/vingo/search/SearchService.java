@@ -40,6 +40,9 @@ public interface SearchService {
      */
     SeatmapResult getSeatmap(UUID showtimeId, UUID zoneId);
 
+    /** Gợi ý đủ số ghế yêu cầu trong một khu SEATED hiển thị được, hoặc danh sách rỗng khi thiếu ghế. */
+    SeatSuggestionResult getSeatSuggestion(UUID showtimeId, UUID zoneId, int quantity, SeatPosition position);
+
     /**
      * SVG đã chuẩn hóa của sơ đồ sân gắn với suất, để giao diện vẽ cùng dữ liệu của {@link #getSeatmap}. Chỉ trả
      * khi sơ đồ đã PUBLISHED.

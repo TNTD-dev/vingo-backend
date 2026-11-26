@@ -20,11 +20,15 @@ import vingo.search.AvailabilityResult;
 import vingo.search.EventDetailResult;
 import vingo.search.EventSearchCriteria;
 import vingo.search.EventSummaryResult;
+import vingo.search.InvalidSearchRequestException;
 import vingo.search.MatchMode;
 import vingo.search.Page;
 import vingo.search.SearchService;
+import vingo.search.SeatPosition;
 import vingo.search.SeatResult;
 import vingo.search.SeatState;
+import vingo.search.SeatSuggestionResult;
+import vingo.search.SeatSuggestionResult.Seat;
 import vingo.search.SeatmapResult;
 import vingo.search.SeatmapZoneResult;
 import vingo.search.ShowtimeResult;
@@ -32,7 +36,6 @@ import vingo.search.ZoneKind;
 import vingo.search.internal.EventDetailRepository.EventRow;
 import vingo.search.internal.EventDetailRepository.ShowtimeRow;
 import vingo.search.internal.SearchQueryNormalizer.NormalizedQuery;
-import vingo.search.internal.SeatmapRepository.FreeSeat;
 import vingo.search.internal.SeatmapRepository.LayoutSeat;
 import vingo.search.internal.SeatmapRepository.LayoutZone;
 import vingo.search.internal.SeatmapRepository.ShowtimeRef;
@@ -168,12 +171,31 @@ class PgSearchService implements SearchService {
     }
 
     @Override
+    public SeatSuggestionResult getSeatSuggestion(UUID showtimeId, UUID zoneId, int quantity, SeatPosition position) {
+        ShowtimeRef showtime = seatmaps.findVisibleShowtime(showtimeId).orElseThrow(PgSearchService::showtimeNotFound);
+        LayoutZone zone = reads.layout(showtime).zones().stream().filter(z -> z.id().equals(zoneId)).findFirst()
+                .orElseThrow(() -> new DomainException(ErrorCode.NOT_FOUND, "Khu không thuộc sơ đồ của suất"));
+        if (zone.kind() != ZoneKind.SEATED) {
+            throw new InvalidSearchRequestException("zone_id", "Khu đứng không chọn ghế");
+        }
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        List<LayoutSeat> free = seatmaps.findFreeSeats(showtimeId, zoneId, now);
+        var ranks = SeatSuggester.rowRanks(zone.seats());
+        List<LayoutSeat> picked = free.size() < quantity ? List.of() : SeatSuggester.pick(free, quantity, position, ranks);
+        List<Seat> seats = picked.stream().map(s -> new Seat(s.id(), s.row(), s.number(), ranks.get(s.row()))).toList();
+        return new SeatSuggestionResult(showtimeId, zoneId, quantity, seats, SeatSuggester.together(picked),
+                free.size(), zone.tier() == null ? null : zone.tier().price(), now);
+    }
+
+    @Override
     public List<UUID> suggestSeats(UUID showtimeId, UUID zoneId, int n) {
         if (n <= 0) {
             throw new IllegalArgumentException("n phải lớn hơn 0");
         }
-        List<FreeSeat> free = seatmaps.findFreeSeats(showtimeId, zoneId, OffsetDateTime.now(clock));
-        return SeatSuggester.pick(free, n);
+        List<LayoutSeat> free = seatmaps.findFreeSeats(showtimeId, zoneId, OffsetDateTime.now(clock));
+        // Booking chỉ trả ID theo FRONT. Thứ tự tương đối của các hàng trống là đủ.
+        return SeatSuggester.pick(free, n, SeatPosition.FRONT, SeatSuggester.rowRanks(free))
+                .stream().map(LayoutSeat::id).toList();
     }
 
     /** Ghi WARN một lần cho mỗi request khi dữ liệu tồn kho của suất chưa đủ; không log từng ghế. */
