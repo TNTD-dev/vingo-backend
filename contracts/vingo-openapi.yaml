@@ -22,6 +22,7 @@ servers:
 tags:
   - name: Auth
   - name: Me
+  - name: Chat
   - name: Realtime
   - name: Search
   - name: Booking
@@ -36,6 +37,226 @@ security:
   - sessionCookie: []
 
 paths:
+  /chat/conversations:
+    post:
+      operationId: createChatConversation
+      tags: [Chat]
+      description: |
+        Tạo hội thoại theo role của phiên; trả {conversation_id, role}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { conversation_id: '019aaa00-0000-7000-8000-000000000001', role: BUYER }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/conversations/{id}:
+    get:
+      operationId: getChatConversation
+      tags: [Chat]
+      description: |
+        Lấy lịch sử tin nhắn, block đã lọc và đề xuất PENDING của hội thoại thuộc user.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { messages: [], blocks: [], pending_actions: [] }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/conversations/{id}/messages:
+    post:
+      operationId: sendChatMessage
+      tags: [Chat]
+      description: |
+        Gửi tin nhắn (tối đa 4000 ký tự), lựa chọn Ref và visible_action đang hiện; command_id nhận diện lượt gửi trùng.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Stream nguyên sự kiện turn.started, progress, text.delta, block, notice, turn.completed hoặc turn.failed; mỗi sự kiện có turn_id và seq. Lấy turn khi mất kết nối.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatMessageRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/ChatStream' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '413': { $ref: '#/components/responses/ImportTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: Turn đang chạy hoặc đề xuất không còn chờ xác nhận
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                busy:
+                  value: { status: 409, code: TURN_IN_PROGRESS, title: Turn đang chạy }
+                stale:
+                  value: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/actions/{action_id}/confirm:
+    post:
+      operationId: confirmChatAction
+      tags: [Chat]
+      description: |
+        Xác nhận đúng version của đề xuất đã lưu bằng command_id; buyer dành cho form thanh toán, confirm_phrase dành cho thao tác cần gõ lại tên.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Stream nguyên sự kiện turn.started, progress, text.delta, block, notice, turn.completed hoặc turn.failed; mỗi sự kiện có turn_id và seq. Lấy turn khi mất kết nối.
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatConfirmRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/ChatStream' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: Turn đang chạy hoặc đề xuất không còn chờ xác nhận
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                busy:
+                  value: { status: 409, code: TURN_IN_PROGRESS, title: Turn đang chạy }
+                stale:
+                  value: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/actions/{action_id}/reject:
+    post:
+      operationId: rejectChatAction
+      tags: [Chat]
+      description: |
+        Từ chối đúng version của đề xuất đang chờ; command_id chống thực thi trùng tại agent; trả {state}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatRejectRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { state: REJECTED }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: ACTION_NOT_PENDING - đề xuất đã bị thay, đã xử lý hoặc sai version
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/uploads:
+    post:
+      operationId: uploadChatFile
+      tags: [Chat]
+      description: |
+        Tải đúng một SVG hoặc ảnh poster PNG/JPEG/WebP tối đa 10 MiB; trả {upload_id, kind, size}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary, description: Một SVG hoặc ảnh poster tối đa 10 MiB }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { upload_id: '019aaa00-0000-7000-8000-000000000002', kind: SVG, size: 1024 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '415':
+          description: UNSUPPORTED_MEDIA_TYPE - chỉ nhận SVG, PNG, JPEG, WebP
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { status: 415, code: UNSUPPORTED_MEDIA_TYPE, title: Định dạng không hỗ trợ }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '413': { $ref: '#/components/responses/ImportTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/turns/{turn_id}:
+    get:
+      operationId: getChatTurn
+      tags: [Chat]
+      description: |
+        Lấy {state, text, blocks} cuối cùng của turn thuộc user để khôi phục khi mất SSE.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: turn_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { state: COMPLETED, text: Xin chào, blocks: [] }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   # ------------------------------------------------------------------ Auth
   /auth/register:
     post:
@@ -2783,6 +3004,52 @@ components:
           example: { title: Quá nhiều yêu cầu, status: 429, code: RATE_LIMITED }
 
   schemas:
+    ChatStream:
+      type: string
+      description: Luồng SSE nguyên bản từ agent.
+    ChatMessageRequest:
+      type: object
+      required: [command_id, text]
+      properties:
+        command_id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 4000, pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F]*$' }
+        selection:
+          type: object
+          required: [type, ids]
+          properties:
+            type: { type: string, enum: [EVENT, SHOWTIME, ZONE, SEATS, ORDER, TICKET] }
+            ids:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: { type: string, format: uuid }
+        visible_action:
+          type: object
+          required: [action_id, version]
+          properties:
+            action_id: { type: string, format: uuid }
+            version: { type: integer, minimum: 1 }
+    ChatConfirmRequest:
+      type: object
+      required: [command_id, version]
+      properties:
+        command_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        buyer: { $ref: '#/components/schemas/ChatBuyer' }
+        confirm_phrase: { type: string }
+    ChatBuyer:
+      type: object
+      required: [full_name, email, phone]
+      properties:
+        full_name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: string, minLength: 1 }
+    ChatRejectRequest:
+      type: object
+      required: [command_id, version]
+      properties:
+        command_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
     Problem:
       type: object
       required: [title, status, code]
@@ -2795,7 +3062,7 @@ components:
           type: string
           enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
                  EMAIL_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
-                 SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
+                 TURN_IN_PROGRESS, ACTION_NOT_PENDING, SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
                  VENUE_IN_USE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
                  SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]

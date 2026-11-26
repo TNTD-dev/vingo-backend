@@ -30,9 +30,10 @@ public class AuditLogRepository {
                        OffsetDateTime at, Map<String, Object> before, Map<String, Object> after) {
         return jdbc.sql("""
                         INSERT INTO audit_log (actor_id, action, entity, entity_id, reason, via_agent, at, before, after)
-                        VALUES (:actor, :action, :entity, :id, :reason, false, :at,
+                        VALUES (:actor, :action, :entity, :id, :reason, :viaAgent, :at,
                                 CAST(:before AS jsonb), CAST(:after AS jsonb)) RETURNING id
                         """)
+                .param("viaAgent", vingo.shared.security.AgentRequest.isViaAgent())
                 .param("actor", actorId).param("action", action).param("entity", entity).param("id", entityId)
                 .param("reason", reason, Types.VARCHAR).param("at", at)
                 .param("before", before == null ? null : json.writeValueAsString(before), Types.VARCHAR)

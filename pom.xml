@@ -206,7 +206,7 @@
                             <apiPackage>vingo.api</apiPackage>
                             <modelPackage>vingo.api.model</modelPackage>
                             <!-- Ánh xạ luồng SSE sang SseEmitter để interface trả đúng kiểu streaming của Spring MVC. -->
-                            <schemaMappings>StreamEvent=org.springframework.web.servlet.mvc.method.annotation.SseEmitter</schemaMappings>
+                            <schemaMappings>ChatStream=org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody,StreamEvent=org.springframework.web.servlet.mvc.method.annotation.SseEmitter</schemaMappings>
                             <generateSupportingFiles>true</generateSupportingFiles>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <generateApiTests>false</generateApiTests>
