@@ -551,6 +551,46 @@ paths:
               schema: { $ref: '#/components/schemas/SeatMap' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /showtimes/{showtime_id}/seat-suggestions:
+    get:
+      operationId: suggestSeats
+      tags: [Search]
+      summary: Gợi ý một nhóm ghế trống trong khu ngồi
+      description: |
+        Gọi khi người mua muốn chọn một nhóm ghế trong cùng khu. Ưu tiên ghế cùng hàng có số liên tiếp.
+        Trong mỗi khu, hàng có số nhỏ nhất nằm sát sân. FRONT ưu tiên hàng gần sân, BACK ưu tiên hàng xa sân,
+        MIDDLE ưu tiên hàng gần giữa khu; nếu cách giữa khu bằng nhau thì chọn hàng gần sân trước.
+        Nếu phải tách, ưu tiên ít hàng nhất rồi tổng khoảng số ghế trong từng hàng hẹp nhất.
+        Khi hai nhóm ngang nhau theo các tiêu chí này, ưu tiên hàng theo position.
+        Vị trí chỉ xếp hạng hàng trong khu đã chọn. Muốn chọn khu gần sân khấu hơn, hãy đổi zone_id.
+        Nếu còn ít hơn `quantity` ghế trống, trả `seats: []`. Ghế HELD quá hạn được tính là trống.
+        Gợi ý phản ánh tồn kho tại `observed_at`. Muốn giữ các ghế này, hãy gọi `holdSeats`.
+
+        Gợi ý cho agent: gọi `getAvailability` trước để chọn khu SEATED còn chỗ.
+        “gần sân khấu/hàng đầu” → FRONT, “phía sau/xa” → BACK, “giữa” → MIDDLE.
+
+        Ví dụ lỗi 400 khi chọn khu STANDING:
+        ```json
+        { "status": 400, "code": "VALIDATION_ERROR", "detail": "Khu đứng không chọn ghế" }
+        ```
+        Giá trị position ngoài FRONT, MIDDLE, BACK trả 400 VALIDATION_ERROR.
+        Suất không tồn tại, không hiển thị hoặc khu ngoài sơ đồ trả 404 NOT_FOUND.
+        Gọi quá nhanh trả 429 RATE_LIMITED kèm header `Retry-After`.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - { name: zone_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: quantity, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 10 } }
+        - { name: position, in: query, required: false, schema: { type: string, enum: [FRONT, MIDDLE, BACK], default: FRONT } }
+      responses:
+        '200':
+          description: Nhóm ghế gợi ý và số ghế còn trống trong khu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatSuggestion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/seatmap.svg:
     get:
       operationId: getSeatmapSvg
@@ -586,7 +626,7 @@ paths:
       summary: Số chỗ còn theo khu và hạng vé
       description: |
         Gọi khi cần biết suất còn chỗ không và khu/hạng nào còn bao nhiêu chỗ, trước khi chọn ghế hoặc tạo hold. Nhẹ hơn `getSeatmap`.
-        Trả `sold_out` và danh sách khu kèm hạng vé. Suất không tồn tại trả 404.
+        Trả `sold_out` và danh sách khu kèm loại khu và hạng vé. Với khu SEATED, chọn ghế qua `getSeatmap` hoặc `suggestSeats`. Với khu STANDING, giữ chỗ bằng `zone_id` + `quantity`. Suất không tồn tại trả 404.
 
         Ví dụ lỗi 404:
         ```json
@@ -613,8 +653,10 @@ paths:
                     type: array
                     items:
                       type: object
+                      required: [kind]
                       properties:
                         zone_id: { type: string, format: uuid }
+                        kind: { $ref: '#/components/schemas/ZoneKind' }
                         code: { type: string, description: Mã khu để liên kết với SVG. }
                         name: { type: string, description: Tên khu hiển thị theo sự kiện. }
                         sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) của khu đối với khu đứng; null đối với khu ngồi (sku nằm trên từng ghế).' }
@@ -631,11 +673,11 @@ paths:
       tags: [Booking]
       summary: Giữ ghế 10 phút và tạo đơn PENDING (tất cả hoặc không)
       description: |
-        Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
+        Khu ngồi gửi seat_ids. Khu đứng gửi zone_id + quantity.
         Phiên yêu cầu tài khoản đã xác minh email.
         Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
         Nếu khách đã có đơn PENDING còn hạn cho suất này → 409 ORDER_STATE_INVALID; muốn đổi ghế thì huỷ rồi giữ lại.
-        Vượt max_tickets_per_order của sự kiện (tính cả ghế cặp) → 422 MAX_TICKETS_EXCEEDED.
+        Vượt max_tickets_per_order của sự kiện → 422 MAX_TICKETS_EXCEEDED.
         Suất không tồn tại hoặc DRAFT → 404 NOT_FOUND.
       parameters:
         - $ref: '#/components/parameters/ShowtimeId'
@@ -2191,7 +2233,7 @@ paths:
         ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
         AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
         Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
-        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
         Event CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
         Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
@@ -2234,7 +2276,7 @@ paths:
         ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
         AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
         Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
-        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
         Event CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
         Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
@@ -2913,6 +2955,7 @@ components:
     EventStatus: { type: string, enum: [DRAFT, PUBLISHED, CANCELLED] }
     ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
     SeatStatus: { type: string, enum: [AVAILABLE, HELD, SOLD, BLOCKED] }
+    ZoneKind: { type: string, enum: [SEATED, STANDING] }
     OrderStatus: { type: string, enum: [PENDING, PAID, EXPIRED, CANCELLED, NEEDS_REVIEW, REJECTED] }
     PaymentStatus: { type: string, enum: [OPEN, SUCCEEDED, FAILED, EXPIRED] }
     TicketStatus: { type: string, enum: [ISSUED, USED, VOID] }
@@ -3529,7 +3572,7 @@ components:
             properties:
               zone_id: { type: string, format: uuid }
               name: { type: string }
-              kind: { type: string, enum: [SEATED, STANDING] }
+              kind: { $ref: '#/components/schemas/ZoneKind' }
               sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) đối với khu STANDING; null đối với khu SEATED.' }
               tier: { $ref: '#/components/schemas/PriceTier' }
               ticket_type: { $ref: '#/components/schemas/TicketType' }
@@ -3546,11 +3589,42 @@ components:
                     price: { type: [integer, 'null'], format: int64, description: Giá có hiệu lực của lựa chọn bán theo hạng vé. }
                     row: { type: string }
                     number: { type: integer }
-                    seat_type: { type: string, enum: [STANDARD, COUPLE, WHEELCHAIR] }
-                    pair_seat_id: { type: [string, 'null'], format: uuid }
                     status: { $ref: '#/components/schemas/SeatStatus' }
                     x: { type: number }
                     y: { type: number }
+
+    SeatSuggestion:
+      type: object
+      required: [showtime_id, zone_id, quantity, seats, together, seats_left, unit_price, total, currency, observed_at]
+      properties:
+        showtime_id: { type: string, format: uuid }
+        zone_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 10 }
+        seats:
+          type: array
+          description: Ghế gợi ý theo thứ tự hàng và số ghế. Rỗng khi khu còn ít hơn quantity ghế trống.
+          items:
+            type: object
+            required: [seat_id, row, number, row_rank]
+            properties:
+              seat_id: { type: string, format: uuid }
+              row: { type: string }
+              number: { type: integer }
+              row_rank: { type: integer, minimum: 1, description: Thứ hạng tự nhiên trên mọi hàng của khu trong layout. Hàng sát sân có hạng 1 kể cả khi đã hết ghế trống. }
+        together: { type: boolean, description: Chỉ true khi nhóm có ghế và mọi ghế cùng hàng với số liên tiếp. }
+        seats_left: { type: integer, minimum: 0, description: Tổng số ghế trống trong khu tại thời điểm đọc. }
+        unit_price:
+          type: [integer, 'null']
+          format: int64
+          description: Giá hạng vé của khu. Null khi khu chưa gán hạng giá.
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        total:
+          type: [integer, 'null']
+          format: int64
+          description: Đơn giá nhân số ghế gợi ý. Null khi chưa có giá hoặc danh sách ghế rỗng.
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        currency: { type: string, enum: [VND] }
+        observed_at: { type: string, format: date-time }
 
     HoldRequest:
       type: object
@@ -3560,7 +3634,6 @@ components:
         lấy giá có hiệu lực (ticket_type_price) và giữ tồn trong cùng giao dịch với việc tạo đơn.
         Gửi cả hai dạng, không gửi dạng nào, zone_id thiếu quantity hoặc quantity thiếu zone_id → 400 VALIDATION_ERROR.
         seat_ids nếu gửi thì không được rỗng; service kiểm tra, rỗng → 400 VALIDATION_ERROR.
-        Ghế đôi tự giữ kèm ghế cặp.
       properties:
         seat_ids:
           type: array

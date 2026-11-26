@@ -47,6 +47,24 @@ class SeatmapTest extends IntegrationTest {
     // ------------------------------------------------------------------ getSeatmap
 
     @Test
+    void getSeatmap_ordersSeatsByNaturalRowThenNumber() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seatedRows(10, 2, null)).create().showtimeId();
+        UUID zone = fixtures.zoneIds(showtime).getFirst();
+        jdbc.sql("""
+                UPDATE seat SET row_label = 'R' || (ascii(row_label) - ascii('A') + 1)
+                WHERE zone_id = :zone
+                """).param("zone", zone).update();
+
+        JsonNode seats = get("/api/v1/showtimes/" + showtime + "/seatmap").path("zones").get(0).path("seats");
+
+        assertThat(seats).hasSize(20);
+        for (int i = 0; i < seats.size(); i++) {
+            assertThat(seats.get(i).path("row").asString()).isEqualTo("R" + (i / 2 + 1));
+            assertThat(seats.get(i).path("number").asInt()).isEqualTo(i % 2 + 1);
+        }
+    }
+
+    @Test
     void getSeatmap_reportsExpiredHoldAsAvailable() {
         UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(3)).create().showtimeId();
         List<UUID> seats = fixtures.seatIds(fixtures.zoneIds(showtime).getFirst());
@@ -194,6 +212,8 @@ class SeatmapTest extends IntegrationTest {
         assertThat(body.path("sold_out").asBoolean()).isFalse();
         assertThat(body.path("zones")).hasSize(2);
         assertThat(body.path("zones").get(0).path("zone_id").asString()).isEqualTo(zones.get(0).toString());
+        assertThat(body.path("zones").get(0).path("kind").asString()).isEqualTo("SEATED");
+        assertThat(body.path("zones").get(1).path("kind").asString()).isEqualTo("STANDING");
         assertThat(body.path("zones").get(0).path("seats_left").asInt()).isEqualTo(2);
         assertThat(body.path("zones").get(0).path("tier").path("name").asString()).isEqualTo("VIP");
         assertThat(body.path("zones").get(1).path("seats_left").asInt()).isEqualTo(60);
@@ -257,7 +277,113 @@ class SeatmapTest extends IntegrationTest {
         assertNotFound("/api/v1/showtimes/" + showtime + "/availability");
     }
 
-    // ------------------------------------------------------------------ suggestSeats với ghế đôi
+    @Test
+    void seatSuggestions_readsCurrentFreeSeatsAndZonePrice() {
+        UUID showtime = fixtures.event().tier("VIP", 500_000)
+                .showtime(s -> s.onSale().seated(5, "VIP")).create().showtimeId();
+        UUID zone = fixtures.zoneIds(showtime).getFirst();
+        List<UUID> seats = fixtures.seatIds(zone);
+        fixtures.sellSeat(showtime, seats.get(0));
+        fixtures.blockSeat(showtime, seats.get(1));
+        fixtures.holdSeat(showtime, seats.get(2), NOW.plusSeconds(60));
+        fixtures.holdSeat(showtime, seats.get(3), NOW.minusSeconds(1));
+        String path = suggestions(showtime, zone, 2);
+
+        JsonNode body = get(path);
+
+        assertThat(body.path("showtime_id").asString()).isEqualTo(showtime.toString());
+        assertThat(body.path("zone_id").asString()).isEqualTo(zone.toString());
+        assertThat(body.path("quantity").asInt()).isEqualTo(2);
+        assertThat(body.path("seats_left").asInt()).isEqualTo(2);
+        assertThat(body.path("seats")).hasSize(2);
+        for (int i = 0; i < 2; i++) {
+            JsonNode seat = body.path("seats").get(i);
+            assertThat(seat.path("seat_id").asString()).isEqualTo(seats.get(3 + i).toString());
+            assertThat(seat.path("row").asString()).isEqualTo("A");
+            assertThat(seat.path("number").asInt()).isEqualTo(4 + i);
+        }
+        assertThat(body.path("together").asBoolean()).isTrue();
+        assertThat(body.path("unit_price").asLong()).isEqualTo(500_000);
+        assertThat(body.path("total").asLong()).isEqualTo(1_000_000);
+        assertThat(body.path("currency").asString()).isEqualTo("VND");
+        assertThat(Instant.parse(body.path("observed_at").asString())).isEqualTo(NOW);
+
+        fixtures.sellSeat(showtime, seats.get(4));
+        JsonNode next = get(path);
+        assertThat(next.path("seats_left").asInt()).isOne();
+        assertThat(next.path("seats")).isEmpty();
+        assertThat(next.path("together").asBoolean()).isFalse();
+        assertThat(next.path("unit_price").asLong()).isEqualTo(500_000);
+        assertThat(next.path("total").isNull()).isTrue();
+    }
+
+    @Test
+    void seatSuggestions_rankRowsFromTheWholeZoneAfterFrontRowSellsOut() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seatedRows(3, 2, null)).create().showtimeId();
+        UUID zone = fixtures.zoneIds(showtime).getFirst();
+        jdbc.sql("""
+                UPDATE seat SET row_label = CASE row_label WHEN 'A' THEN 'R1' WHEN 'B' THEN 'R2' ELSE 'R10' END
+                WHERE zone_id = :zone
+                """).param("zone", zone).update();
+        String path = suggestions(showtime, zone, 2);
+
+        JsonNode front = get(path + "&position=FRONT").path("seats");
+        assertThat(front).hasSize(2);
+        assertThat(front.get(0).path("row").asString()).isEqualTo("R1");
+        assertThat(front.get(0).path("row_rank").asInt()).isOne();
+        assertThat(get(path).path("seats")).isEqualTo(front);
+
+        JsonNode back = get(path + "&position=BACK").path("seats");
+        assertThat(back).hasSize(2);
+        for (JsonNode seat : back) {
+            assertThat(seat.path("row").asString()).isEqualTo("R10");
+            assertThat(seat.path("row_rank").asInt()).isEqualTo(3);
+        }
+        for (JsonNode seat : front) {
+            fixtures.sellSeat(showtime, UUID.fromString(seat.path("seat_id").asString()));
+        }
+        assertThat(get(path + "&position=BACK").path("seats")).isEqualTo(back);
+        JsonNode next = get(path).path("seats").get(0);
+        assertThat(next.path("row").asString()).isEqualTo("R2");
+        assertThat(next.path("row_rank").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void seatSuggestions_returns404ForHiddenShowtimeMissingShowtimeOrForeignZone() {
+        UUID draft = fixtures.event().draft().showtime(s -> s.onSale().seated(2)).create().showtimeId();
+        var visible = seatSetup();
+        assertNotFound(suggestions(draft, fixtures.zoneIds(draft).getFirst(), 1));
+        assertNotFound(suggestions(UUID.randomUUID(), visible.zone(), 1));
+        assertNotFound(suggestions(visible.showtime(), fixtures.zoneIds(draft).getFirst(), 1));
+    }
+
+    @Test
+    void seatSuggestions_returns404WhenZoneIsAbsentFromEventLayout() {
+        var c = seatSetup();
+        jdbc.sql("DELETE FROM event_zone WHERE zone_id = :zone").param("zone", c.zone()).update();
+
+        assertNotFound(suggestions(c.showtime(), c.zone(), 1));
+    }
+
+    @Test
+    void seatSuggestions_rejectsStandingZoneAndInvalidParameters() {
+        UUID showtime = fixtures.event().showtime(s -> s.onSale().seated(2).standing(10)).create().showtimeId();
+        var zones = fixtures.zoneIds(showtime);
+        String path = "/api/v1/showtimes/" + showtime + "/seat-suggestions";
+        for (String query : List.of("?quantity=1", "?zone_id=invalid&quantity=1", "?zone_id=" + zones.getFirst(),
+                "?zone_id=" + zones.getFirst() + "&quantity=0", "?zone_id=" + zones.getFirst() + "&quantity=11",
+                "?zone_id=" + zones.getFirst() + "&quantity=1&position=SIDE",
+                "?zone_id=" + zones.getLast() + "&quantity=1")) {
+            client.get().uri(path + query).exchange().expectStatus().isBadRequest()
+                    .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR");
+        }
+    }
+
+    private static String suggestions(UUID showtime, UUID zone, int quantity) {
+        return "/api/v1/showtimes/" + showtime + "/seat-suggestions?zone_id=" + zone + "&quantity=" + quantity;
+    }
+
+    // ------------------------------------------------------------------ suggestSeats
 
     /** Suất 4 ghế cùng hàng; trả (suất, khu, ghế). */
     private record SeatSetup(UUID showtime, UUID zone, List<UUID> seats) {
@@ -284,8 +410,6 @@ class SeatmapTest extends IntegrationTest {
 
         assertThat(searchService.suggestSeats(c.showtime(), c.zone(), 4)).containsExactlyInAnyOrderElementsOf(c.seats());
     }
-
-    // ------------------------------------------------------------------ suggestSeats
 
     @Test
     void suggestSeats_prefersAdjacentSeatsInSameRow() {

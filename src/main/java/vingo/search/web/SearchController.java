@@ -18,6 +18,7 @@ import vingo.api.model.EventDetail;
 import vingo.api.model.GetAvailability200Response;
 import vingo.api.model.ListEventShowtimes200Response;
 import vingo.api.model.SeatMap;
+import vingo.api.model.SeatSuggestion;
 import vingo.api.model.SearchEvents200Response;
 import vingo.search.EventSearchCriteria;
 import vingo.search.EventSearchCriteria.After;
@@ -26,6 +27,7 @@ import vingo.search.EventSummaryResult;
 import vingo.search.InvalidSearchRequestException;
 import vingo.search.Page;
 import vingo.search.SearchService;
+import vingo.search.SeatPosition;
 
 /** Endpoint tìm kiếm và xem chi tiết sự kiện, sơ đồ ghế, số chỗ còn công khai. Các operation khác của tag Search chưa hiện thực nên giữ mặc định 501. */
 @RestController
@@ -92,6 +94,13 @@ class SearchController implements SearchApi {
     @Override
     public ResponseEntity<SeatMap> getSeatmap(UUID showtimeId, UUID zoneId) {
         return ResponseEntity.ok(mapper.toSeatMap(searchService.getSeatmap(showtimeId, zoneId)));
+    }
+
+    @Override
+    public ResponseEntity<SeatSuggestion> suggestSeats(UUID showtimeId, UUID zoneId, Integer quantity, String position) {
+        var result = searchService.getSeatSuggestion(showtimeId, zoneId, quantity, SeatPosition.parse(position));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(mapper.toSeatSuggestion(result));
     }
 
     @Override
