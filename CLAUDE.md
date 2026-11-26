@@ -114,6 +114,8 @@ Quy tắc:
 | 401 | INVALID_CREDENTIALS | Sai thông tin đăng nhập |
 | 403 | FORBIDDEN | Không có quyền |
 | 404 | NOT_FOUND | Không tìm thấy |
+| 409 | TURN_IN_PROGRESS | Hội thoại đang có turn chạy |
+| 409 | ACTION_NOT_PENDING | Đề xuất không còn chờ xác nhận |
 | 409 | EMAIL_TAKEN | Email đã tồn tại |
 | 409 | SEAT_TAKEN | Ghế vừa bị giữ/bán (kèm gợi ý ghế khác) |
 | 409 | NOT_ENOUGH_STOCK | Khu đứng không đủ chỗ |

@@ -25,8 +25,10 @@ public class SecurityConfig {
     // Profile worker chạy không có web (web-application-type: none) nên không có HttpSecurity.
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthenticationHandlers handlers) throws Exception {
-        http
+    SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthenticationHandlers handlers,
+            @org.springframework.beans.factory.annotation.Value("${vingo.agent.key:}") String agentKey) throws Exception {
+        http.addFilterBefore(new AgentKeyFilter(agentKey, handlers),
+                        org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class)
                 .csrf(csrf -> csrf.disable())
                 .logout(logout -> logout.disable())
                 .requestCache(cache -> cache.disable())
