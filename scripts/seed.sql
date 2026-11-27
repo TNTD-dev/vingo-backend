@@ -155,7 +155,6 @@ ON CONFLICT (id) DO UPDATE SET
     password_hash = EXCLUDED.password_hash,
     role = EXCLUDED.role,
     email_verified_at = EXCLUDED.email_verified_at,
-    phone_verified_at = NULL,
     admin_locked = EXCLUDED.admin_locked,
     deleted_at = NULL,
     failed_login_count = 0,

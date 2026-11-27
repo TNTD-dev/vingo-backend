@@ -95,7 +95,7 @@ public class AuthService {
         rateLimiter.check(clientKey(clientIp), "auth-register",
                 otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
         String normalizedName = fullName == null ? "" : fullName.strip();
-        String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+        String normalizedEmail = normalizeEmail(email);
         String rawPhone = phone == null ? "" : phone.strip();
         String normalizedPhone = normalizeAccountPhone(rawPhone);
         if (!StringUtils.hasText(normalizedName)) {
@@ -116,7 +116,7 @@ public class AuthService {
                 OffsetDateTime expiresAt = now.plus(otpProperties.ttl());
                 AuthUser user = accounts.createUnverifiedUser(
                         normalizedEmail, normalizedPhone, normalizedName, passwordHash, now);
-                var otp = accounts.createOtp(user.id(), OtpPurpose.VERIFY, clientKey(clientIp),
+                var otp = accounts.createOtp(user.id(), OtpPurpose.VERIFY, user.email(), clientKey(clientIp),
                         otpHash, now, expiresAt, true);
                 return new RegisteredOtp(user.id(), otp.id(), otp.expiresAt());
             });
@@ -162,6 +162,7 @@ public class AuthService {
         var otp = found.get().otp();
         var user = accounts.findEditableAccount(otp.userId()).orElse(null);
         if (otp.purpose() != OtpPurpose.VERIFY || otp.consumedAt() != null || user == null
+                || !otp.targetEmail().equals(user.user().email())
                 || !"UNVERIFIED".equals(user.user().status()) || !isLatest(otp)) {
             return new VerifyOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
         }
@@ -201,8 +202,8 @@ public class AuthService {
         notifications.sendOtpEmail(UUID.randomUUID(), success.email(), rawOtp, success.expiresAt());
         tx.executeWithoutResult(status -> {
             var previous = accounts.findOtpForUpdate(otpId).orElseThrow().otp();
-            accounts.findEditableAccount(previous.userId()).orElseThrow();
-            if (previous.consumedAt() != null || !isLatest(previous)) {
+            var user = accounts.findEditableAccount(previous.userId()).orElseThrow();
+            if (previous.consumedAt() != null || !previous.targetEmail().equals(user.user().email()) || !isLatest(previous)) {
                 throw new DomainException(ErrorCode.OTP_INVALID, "Phiên OTP đã được thay thế hoặc sử dụng");
             }
             accounts.markOtpDelivered(success.otpId());
@@ -221,7 +222,7 @@ public class AuthService {
         }
         var otp = found.get().otp();
         var user = accounts.findEditableAccount(otp.userId()).orElse(null);
-        if (user == null || otp.consumedAt() != null || !isLatest(otp)) {
+        if (user == null || !otp.targetEmail().equals(user.user().email()) || otp.consumedAt() != null || !isLatest(otp)) {
             return new ResendOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
         }
         boolean validState = (otp.purpose() == OtpPurpose.VERIFY && "UNVERIFIED".equals(user.user().status()))
@@ -242,7 +243,7 @@ public class AuthService {
             return new ResendOutcome.RateLimited(retryAfter);
         }
         OffsetDateTime newExpiresAt = now.plus(otpProperties.ttl());
-        var next = accounts.createOtp(otp.userId(), otp.purpose(), otp.clientKey(), newOtpHash, now, newExpiresAt, false);
+        var next = accounts.createOtp(otp.userId(), otp.purpose(), user.user().email(), otp.clientKey(), newOtpHash, now, newExpiresAt, false);
         return new ResendOutcome.Success(user.user().id(), user.user().email(), next.id(), newExpiresAt);
     }
 
@@ -252,7 +253,7 @@ public class AuthService {
     public OtpSessionInfo forgotPassword(String email, String clientIp) {
         rateLimiter.check(clientKey(clientIp), "auth-forgot-password",
                 otpProperties.registerMaxPerWindow(), otpProperties.registerWindow());
-        String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+        String normalizedEmail = normalizeEmail(email);
         String rawOtp = generateOtp();
         String otpHash = passwordEncoder.encode(rawOtp);
 
@@ -267,7 +268,7 @@ public class AuthService {
             if (!"ACTIVE".equals(user.status()) && !"LOCKED".equals(user.status())) {
                 return new ForgotPasswordResult(null, null, UUID.randomUUID(), expiresAt, false);
             }
-            var otp = accounts.createOtp(user.id(), OtpPurpose.RESET, clientKey(clientIp),
+            var otp = accounts.createOtp(user.id(), OtpPurpose.RESET, user.email(), clientKey(clientIp),
                     otpHash, now, expiresAt, true);
             return new ForgotPasswordResult(user.id(), user.email(), otp.id(), otp.expiresAt(), true);
         });
@@ -313,7 +314,8 @@ public class AuthService {
         var otp = found.get().otp();
         var user = accounts.findEditableAccount(otp.userId()).orElse(null);
         boolean eligibleUser = user != null && ("ACTIVE".equals(user.user().status()) || "LOCKED".equals(user.user().status()));
-        if (otp.purpose() != OtpPurpose.RESET || otp.consumedAt() != null || !eligibleUser || !isLatest(otp)) {
+        if (otp.purpose() != OtpPurpose.RESET || otp.consumedAt() != null || !eligibleUser
+                || !otp.targetEmail().equals(user.user().email()) || !isLatest(otp)) {
             return new ResetOutcome.Failure(ErrorCode.OTP_INVALID, "Phiên OTP không hợp lệ hoặc đã được sử dụng");
         }
         if (!otp.expiresAt().isAfter(now)) {
@@ -340,7 +342,11 @@ public class AuthService {
                 .orElse(false);
     }
 
-    private static String normalizeAccountPhone(String rawPhone) {
+    static String normalizeEmail(String email) {
+        return email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
+    }
+
+    static String normalizeAccountPhone(String rawPhone) {
         return PhoneNumbers.normalize(rawPhone)
                 .or(() -> rawPhone.matches("^\\+[1-9][0-9]{8,14}$") ? java.util.Optional.of(rawPhone) : java.util.Optional.empty())
                 .orElseThrow(() -> new DomainException(ErrorCode.VALIDATION_ERROR, "Số điện thoại không hợp lệ"));

@@ -86,6 +86,8 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         assertThat(session.getOtpSessionId()).isNotNull();
         assertThat(session.getChannel()).isEqualTo(OtpSession.ChannelEnum.EMAIL);
         assertThat(session.getExpiresAt()).isNotNull();
+        assertThat(jdbc.sql("SELECT target_email FROM otp_verification WHERE id = :id")
+                .param("id", session.getOtpSessionId()).query(String.class).single()).isEqualTo(normalizedEmail);
 
         java.time.OffsetDateTime emailVerifiedAt = jdbc.sql("SELECT email_verified_at FROM user_account WHERE email = :email")
                 .param("email", normalizedEmail)
@@ -142,9 +144,6 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(emailConflict).isNotNull();
         assertThat(emailConflict.getCode()).isEqualTo(Problem.CodeEnum.EMAIL_TAKEN);
-
-        jdbc.sql("UPDATE user_account SET phone_verified_at = :now WHERE email = :email")
-                .param("now", java.time.OffsetDateTime.now(clock)).param("email", email).update();
 
         OtpSession session = registerUser("other." + UUID.randomUUID() + "@vingo.local", phone);
         assertThat(session.getChannel()).isEqualTo(OtpSession.ChannelEnum.EMAIL);
@@ -320,6 +319,8 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .returnResult()
                 .getResponseBody();
         assertThat(resent).isNotNull();
+        assertThat(jdbc.sql("SELECT target_email FROM otp_verification WHERE id = :id")
+                .param("id", resent.getOtpSessionId()).query(String.class).single()).isEqualTo(email);
 
         assertThat(mailSender.sent).hasSize(2);
         String secondOtp = extractOtp(mailSender.sent.getLast().payload().html());
@@ -435,6 +436,8 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
                 .getResponseBody();
         assertThat(resetSession).isNotNull();
         assertThat(resetSession.getOtpSessionId()).isNotNull();
+        assertThat(jdbc.sql("SELECT target_email FROM otp_verification WHERE id = :id")
+                .param("id", resetSession.getOtpSessionId()).query(String.class).single()).isEqualTo(email);
         String resetOtp = extractOtp(mailSender.sent.getLast().payload().html());
 
         // Không được dùng phiên RESET cho /auth/otp/verify
@@ -495,14 +498,9 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void emailOtpEndpoints_rejectLegacySessionWithoutSendingMail() {
-        UUID session = jdbc.sql("""
-                INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at)
-                SELECT id, 'PHONE', phone, :client, 'legacy', :sent, :expires FROM user_account WHERE id = :buyer
-                RETURNING id
-                """).param("buyer", catalog.buyer()).param("client", UUID.randomUUID())
-                .param("sent", java.time.OffsetDateTime.now(clock))
-                .param("expires", java.time.OffsetDateTime.now(clock).plusMinutes(5)).query(UUID.class).single();
+    void emailOtpEndpoints_rejectMissingSessionWithoutSendingMail() {
+        // Legacy PHONE rows are removed by the migration, so their IDs no longer resolve.
+        UUID session = UUID.randomUUID();
 
         client.post().uri(VERIFY_OTP).body(new VerifyOtpRequest(session, "123456"))
                 .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
@@ -511,6 +509,77 @@ class RegisterAndOtpIntegrationTest extends IntegrationTest {
         client.post().uri(RESET_PASSWORD).body(new ResetPasswordRequest(session, "123456", PASSWORD))
                 .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
         assertThat(mailSender.sent).isEmpty();
+    }
+
+    @Test
+    void verifyAndResendOtp_rejectCodeSentToPreviousEmail_withoutActivatingAccount() {
+        String email = "old." + UUID.randomUUID() + "@vingo.local";
+        OtpSession session = registerUser(email, randomPhone());
+        String otp = extractOtp(mailSender.sent.getLast().payload().html());
+        UUID user = jdbc.sql("SELECT user_id FROM otp_verification WHERE id = :id")
+                .param("id", session.getOtpSessionId()).query(UUID.class).single();
+        jdbc.sql("UPDATE user_account SET email = :email WHERE id = :id")
+                .param("email", "new." + UUID.randomUUID() + "@vingo.local").param("id", user).update();
+        clock.advance(Duration.ofSeconds(31));
+
+        client.post().uri(VERIFY_OTP).body(new VerifyOtpRequest(session.getOtpSessionId(), otp))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+        client.post().uri(RESEND_OTP).body(new ResendOtpRequest(session.getOtpSessionId()))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+
+        assertThat(mailSender.sent).hasSize(1);
+        assertThat(jdbc.sql("SELECT email_verified_at IS NULL FROM user_account WHERE id = :id")
+                .param("id", user).query(Boolean.class).single()).isTrue();
+        assertThat(jdbc.sql("SELECT count(*) FROM login_session WHERE user_id = :id")
+                .param("id", user).query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM otp_verification WHERE user_id = :id")
+                .param("id", user).query(Integer.class).single()).isOne();
+        assertThat(jdbc.sql("SELECT target_email = :email AND consumed_at IS NULL AND attempts = 0 FROM otp_verification WHERE id = :id")
+                .param("email", email).param("id", session.getOtpSessionId()).query(Boolean.class).single()).isTrue();
+    }
+
+    @Test
+    void resetAndResendOtp_rejectCodeSentToPreviousEmail_andNewEmailCanResetPassword() {
+        String email = "old.reset." + UUID.randomUUID() + "@vingo.local";
+        OtpSession verification = registerUser(email, randomPhone());
+        String verifyOtp = extractOtp(mailSender.sent.getLast().payload().html());
+        var login = client.post().uri(VERIFY_OTP).body(new VerifyOtpRequest(verification.getOtpSessionId(), verifyOtp))
+                .exchange().expectStatus().isOk().expectBody(LoginResult.class).returnResult();
+        UUID user = login.getResponseBody().getUser().getId();
+        String token = sessionToken(login.getResponseHeaders());
+        OtpSession reset = client.post().uri(FORGOT_PASSWORD).body(new ForgotPasswordRequest(email))
+                .exchange().expectStatus().isAccepted().expectBody(OtpSession.class).returnResult().getResponseBody();
+        String oldOtp = extractOtp(mailSender.sent.getLast().payload().html());
+        String originalHash = jdbc.sql("SELECT password_hash FROM user_account WHERE id = :id")
+                .param("id", user).query(String.class).single();
+        String newEmail = "new.reset." + UUID.randomUUID() + "@vingo.local";
+        jdbc.sql("UPDATE user_account SET email = :email WHERE id = :id")
+                .param("email", newEmail).param("id", user).update();
+        clock.advance(Duration.ofSeconds(31));
+
+        client.post().uri(RESET_PASSWORD).body(new ResetPasswordRequest(reset.getOtpSessionId(), oldOtp, "NewPassword#2026"))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+        client.post().uri(RESEND_OTP).body(new ResendOtpRequest(reset.getOtpSessionId()))
+                .exchange().expectStatus().isBadRequest().expectBody().jsonPath("$.code").isEqualTo("OTP_INVALID");
+
+        assertThat(mailSender.sent).hasSize(2);
+        assertThat(jdbc.sql("SELECT password_hash FROM user_account WHERE id = :id")
+                .param("id", user).query(String.class).single()).isEqualTo(originalHash);
+        assertThat(jdbc.sql("SELECT target_email = :email AND consumed_at IS NULL AND attempts = 0 FROM otp_verification WHERE id = :id")
+                .param("email", email).param("id", reset.getOtpSessionId()).query(Boolean.class).single()).isTrue();
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(token)).exchange().expectStatus().isOk();
+
+        OtpSession next = client.post().uri(FORGOT_PASSWORD).body(new ForgotPasswordRequest(newEmail))
+                .exchange().expectStatus().isAccepted().expectBody(OtpSession.class).returnResult().getResponseBody();
+        assertThat(jdbc.sql("SELECT target_email FROM otp_verification WHERE id = :id")
+                .param("id", next.getOtpSessionId()).query(String.class).single()).isEqualTo(newEmail);
+        assertThat(mailSender.sent.getLast().payload().recipient()).isEqualTo(newEmail);
+        String newOtp = extractOtp(mailSender.sent.getLast().payload().html());
+        client.post().uri(RESET_PASSWORD).body(new ResetPasswordRequest(next.getOtpSessionId(), newOtp, "NewPassword#2026"))
+                .exchange().expectStatus().isNoContent();
+        client.get().uri("/api/v1/me").headers(h -> h.setBearerAuth(token)).exchange().expectStatus().isUnauthorized();
+        client.post().uri(LOGIN).body(new LoginRequest(newEmail, "NewPassword#2026"))
+                .exchange().expectStatus().isOk();
     }
 
     private OtpSession registerUser(String email, String phone) {

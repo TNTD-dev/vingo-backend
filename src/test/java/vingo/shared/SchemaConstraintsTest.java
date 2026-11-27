@@ -1,5 +1,6 @@
 package vingo.shared;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.OffsetDateTime;
@@ -8,6 +9,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -89,19 +91,77 @@ class SchemaConstraintsTest extends IntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"VERIFY", "RESET"})
-    void emailOtp_rejectsPhoneNumber(String purpose) {
+    void emailOtp_requiresTargetEmail(String purpose) {
         UUID user = catalog.buyer();
-        assertThatThrownBy(() -> insertOtp(user, purpose, "+84912345678"))
+        assertThatThrownBy(() -> insertOtp(user, purpose, null, 0))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        insertOtp(user, purpose, "target@example.invalid", 0);
+    }
+
+    @Test
+    void emailOtp_allowsConfigurableAttemptLimit_butRejectsNegativeAttempts() {
+        UUID user = catalog.buyer();
+        insertOtp(user, "VERIFY", "target@example.invalid", 6);
+        assertThatThrownBy(() -> insertOtp(user, "VERIFY", "target@example.invalid", -1))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    private void insertOtp(UUID user, String purpose, String phone) {
+    @Test
+    void googleAccount_requiresVerifiedEmail() {
+        UUID user = catalog.buyer();
+        String subject = UUID.randomUUID().toString();
+        assertThatThrownBy(() -> jdbc.sql("UPDATE user_account SET google_sub = :sub, email_verified_at = NULL WHERE id = :id")
+                .param("sub", subject).param("id", user).update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("user_account_google_email_verified_check");
+        jdbc.sql("UPDATE user_account SET google_sub = :sub, password_hash = NULL WHERE id = :id")
+                .param("sub", subject).param("id", user).update();
+    }
+
+    @Test
+    void adminAccount_requiresPassword_unlessDeleted() {
+        UUID user = catalog.buyer();
+        assertThatThrownBy(() -> jdbc.sql("""
+                UPDATE user_account SET role = 'ADMIN', password_hash = NULL, google_sub = :sub WHERE id = :id
+                """).param("sub", UUID.randomUUID().toString()).param("id", user).update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("user_account_admin_password_check");
+        jdbc.sql("UPDATE user_account SET role = 'ADMIN' WHERE id = :id").param("id", user).update();
+        jdbc.sql("""
+                UPDATE user_account SET deleted_at = :now, password_hash = NULL, phone = NULL WHERE id = :id
+                """).param("now", OffsetDateTime.now(clock)).param("id", user).update();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"password_hash, hash", "google_sub, subject", "phone, +84912345678", "avatar_url, https://example.invalid/avatar"})
+    void deletedAccount_rejectsRemainingPersonalData(String column, String value) {
+        UUID user = catalog.buyer();
+        jdbc.sql("""
+                UPDATE user_account SET deleted_at = :now, password_hash = NULL, phone = NULL WHERE id = :id
+                """).param("now", OffsetDateTime.now(clock)).param("id", user).update();
+        assertThatThrownBy(() -> jdbc.sql("UPDATE user_account SET " + column + " = :value WHERE id = :id")
+                .param("value", value).param("id", user).update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("user_account_deleted_personal_data_check");
+    }
+
+    @Test
+    void userAccounts_allowSharedContactPhone() {
+        UUID first = catalog.buyer();
+        UUID second = catalog.buyer();
+        jdbc.sql("UPDATE user_account SET phone = (SELECT phone FROM user_account WHERE id = :first) WHERE id = :second")
+                .param("first", first).param("second", second).update();
+        assertThat(jdbc.sql("SELECT count(DISTINCT phone) FROM user_account WHERE id IN (:first, :second)")
+                .param("first", first).param("second", second).query(Integer.class).single()).isOne();
+    }
+
+    private void insertOtp(UUID user, String purpose, String targetEmail, int attempts) {
         var now = OffsetDateTime.now(clock);
         jdbc.sql("""
-                INSERT INTO otp_verification (user_id, purpose, phone, client_key, code_hash, sent_at, expires_at)
-                VALUES (:user, :purpose::otp_purpose, :phone, :clientKey, 'hash', :now, :expires)
+                INSERT INTO otp_verification (user_id, purpose, target_email, client_key, code_hash, attempts, sent_at, expires_at)
+                VALUES (:user, :purpose::otp_purpose, :email, :clientKey, 'hash', :attempts, :now, :expires)
                 """).param("user", user).param("purpose", purpose)
-                .param("phone", phone).param("clientKey", UUID.randomUUID())
+                .param("email", targetEmail).param("attempts", attempts).param("clientKey", UUID.randomUUID())
                 .param("now", now).param("expires", now.plusMinutes(5)).update();
     }
 }

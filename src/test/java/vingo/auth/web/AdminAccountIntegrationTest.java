@@ -142,7 +142,10 @@ class AdminAccountIntegrationTest extends IntegrationTest {
         jdbc.sql("UPDATE user_account SET email_verified_at = NULL WHERE id = :id").param("id", id).update();
         client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
                 .body(Map.of("locked", false, "reason", "Test")).exchange().expectStatus().isBadRequest();
-        jdbc.sql("UPDATE user_account SET email_verified_at = :now, deleted_at = :now WHERE id = :id")
+        jdbc.sql("""
+                UPDATE user_account SET email_verified_at = :now, deleted_at = :now,
+                    password_hash = NULL, google_sub = NULL, phone = NULL, avatar_url = NULL WHERE id = :id
+                """)
                 .param("now", java.time.OffsetDateTime.now(clock)).param("id", id).update();
         client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
                 .body(Map.of("locked", false, "reason", "Test")).exchange().expectStatus().isBadRequest();
@@ -150,7 +153,11 @@ class AdminAccountIntegrationTest extends IntegrationTest {
                 .param("now", java.time.OffsetDateTime.now(clock))
                 .param("sub", UUID.randomUUID().toString()).param("id", id).update();
         client.patch().uri(ROOT + "/" + id).headers(h -> h.setBearerAuth(admin))
-                .body(Map.of("role", "ADMIN", "reason", "Test")).exchange().expectStatus().isBadRequest();
+                .body(Map.of("role", "ADMIN", "reason", "Test")).exchange().expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("VALIDATION_ERROR")
+                .jsonPath("$.detail").isEqualTo("Tài khoản cần thiết lập mật khẩu trước khi được cấp ADMIN");
+        assertThat(jdbc.sql("SELECT role::text FROM user_account WHERE id = :id")
+                .param("id", id).query(String.class).single()).isEqualTo("BUYER");
         update(admin, id, Map.of("locked", true, "reason", "Test"));
         update(admin, id, Map.of("locked", true, "reason", "Test"));
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE entity_id = :id")

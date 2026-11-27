@@ -215,7 +215,6 @@ public class AuthRepository {
                               OffsetDateTime now) {
         jdbc.sql("""
                         UPDATE user_account SET full_name = :name, phone = :phone,
-                            phone_verified_at = CASE WHEN phone IS DISTINCT FROM :phone THEN NULL ELSE phone_verified_at END,
                             password_hash = COALESCE(:passwordHash, password_hash), updated_at = :now
                         WHERE id = :id
                         """)
@@ -225,10 +224,11 @@ public class AuthRepository {
 
     /** Ẩn danh hoá tài khoản: giữ hàng để khoá ngoại của OTP và đơn vẫn đúng, xoá mọi dữ liệu cá nhân. */
     public void deleteAccount(UUID userId, OffsetDateTime now) {
+        jdbc.sql("DELETE FROM attendee_profile WHERE user_id = :id").param("id", userId).update();
         jdbc.sql("DELETE FROM user_device WHERE user_id = :id").param("id", userId).update();
         jdbc.sql("""
                         UPDATE user_account SET email = 'deleted+' || id || '@invalid.local', phone = NULL,
-                            phone_verified_at = NULL, full_name = 'Deleted user', password_hash = NULL,
+                            full_name = 'Deleted user', password_hash = NULL,
                             google_sub = NULL, avatar_url = NULL, locked_until = NULL,
                             failed_login_count = 0, last_failed_login_at = NULL,
                             deleted_at = :now, updated_at = :now
@@ -288,16 +288,17 @@ public class AuthRepository {
     }
 
     /** Ghi lượt gửi OTP email; phiên gửi lại chỉ có hiệu lực sau khi gửi thành công. */
-    public OtpRecord createOtp(UUID userId, OtpPurpose purpose, UUID clientKey, String codeHash,
+    public OtpRecord createOtp(UUID userId, OtpPurpose purpose, String targetEmail, UUID clientKey, String codeHash,
                                OffsetDateTime now, OffsetDateTime expiresAt, boolean usable) {
         return jdbc.sql("""
-                        INSERT INTO otp_verification (user_id, purpose, client_key, code_hash, sent_at, expires_at, delivered)
-                        VALUES (:userId, CAST(:purpose AS otp_purpose), :clientKey, :codeHash, :now, :expiresAt,
+                        INSERT INTO otp_verification (user_id, purpose, target_email, client_key, code_hash, sent_at, expires_at, delivered)
+                        VALUES (:userId, CAST(:purpose AS otp_purpose), :targetEmail, :clientKey, :codeHash, :now, :expiresAt,
                                 :usable)
-                        RETURNING id, user_id, purpose, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
+                        RETURNING id, user_id, purpose, target_email, client_key, code_hash, attempts, sent_at, expires_at, consumed_at
                         """)
                 .param("userId", userId)
                 .param("purpose", purpose.name())
+                .param("targetEmail", targetEmail)
                 .param("clientKey", clientKey)
                 .param("codeHash", codeHash)
                 .param("now", now)
@@ -307,10 +308,10 @@ public class AuthRepository {
                 .single();
     }
 
-    /** Khoá dòng OTP và tài khoản chủ để kiểm tra trong transaction. */
+    /** Khoá dòng OTP để kiểm tra trong transaction; service khoá tài khoản chủ sau đó. */
     public Optional<OtpWithUser> findOtpForUpdate(UUID otpId) {
         return jdbc.sql("""
-                        SELECT o.id, o.user_id, o.purpose, o.client_key, o.code_hash, o.attempts,
+                        SELECT o.id, o.user_id, o.purpose, o.target_email, o.client_key, o.code_hash, o.attempts,
                                o.sent_at, o.expires_at, o.consumed_at
                         FROM otp_verification o
                         WHERE o.id = :id AND o.purpose IN ('VERIFY', 'RESET')
@@ -404,7 +405,7 @@ public class AuthRepository {
 
     private static OtpRecord otp(ResultSet rs, int row) throws SQLException {
         return new OtpRecord(rs.getObject("id", UUID.class), rs.getObject("user_id", UUID.class),
-                OtpPurpose.valueOf(rs.getString("purpose")),
+                OtpPurpose.valueOf(rs.getString("purpose")), rs.getString("target_email"),
                 rs.getObject("client_key", UUID.class), rs.getString("code_hash"), rs.getInt("attempts"),
                 rs.getObject("sent_at", OffsetDateTime.class), rs.getObject("expires_at", OffsetDateTime.class),
                 rs.getObject("consumed_at", OffsetDateTime.class));
@@ -419,6 +420,7 @@ public class AuthRepository {
             UUID id,
             UUID userId,
             OtpPurpose purpose,
+            String targetEmail,
             UUID clientKey,
             String codeHash,
             int attempts,
