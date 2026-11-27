@@ -12,7 +12,7 @@ import vingo.support.CatalogFixture.Window;
 class CatalogFixtureTest extends IntegrationTest {
 
     @Test
-    void onSaleShowtime_createsAvailableSeatsStandingStockAndCouplePair() {
+    void onSaleShowtime_createsAvailableSeatsAndStandingStock() {
         var showtime = catalog.onSaleShowtime();
         var event = showtime.event();
 

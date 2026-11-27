@@ -75,6 +75,7 @@ final class SessionAuthenticationFilter extends OncePerRequestFilter {
                 problems.handle(request, response, null);
                 return;
             }
+            request.setAttribute(vingo.shared.security.AgentRequest.SESSION_TOKEN, token);
             var principal = user.get();
             var context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated(principal, null,

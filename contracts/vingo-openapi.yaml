@@ -23,6 +23,7 @@ tags:
   - name: Auth
   - name: Me
   - name: Attendees
+  - name: Chat
   - name: Realtime
   - name: Search
   - name: Booking
@@ -37,6 +38,226 @@ security:
   - sessionCookie: []
 
 paths:
+  /chat/conversations:
+    post:
+      operationId: createChatConversation
+      tags: [Chat]
+      description: |
+        Tạo hội thoại theo role của phiên; trả {conversation_id, role}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { conversation_id: '019aaa00-0000-7000-8000-000000000001', role: BUYER }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/conversations/{id}:
+    get:
+      operationId: getChatConversation
+      tags: [Chat]
+      description: |
+        Lấy lịch sử tin nhắn, block đã lọc và đề xuất PENDING của hội thoại thuộc user.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { messages: [], blocks: [], pending_actions: [] }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/conversations/{id}/messages:
+    post:
+      operationId: sendChatMessage
+      tags: [Chat]
+      description: |
+        Gửi tin nhắn (tối đa 4000 ký tự), lựa chọn Ref và visible_action đang hiện; command_id nhận diện lượt gửi trùng.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Stream nguyên sự kiện turn.started, progress, text.delta, block, notice, turn.completed hoặc turn.failed; mỗi sự kiện có turn_id và seq. Lấy turn khi mất kết nối.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatMessageRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/ChatStream' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '413': { $ref: '#/components/responses/ImportTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: Turn đang chạy hoặc đề xuất không còn chờ xác nhận
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                busy:
+                  value: { status: 409, code: TURN_IN_PROGRESS, title: Turn đang chạy }
+                stale:
+                  value: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/actions/{action_id}/confirm:
+    post:
+      operationId: confirmChatAction
+      tags: [Chat]
+      description: |
+        Xác nhận đúng version của đề xuất đã lưu bằng command_id; buyer dành cho form thanh toán, confirm_phrase dành cho thao tác cần gõ lại tên.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Stream nguyên sự kiện turn.started, progress, text.delta, block, notice, turn.completed hoặc turn.failed; mỗi sự kiện có turn_id và seq. Lấy turn khi mất kết nối.
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatConfirmRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/ChatStream' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: Turn đang chạy hoặc đề xuất không còn chờ xác nhận
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                busy:
+                  value: { status: 409, code: TURN_IN_PROGRESS, title: Turn đang chạy }
+                stale:
+                  value: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/actions/{action_id}/reject:
+    post:
+      operationId: rejectChatAction
+      tags: [Chat]
+      description: |
+        Từ chối đúng version của đề xuất đang chờ; command_id chống thực thi trùng tại agent; trả {state}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatRejectRequest' }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { state: REJECTED }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '409':
+          description: ACTION_NOT_PENDING - đề xuất đã bị thay, đã xử lý hoặc sai version
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { status: 409, code: ACTION_NOT_PENDING, title: Đề xuất đã thay đổi }
+  /chat/uploads:
+    post:
+      operationId: uploadChatFile
+      tags: [Chat]
+      description: |
+        Tải đúng một SVG hoặc ảnh poster PNG/JPEG/WebP tối đa 10 MiB; trả {upload_id, kind, size}.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary, description: Một SVG hoặc ảnh poster tối đa 10 MiB }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { upload_id: '019aaa00-0000-7000-8000-000000000002', kind: SVG, size: 1024 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '415':
+          description: UNSUPPORTED_MEDIA_TYPE - chỉ nhận SVG, PNG, JPEG, WebP
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { status: 415, code: UNSUPPORTED_MEDIA_TYPE, title: Định dạng không hỗ trợ }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '413': { $ref: '#/components/responses/ImportTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /chat/turns/{turn_id}:
+    get:
+      operationId: getChatTurn
+      tags: [Chat]
+      description: |
+        Lấy {state, text, blocks} cuối cùng của turn thuộc user để khôi phục khi mất SSE.
+        BUYER hoặc ADMIN đã đăng nhập. Proxy sang agent; agent kiểm quyền sở hữu hội thoại và tài nguyên.
+        Trả dữ liệu đã lọc từ agent, không lưu token phiên.
+      parameters:
+        - name: turn_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+              example: { state: COMPLETED, text: Xin chào, blocks: [] }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   # ------------------------------------------------------------------ Auth
   /auth/register:
     post:
@@ -624,6 +845,46 @@ paths:
               schema: { $ref: '#/components/schemas/SeatMap' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /showtimes/{showtime_id}/seat-suggestions:
+    get:
+      operationId: suggestSeats
+      tags: [Search]
+      summary: Gợi ý một nhóm ghế trống trong khu ngồi
+      description: |
+        Gọi khi người mua muốn chọn một nhóm ghế trong cùng khu. Ưu tiên ghế cùng hàng có số liên tiếp.
+        Trong mỗi khu, hàng có số nhỏ nhất nằm sát sân. FRONT ưu tiên hàng gần sân, BACK ưu tiên hàng xa sân,
+        MIDDLE ưu tiên hàng gần giữa khu; nếu cách giữa khu bằng nhau thì chọn hàng gần sân trước.
+        Nếu phải tách, ưu tiên ít hàng nhất rồi tổng khoảng số ghế trong từng hàng hẹp nhất.
+        Khi hai nhóm ngang nhau theo các tiêu chí này, ưu tiên hàng theo position.
+        Vị trí chỉ xếp hạng hàng trong khu đã chọn. Muốn chọn khu gần sân khấu hơn, hãy đổi zone_id.
+        Nếu còn ít hơn `quantity` ghế trống, trả `seats: []`. Ghế HELD quá hạn được tính là trống.
+        Gợi ý phản ánh tồn kho tại `observed_at`. Muốn giữ các ghế này, hãy gọi `holdSeats`.
+
+        Gợi ý cho agent: gọi `getAvailability` trước để chọn khu SEATED còn chỗ.
+        “gần sân khấu/hàng đầu” → FRONT, “phía sau/xa” → BACK, “giữa” → MIDDLE.
+
+        Ví dụ lỗi 400 khi chọn khu STANDING:
+        ```json
+        { "status": 400, "code": "VALIDATION_ERROR", "detail": "Khu đứng không chọn ghế" }
+        ```
+        Giá trị position ngoài FRONT, MIDDLE, BACK trả 400 VALIDATION_ERROR.
+        Suất không tồn tại, không hiển thị hoặc khu ngoài sơ đồ trả 404 NOT_FOUND.
+        Gọi quá nhanh trả 429 RATE_LIMITED kèm header `Retry-After`.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+        - { name: zone_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: quantity, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 10 } }
+        - { name: position, in: query, required: false, schema: { type: string, enum: [FRONT, MIDDLE, BACK], default: FRONT } }
+      responses:
+        '200':
+          description: Nhóm ghế gợi ý và số ghế còn trống trong khu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatSuggestion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /showtimes/{showtime_id}/seatmap.svg:
     get:
       operationId: getSeatmapSvg
@@ -659,7 +920,7 @@ paths:
       summary: Số chỗ còn theo khu và hạng vé
       description: |
         Gọi khi cần biết suất còn chỗ không và khu/hạng nào còn bao nhiêu chỗ, trước khi chọn ghế hoặc tạo hold. Nhẹ hơn `getSeatmap`.
-        Trả `sold_out` và danh sách khu kèm hạng vé. Suất không tồn tại trả 404.
+        Trả `sold_out` và danh sách khu kèm loại khu và hạng vé. Với khu SEATED, chọn ghế qua `getSeatmap` hoặc `suggestSeats`. Với khu STANDING, giữ chỗ bằng `zone_id` + `quantity`. Suất không tồn tại trả 404.
 
         Ví dụ lỗi 404:
         ```json
@@ -686,8 +947,10 @@ paths:
                     type: array
                     items:
                       type: object
+                      required: [kind]
                       properties:
                         zone_id: { type: string, format: uuid }
+                        kind: { $ref: '#/components/schemas/ZoneKind' }
                         code: { type: string, description: Mã khu để liên kết với SVG. }
                         name: { type: string, description: Tên khu hiển thị theo sự kiện. }
                         sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) của khu đối với khu đứng; null đối với khu ngồi (sku nằm trên từng ghế).' }
@@ -704,11 +967,11 @@ paths:
       tags: [Booking]
       summary: Giữ ghế 10 phút và tạo đơn PENDING (tất cả hoặc không)
       description: |
-        Khu ngồi gửi seat_ids (ghế đôi tự giữ kèm ghế cặp). Khu đứng gửi zone_id + quantity.
+        Khu ngồi gửi seat_ids. Khu đứng gửi zone_id + quantity.
         Phiên yêu cầu tài khoản đã xác minh email.
         Đơn PENDING cũ đã quá hạn của khách cho suất này sẽ được đóng trước.
         Nếu khách đã có đơn PENDING còn hạn cho suất này → 409 ORDER_STATE_INVALID; muốn đổi ghế thì huỷ rồi giữ lại.
-        Vượt max_tickets_per_order của sự kiện (tính cả ghế cặp) → 422 MAX_TICKETS_EXCEEDED.
+        Vượt max_tickets_per_order của sự kiện → 422 MAX_TICKETS_EXCEEDED.
         Suất không tồn tại hoặc DRAFT → 404 NOT_FOUND.
       parameters:
         - $ref: '#/components/parameters/ShowtimeId'
@@ -2264,7 +2527,7 @@ paths:
         ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
         AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
         Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
-        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
         Event CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
         Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
@@ -2307,7 +2570,7 @@ paths:
         ADMIN thay đổi ghế theo suất, nguyên tử toàn bộ danh sách; hỗ trợ suất DRAFT.
         AVAILABLE hoặc HELD có held_until < giờ hiện tại được khóa; HELD còn hạn và SOLD trả SEAT_TAKEN.
         Mở khóa chỉ chấp nhận BLOCKED hoặc AVAILABLE. Gửi lại trạng thái đích thành công, không ghi thêm lịch sử.
-        Không tự thêm ghế cặp. Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
+        Ghế ngoài sơ đồ, danh sách rỗng/trùng/null trả VALIDATION_ERROR.
         Event CANCELLED trả EVENT_LOCKED; suất CANCELLED hoặc đã kết thúc trả SHOWTIME_LOCKED.
         Lý do khóa được lưu; dữ liệu và sự kiện làm mới cache cùng transaction.
       parameters: [ { $ref: '#/components/parameters/ShowtimeId' } ]
@@ -2868,6 +3131,52 @@ components:
           example: { title: Quá nhiều yêu cầu, status: 429, code: RATE_LIMITED }
 
   schemas:
+    ChatStream:
+      type: string
+      description: Luồng SSE nguyên bản từ agent.
+    ChatMessageRequest:
+      type: object
+      required: [command_id, text]
+      properties:
+        command_id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 4000, pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F]*$' }
+        selection:
+          type: object
+          required: [type, ids]
+          properties:
+            type: { type: string, enum: [EVENT, SHOWTIME, ZONE, SEATS, ORDER, TICKET] }
+            ids:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: { type: string, format: uuid }
+        visible_action:
+          type: object
+          required: [action_id, version]
+          properties:
+            action_id: { type: string, format: uuid }
+            version: { type: integer, minimum: 1 }
+    ChatConfirmRequest:
+      type: object
+      required: [command_id, version]
+      properties:
+        command_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        buyer: { $ref: '#/components/schemas/ChatBuyer' }
+        confirm_phrase: { type: string }
+    ChatBuyer:
+      type: object
+      required: [full_name, email, phone]
+      properties:
+        full_name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: string, minLength: 1 }
+    ChatRejectRequest:
+      type: object
+      required: [command_id, version]
+      properties:
+        command_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
     Problem:
       type: object
       required: [title, status, code]
@@ -2880,7 +3189,7 @@ components:
           type: string
           enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_CREDENTIALS, ACCOUNT_LOCKED,
                  EMAIL_TAKEN, OTP_INVALID, OTP_EXPIRED, OTP_TOO_MANY_ATTEMPTS,
-                 SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
+                 TURN_IN_PROGRESS, ACTION_NOT_PENDING, SERVICE_UNAVAILABLE, SEAT_TAKEN, NOT_ENOUGH_STOCK, SHOWTIME_NOT_ON_SALE, ORDER_STATE_INVALID, HOLD_EXPIRED,
                  PROFILE_REQUIRED, MAX_TICKETS_EXCEEDED, IDEMPOTENCY_CONFLICT, TICKET_NOT_VALID, TICKET_USED,
                  VENUE_IN_USE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, INVALID_SEAT_LAYOUT, SEAT_LAYOUT_LOCKED, EVENT_LOCKED, EVENT_INCOMPLETE,
                  SHOWTIME_LOCKED, ACTION_STATE_INVALID, RATE_LIMITED]
@@ -3015,6 +3324,7 @@ components:
     EventStatus: { type: string, enum: [DRAFT, PUBLISHED, CANCELLED] }
     ShowtimeStatus: { type: string, enum: [DRAFT, SCHEDULED, ON_SALE, SALES_CLOSED, FINISHED, CANCELLED] }
     SeatStatus: { type: string, enum: [AVAILABLE, HELD, SOLD, BLOCKED] }
+    ZoneKind: { type: string, enum: [SEATED, STANDING] }
     OrderStatus: { type: string, enum: [PENDING, PAID, EXPIRED, CANCELLED, NEEDS_REVIEW, REJECTED] }
     PaymentStatus: { type: string, enum: [OPEN, SUCCEEDED, FAILED, EXPIRED] }
     TicketStatus: { type: string, enum: [ISSUED, USED, VOID] }
@@ -3631,7 +3941,7 @@ components:
             properties:
               zone_id: { type: string, format: uuid }
               name: { type: string }
-              kind: { type: string, enum: [SEATED, STANDING] }
+              kind: { $ref: '#/components/schemas/ZoneKind' }
               sku_id: { type: [string, 'null'], format: uuid, description: 'ID lựa chọn bán (sku) đối với khu STANDING; null đối với khu SEATED.' }
               tier: { $ref: '#/components/schemas/PriceTier' }
               ticket_type: { $ref: '#/components/schemas/TicketType' }
@@ -3648,11 +3958,42 @@ components:
                     price: { type: [integer, 'null'], format: int64, description: Giá có hiệu lực của lựa chọn bán theo hạng vé. }
                     row: { type: string }
                     number: { type: integer }
-                    seat_type: { type: string, enum: [STANDARD, COUPLE, WHEELCHAIR] }
-                    pair_seat_id: { type: [string, 'null'], format: uuid }
                     status: { $ref: '#/components/schemas/SeatStatus' }
                     x: { type: number }
                     y: { type: number }
+
+    SeatSuggestion:
+      type: object
+      required: [showtime_id, zone_id, quantity, seats, together, seats_left, unit_price, total, currency, observed_at]
+      properties:
+        showtime_id: { type: string, format: uuid }
+        zone_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 10 }
+        seats:
+          type: array
+          description: Ghế gợi ý theo thứ tự hàng và số ghế. Rỗng khi khu còn ít hơn quantity ghế trống.
+          items:
+            type: object
+            required: [seat_id, row, number, row_rank]
+            properties:
+              seat_id: { type: string, format: uuid }
+              row: { type: string }
+              number: { type: integer }
+              row_rank: { type: integer, minimum: 1, description: Thứ hạng tự nhiên trên mọi hàng của khu trong layout. Hàng sát sân có hạng 1 kể cả khi đã hết ghế trống. }
+        together: { type: boolean, description: Chỉ true khi nhóm có ghế và mọi ghế cùng hàng với số liên tiếp. }
+        seats_left: { type: integer, minimum: 0, description: Tổng số ghế trống trong khu tại thời điểm đọc. }
+        unit_price:
+          type: [integer, 'null']
+          format: int64
+          description: Giá hạng vé của khu. Null khi khu chưa gán hạng giá.
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        total:
+          type: [integer, 'null']
+          format: int64
+          description: Đơn giá nhân số ghế gợi ý. Null khi chưa có giá hoặc danh sách ghế rỗng.
+          x-field-extra-annotation: '@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)'
+        currency: { type: string, enum: [VND] }
+        observed_at: { type: string, format: date-time }
 
     HoldRequest:
       type: object
@@ -3662,7 +4003,6 @@ components:
         lấy giá có hiệu lực (ticket_type_price) và giữ tồn trong cùng giao dịch với việc tạo đơn.
         Gửi cả hai dạng, không gửi dạng nào, zone_id thiếu quantity hoặc quantity thiếu zone_id → 400 VALIDATION_ERROR.
         seat_ids nếu gửi thì không được rỗng; service kiểm tra, rỗng → 400 VALIDATION_ERROR.
-        Ghế đôi tự giữ kèm ghế cặp.
       properties:
         seat_ids:
           type: array

@@ -50,12 +50,15 @@ class SearchRateLimitTest extends IntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"event", "showtimes", "seatmap"})
+    @ValueSource(strings = {"event", "showtimes", "seatmap", "seat-suggestions"})
     void searchEndpoint_returns429_whenIpExceedsLimit(String endpoint) {
-        var created = new CatalogFixtures(jdbc, clock).event().showtime(s -> s.onSale().seated(2)).create();
+        var fixtures = new CatalogFixtures(jdbc, clock);
+        var created = fixtures.event().showtime(s -> s.onSale().seated(2)).create();
         String path = switch (endpoint) {
             case "event" -> "/api/v1/events/" + created.id();
             case "showtimes" -> "/api/v1/events/" + created.id() + "/showtimes";
+            case "seat-suggestions" -> "/api/v1/showtimes/" + created.showtimeId() + "/seat-suggestions?zone_id="
+                    + fixtures.zoneIds(created.showtimeId()).getFirst() + "&quantity=1";
             default -> "/api/v1/showtimes/" + created.showtimeId() + "/seatmap";
         };
         for (int i = 0; i < 3; i++) {

@@ -51,6 +51,9 @@ class SeatmapRepository {
 
     /** Một khu của layout; {@code seats} rỗng với khu đứng. */
     record LayoutZone(UUID id, String name, ZoneKind kind, UUID skuId, PriceTierResult tier, List<LayoutSeat> seats) {
+        LayoutZone {
+            seats = seats.stream().sorted(SeatOrder.BY_ROW_AND_NUMBER).toList();
+        }
     }
 
     /** Ghế của layout kèm lựa chọn bán (sku), hạng vé (ticket_type) và giá có hiệu lực. */
@@ -162,7 +165,6 @@ class SeatmapRepository {
                             LIMIT 1
                         ) sp ON true
                         WHERE z.seat_map_id = :layoutId AND z.kind = 'SEATED'
-                        ORDER BY z.name, z.id, s.row_label, s.number
                         """)
                 .param("layoutId", showtime.seatLayoutId())
                 .param("eventId", showtime.eventId())
@@ -279,9 +281,9 @@ class SeatmapRepository {
     }
 
     /**
-     * Ghế trống (Implicit Status) của khu SEATED thuộc layout của suất, theo {@code row_label}, {@code number}.
+     * Ghế trống (Implicit Status) của khu SEATED thuộc layout của suất. SeatSuggester sắp theo thứ tự tự nhiên.
      */
-    List<FreeSeat> findFreeSeats(UUID showtimeId, UUID zoneId, OffsetDateTime now) {
+    List<LayoutSeat> findFreeSeats(UUID showtimeId, UUID zoneId, OffsetDateTime now) {
         return jdbc.sql("""
                         SELECT s.id, s.row_label, s.number
                         FROM showtime sh
@@ -289,18 +291,13 @@ class SeatmapRepository {
                         JOIN seat s ON s.zone_id = z.id
                         JOIN seat_inventory ss ON ss.showtime_id = sh.id AND ss.seat_id = s.id AND %s
                         WHERE sh.id = :showtimeId
-                        ORDER BY s.row_label, s.number
                         """.formatted(FREE_SEAT_SQL))
                 .param("showtimeId", showtimeId)
                 .param("zoneId", zoneId)
                 .param("now", now)
-                .query((rs, n) -> new FreeSeat(
+                .query((rs, n) -> new LayoutSeat(
                         rs.getObject("id", UUID.class), rs.getString("row_label"), rs.getInt("number")))
                 .list();
-    }
-
-    /** Ghế trống, dùng để chọn nhóm ghế gợi ý. */
-    record FreeSeat(UUID id, String row, int number) {
     }
 
     private static Optional<PriceTierResult> tier(ResultSet rs) throws SQLException {

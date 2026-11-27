@@ -15,6 +15,8 @@ public enum ErrorCode {
     NOT_FOUND(HttpStatus.NOT_FOUND, "Không tìm thấy"),
     INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "Sai thông tin đăng nhập"),
     ACCOUNT_LOCKED(HttpStatus.LOCKED, "Tài khoản bị khoá tạm"),
+    TURN_IN_PROGRESS(HttpStatus.CONFLICT, "Hội thoại đang xử lý"),
+    ACTION_NOT_PENDING(HttpStatus.CONFLICT, "Đề xuất không còn chờ xác nhận"),
     EMAIL_TAKEN(HttpStatus.CONFLICT, "Email đã tồn tại"),
     OTP_INVALID(HttpStatus.BAD_REQUEST, "OTP không đúng"),
     OTP_EXPIRED(HttpStatus.BAD_REQUEST, "OTP đã hết hạn"),

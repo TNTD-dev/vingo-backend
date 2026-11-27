@@ -18,3 +18,7 @@ vingo:
     secret: ${QR_SECRET:local-dev-qr-secret-change-me-at-least-32b}
 sentry:
   environment: local
+vingo.agent:
+  url: ${AGENT_URL:http://127.0.0.1:8090}
+  service-key: ${AGENT_SERVICE_KEY:local-agent-service-key}
+  key: ${VINGO_AGENT_KEY:local-vingo-agent-key}

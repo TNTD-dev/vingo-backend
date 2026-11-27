@@ -132,3 +132,9 @@ springdoc:
     path: /v3/api-docs
   swagger-ui:
     path: /swagger-ui.html
+
+# Kết nối mạng nội bộ tới agent; secret production chỉ lấy từ môi trường.
+vingo.agent:
+  url: ${AGENT_URL:http://127.0.0.1:8090}
+  service-key: ${AGENT_SERVICE_KEY:}
+  key: ${VINGO_AGENT_KEY:}
