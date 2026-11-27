@@ -88,7 +88,7 @@ class SeatmapRepository {
                                s.sale_opens_at, s.sale_closes_at, s.ends_at
                         FROM showtime s
                         JOIN event e ON e.id = s.event_id
-                        WHERE s.id = :id AND e.status = 'PUBLISHED'
+                        WHERE s.id = :id AND e.status = 'PUBLISHED' AND e.visible
                         """)
                 .param("id", showtimeId)
                 .query((rs, n) -> new ShowtimeRef(

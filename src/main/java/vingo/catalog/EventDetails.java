@@ -45,6 +45,7 @@ public record EventDetails(
     public record Header(
             UUID id,
             String status,
+            boolean visible,
             EventService.CreateEvent data
     ) {}
 

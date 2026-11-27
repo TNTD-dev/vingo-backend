@@ -166,4 +166,36 @@ public class EventPublishingRepository {
                 .param("now", now)
                 .update();
     }
+
+    public void updateVisibility(UUID id, boolean visible, OffsetDateTime now) {
+        jdbc.sql("UPDATE event SET visible = :visible, updated_at = :now WHERE id = :id")
+                .param("visible", visible)
+                .param("now", now)
+                .param("id", id)
+                .update();
+    }
+
+    public void auditEventVisibility(
+            UUID actor,
+            UUID id,
+            String reason,
+            boolean beforeVisible,
+            boolean afterVisible,
+            OffsetDateTime now
+    ) {
+        jdbc.sql("""
+                INSERT INTO audit_log (actor_id, action, entity, entity_id, reason, via_agent, at, before, after)
+                VALUES (:actor, 'UPDATE_EVENT_VISIBILITY', 'event', :id, :reason, :viaAgent, :now,
+                        jsonb_build_object('visible', :beforeVisible),
+                        jsonb_build_object('visible', :afterVisible))
+                """)
+                .param("actor", actor)
+                .param("id", id)
+                .param("reason", reason)
+                .param("viaAgent", vingo.shared.security.AgentRequest.isViaAgent())
+                .param("beforeVisible", beforeVisible)
+                .param("afterVisible", afterVisible)
+                .param("now", now)
+                .update();
+    }
 }

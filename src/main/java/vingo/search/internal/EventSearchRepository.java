@@ -96,7 +96,7 @@ class EventSearchRepository {
             params.put("to", c.to());
         }
 
-        StringBuilder where = new StringBuilder("e.status = 'PUBLISHED'");
+        StringBuilder where = new StringBuilder("e.status = 'PUBLISHED' AND e.visible");
         if (c.category() != null) {
             where.append(" AND e.category = :category");
             params.put("category", c.category());
@@ -129,7 +129,7 @@ class EventSearchRepository {
                     + " AND " + venueMatch("v") + showtimeFilter + ")";
         }
         if (c.priceMin() != null || c.priceMax() != null) {
-            where.append("""
+            where.append(' ').append("""
                      AND EXISTS (SELECT 1 FROM event_zone ez
                                  JOIN zone z ON z.id = ez.zone_id AND z.seat_map_id = ez.seat_map_id
                                  JOIN LATERAL (

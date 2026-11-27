@@ -142,6 +142,32 @@ class AdminVenueAcceptanceTest extends IntegrationTest {
                         "layout_v1", v1, "layout_v2", v2, "create_showtime", bodyV1))));
     }
 
+    @Test
+    void eventVisibility_hidesPublicDetailAndAuditsOnlyChanges() throws Exception {
+        String token = tokenFor(Role.ADMIN);
+        UUID event = jdbc.sql("INSERT INTO event (title, category, status) VALUES ('Visibility fixture', 'CONCERT', 'DRAFT') RETURNING id")
+                .query(UUID.class).single();
+        UUID venue = jdbc.sql("INSERT INTO venue (name, city) VALUES ('Visibility test venue', 'HN') RETURNING id")
+                .query(UUID.class).single();
+        UUID layout = vingo.support.VenueSchemaFixture.draft(jdbc, venue);
+        jdbc.sql("UPDATE event SET seat_map_id = :layout WHERE id = :id").param("layout", layout).param("id", event).update();
+        String path = ADMIN + "/events/" + event + "/visibility";
+        var hidden = Map.of("visible", false, "reason", "Điều chỉnh lịch công bố");
+        assertCode(request("PUT", path, token, hidden, 409), "EVENT_LOCKED");
+        jdbc.sql("UPDATE event SET status = 'PUBLISHED' WHERE id = :id").param("id", event).update();
+
+        request("GET", "/api/v1/events/" + event, token, null, 200);
+        assertThat(JsonPath.<Boolean>read(request("PUT", path, token, hidden, 200), "$.visible")).isFalse();
+        request("PUT", path, token, hidden, 200);
+        assertCode(request("GET", "/api/v1/events/" + event, token, null, 404), "NOT_FOUND");
+        assertThat(JsonPath.<Boolean>read(request("GET", ADMIN + "/events/" + event, token, null, 200), "$.visible")).isFalse();
+        assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE entity_id = :id AND action = 'UPDATE_EVENT_VISIBILITY'")
+                .param("id", event).query(Long.class).single()).isEqualTo(1L);
+
+        request("PUT", path, token, Map.of("visible", true, "reason", "Đã chốt lịch"), 200);
+        request("GET", "/api/v1/events/" + event, token, null, 200);
+    }
+
     static Stream<Arguments> layoutOperations() {
         String layout = LAYOUTS + UUID.randomUUID();
         String hall = ADMIN + "/halls/" + UUID.randomUUID() + "/seat-layouts";
