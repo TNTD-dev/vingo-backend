@@ -106,6 +106,30 @@ public class EventPublishingService {
         publisher.publishEvent(new CatalogChanged(eventId, Set.of(showtimeId)));
     }
 
+    @Transactional
+    public void updateVisibility(UUID eventId, UUID actor, Boolean visible, String reason) {
+        if (visible == null) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Thiếu trạng thái hiển thị visible.");
+        }
+        validateReason(reason);
+        var event = events.lockById(eventId).orElseThrow(EventPublishingService::missing);
+        if (!"PUBLISHED".equals(event.status())) {
+            throw new DomainException(ErrorCode.EVENT_LOCKED,
+                    "Chỉ có thể ẩn hoặc hiển thị lại sự kiện đã công bố.");
+        }
+        if (event.visible() == visible) {
+            return;
+        }
+        var now = clock.instant().atOffset(ZoneOffset.UTC);
+        publishing.updateVisibility(eventId, visible, now);
+        publishing.auditEventVisibility(actor, eventId, reason.strip(), event.visible(), visible, now);
+        publisher.publishEvent(new CatalogChanged(eventId, events.findShowtimeIds(eventId)));
+        try (var ignored = MDC.putCloseable("event_id", eventId.toString())) {
+            LoggerFactory.getLogger(EventPublishingService.class)
+                    .info("Đã cập nhật hiển thị sự kiện visible={}", visible);
+        }
+    }
+
     private static boolean blocksCancellation(
             String eventStatus,
             EventPublishingRepository.CancellationState state,

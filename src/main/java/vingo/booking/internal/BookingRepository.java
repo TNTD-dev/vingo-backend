@@ -285,13 +285,13 @@ public class BookingRepository {
     public Optional<Sale> findSale(UUID showtimeId, OffsetDateTime now) {
         return jdbc.sql("""
                         WITH locked_event AS MATERIALIZED (
-                            SELECT e.id, e.status::text AS status, e.max_tickets_per_order
+                            SELECT e.id, e.status::text AS status, e.max_tickets_per_order, e.visible
                             FROM event e JOIN showtime source ON source.event_id = e.id
                             WHERE source.id = :showtime
                             FOR SHARE OF e
                         )
                         SELECT s.cancelled_at, s.sale_opens_at, s.sale_closes_at, s.ends_at,
-                               e.status AS event_status, e.max_tickets_per_order
+                               e.status AS event_status, e.max_tickets_per_order, e.visible
                         FROM locked_event e JOIN showtime s ON s.event_id = e.id
                         WHERE s.id = :showtime
                         FOR SHARE OF s
@@ -305,7 +305,7 @@ public class BookingRepository {
                             rs.getObject("sale_closes_at", OffsetDateTime.class),
                             rs.getObject("ends_at", OffsetDateTime.class),
                             now);
-                    return new Sale(computed.name(), computed == ShowtimeStatus.ON_SALE,
+                    return new Sale(computed.name(), computed == ShowtimeStatus.ON_SALE && rs.getBoolean("visible"),
                             rs.getInt("max_tickets_per_order"));
                 }).optional();
     }

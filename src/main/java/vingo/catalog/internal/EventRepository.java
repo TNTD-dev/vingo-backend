@@ -157,7 +157,7 @@ public class EventRepository {
 
     private Optional<EventDetails.Header> findById(UUID eventId, boolean forUpdate) {
         return jdbc.sql("""
-                SELECT id, status::text AS status, title, description, category,
+                SELECT id, status::text AS status, visible, title, description, category,
                        home_team, away_team, league, round,
                        poster_mobile_url, poster_desktop_url,
                        max_tickets_per_order
@@ -168,6 +168,7 @@ public class EventRepository {
                 .query((rs, row) -> new EventDetails.Header(
                         rs.getObject("id", UUID.class),
                         rs.getString("status"),
+                        rs.getBoolean("visible"),
                         new CreateEvent(
                                 rs.getString("title"),
                                 rs.getString("description"),
@@ -359,7 +360,7 @@ public class EventRepository {
             int fetchSize
     ) {
         var sql = new StringBuilder("""
-                SELECT id, title, category, status::text AS status,
+                SELECT id, title, category, status::text AS status, visible,
                        poster_mobile_url, poster_desktop_url,
                        created_at, updated_at
                 FROM event
@@ -401,6 +402,7 @@ public class EventRepository {
                             rs.getString("title"),
                             rs.getString("category"),
                             rs.getString("status"),
+                            rs.getBoolean("visible"),
                             readPoster(rs.getString("poster_mobile_url"), id, "poster_mobile_url"),
                             readPoster(rs.getString("poster_desktop_url"), id, "poster_desktop_url"),
                             rs.getObject("created_at", OffsetDateTime.class),

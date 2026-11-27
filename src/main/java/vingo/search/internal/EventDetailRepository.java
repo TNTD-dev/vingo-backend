@@ -58,7 +58,7 @@ class EventDetailRepository {
                                COALESCE(poster_desktop_url, poster_mobile_url) AS poster_url,
                                home_team, away_team, league, round, max_tickets_per_order
                         FROM event
-                        WHERE id = :id AND status = 'PUBLISHED'
+                        WHERE id = :id AND status = 'PUBLISHED' AND visible
                         """)
                 .param("id", eventId)
                 .query((rs, n) -> new EventRow(

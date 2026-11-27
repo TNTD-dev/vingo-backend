@@ -356,6 +356,7 @@ class AdminVenueController implements AdminCatalogApi {
                         .displayName(price.displayName())).toList())
                 .id(header.id())
                 .status(EventStatus.fromValue(header.status()))
+                .visible(header.visible())
                 .title(data.title())
                 .description(data.description())
                 .category(EventCategory.fromValue(data.category()))
@@ -486,6 +487,7 @@ class AdminVenueController implements AdminCatalogApi {
                                 .status(EventStatus.fromValue(
                                         item.status()
                                 ))
+                                .visible(item.visible())
                                 .posterMobileUrl(item.posterMobileUrl())
                                 .posterDesktopUrl(item.posterDesktopUrl())
                                 .createdAt(item.createdAt())
@@ -605,6 +607,15 @@ class AdminVenueController implements AdminCatalogApi {
     public ResponseEntity<Void> cancelEvent(UUID id, vingo.api.model.CancelEventRequest request) {
         publishing.cancelEvent(id, currentUser.require().id(), request.getReason());
         return ResponseEntity.ok().build();
+    }
+
+    @Override
+    public ResponseEntity<EventDetail> updateEventVisibility(UUID eventId, vingo.api.model.EventVisibilityInput input) {
+        if (input == null) {
+            throw new DomainException(ErrorCode.VALIDATION_ERROR, "Thiếu dữ liệu hiển thị sự kiện.");
+        }
+        publishing.updateVisibility(eventId, currentUser.require().id(), input.getVisible(), input.getReason());
+        return ResponseEntity.ok(toAdminEventDetail(eventService.getDetails(eventId)));
     }
 
     @Override

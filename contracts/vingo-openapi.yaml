@@ -2417,6 +2417,40 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+  /admin/events/{event_id}/visibility:
+    put:
+      operationId: updateEventVisibility
+      tags: [Admin Catalog]
+      x-required-role: ADMIN
+      summary: Ẩn hoặc hiển thị lại sự kiện đã công bố
+      description: >
+        Đổi trạng thái hiển thị công khai (visible) của sự kiện đang PUBLISHED.
+        Chỉ áp dụng cho sự kiện PUBLISHED; DRAFT hoặc CANCELLED trả 409 EVENT_LOCKED.
+        Khi visible = false, sự kiện bị ẩn khỏi tìm kiếm công khai, truy cập trực tiếp bằng ID trả 404 NOT_FOUND
+        và yêu cầu giữ chỗ mới bị từ chối với 409 SHOWTIME_NOT_ON_SALE (các đơn đang giữ và vé đã phát giữ nguyên).
+        Gửi cùng giá trị visible hiện tại là idempotent: trả 200 với trạng thái hiện tại, không ghi thêm dòng audit_log.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventVisibilityInput' }
+      responses:
+        '200':
+          description: Trạng thái hiển thị hiện tại của sự kiện.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: EVENT_LOCKED (sự kiện chưa công bố hoặc đã hủy)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example: { title: Sự kiện đã khóa, status: 409, code: EVENT_LOCKED, detail: Chỉ có thể ẩn hoặc hiển thị lại sự kiện đã công bố. }
   /admin/events/{event_id}/showtimes:
     post:
       operationId: createShowtime
@@ -3150,6 +3184,12 @@ components:
               minItems: 1
               uniqueItems: true
               items: { type: string, format: uuid }
+        upload_ids:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Mã SVG đã tải trong phiên Admin hiện tại.
+          items: { type: string, format: uuid }
         visible_action:
           type: object
           required: [action_id, version]
@@ -3641,6 +3681,7 @@ components:
           $ref: '#/components/schemas/EventCategory'
         status:
           $ref: '#/components/schemas/EventStatus'
+        visible: { type: boolean }
         poster_mobile_url:
           type: string
           format: uri
@@ -3755,6 +3796,7 @@ components:
           properties:
             id: { type: string, format: uuid }
             status: { $ref: '#/components/schemas/EventStatus' }
+            visible: { type: boolean, description: Hiển thị công khai của sự kiện trong API quản trị. }
             venue: { $ref: '#/components/schemas/Venue' }
             zone_prices:
               type: array
@@ -3774,6 +3816,20 @@ components:
             showtimes:
               type: array
               items: { $ref: '#/components/schemas/Showtime' }
+    EventVisibilityInput:
+      type: object
+      description: Đầu vào ẩn hoặc hiển thị lại sự kiện đã công bố.
+      required: [visible, reason]
+      properties:
+        visible:
+          type: boolean
+          description: true để hiển thị lại công khai, false để ẩn sự kiện khỏi kênh người mua.
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          pattern: '[\s\S]*\S[\s\S]*'
+          description: Lý do ẩn hoặc hiển thị lại sự kiện (không trống, tối đa 500 ký tự).
     PriceTierInput:
       type: object
       description: Đầu vào tạo hoặc cập nhật hạng vé (ticket_type) và mức giá hiệu lực của hạng.

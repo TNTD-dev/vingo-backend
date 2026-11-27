@@ -18,6 +18,7 @@ public record EventList(List<Item> data, String nextCursor) {
             String title,
             String category,
             String status,
+            boolean visible,
             URI posterMobileUrl,
             URI posterDesktopUrl,
             OffsetDateTime createdAt,
